@@ -1,6 +1,6 @@
 # Matrix
 
-Options GEX dashboard for SPY, QQQ, IWM, AAPL, NVDA, and TSLA.
+Options GEX dashboard for SPX, SPY, QQQ, IWM, AAPL, NVDA, and TSLA.
 
 The GitHub Pages entry point is `index.html`, which opens `gex_dashboard.html`.
 

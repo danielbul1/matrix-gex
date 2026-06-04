@@ -5,8 +5,16 @@ fetch_cboe.py — מוריד שרשראות אופציות אמיתיות (מו�
 """
 import json, re, datetime, urllib.request, sys
 
-# ETF/מניות (multiplier=100). אינדקסים דורשים תחילית "_" (למשל _SPX).
-SYMBOLS = ["SPY", "QQQ", "IWM", "AAPL", "NVDA", "TSLA"]
+# ETF/מניות (multiplier=100). אינדקסים דורשים תחילית "_" ב-CBOE (למשל _SPX).
+SYMBOLS = [
+    ("_SPX", "SPX"),
+    ("SPY", "SPY"),
+    ("QQQ", "QQQ"),
+    ("IWM", "IWM"),
+    ("AAPL", "AAPL"),
+    ("NVDA", "NVDA"),
+    ("TSLA", "TSLA"),
+]
 URL = "https://cdn.cboe.com/api/global/delayed_quotes/options/{}.json"
 OCC = re.compile(r"([A-Z]+)(\d{6})([CP])(\d{8})")
 RANGE = 0.25   # שומר strikes בטווח ±25% מה-spot
@@ -28,11 +36,11 @@ def parse_symbol(s):
 def main():
     today = datetime.date.today()
     out = {}
-    for sym in SYMBOLS:
+    for cboe_sym, display_sym in SYMBOLS:
         try:
-            d = fetch(sym)
+            d = fetch(cboe_sym)
         except Exception as e:
-            print(f"  {sym}: FAILED ({e})", file=sys.stderr)
+            print(f"  {display_sym}: FAILED ({e})", file=sys.stderr)
             continue
         spot = d.get("current_price") or d.get("close")
         opts = []
@@ -60,13 +68,13 @@ def main():
                 "g": round(o.get("gamma") or 0, 7),   # gamma אמיתי מ-CBOE
                 "d": round(o.get("delta") or 0, 4),
             })
-        out[sym] = {
+        out[display_sym] = {
             "spot": round(spot, 2) if spot else None,
             "asof": d.get("last_trade_time") or str(today),
             "mult": 100,
             "opts": opts,
         }
-        print(f"  {sym}: spot={spot}  kept={len(opts)} options")
+        print(f"  {display_sym}: spot={spot}  kept={len(opts)} options")
 
     with open("cboe_data.json", "w") as f:
         json.dump(out, f, separators=(",", ":"))
