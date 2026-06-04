@@ -31,7 +31,7 @@
   .ctrl:nth-child(n+4){display:none}
   .ctrl label{font-size:14px;color:#d0d0d0;font-weight:700}
   select,input{background:#3a3a3a;color:var(--text);border:1px solid #262626;
-               border-radius:5px;padding:8px 10px;font-size:14px;min-width:112px}
+               border-radius:5px;padding:8px 10px;font-size:14px;min-width:112px;max-width:100%}
   button{background:var(--accent);color:white;border:none;border-radius:5px;
          padding:9px 18px;font-weight:800;cursor:pointer;align-self:flex-end;font-size:14px}
   .controls > button{display:none}
@@ -94,15 +94,39 @@
   .symlabel{font-size:18px;font-weight:800;color:#d5d5d5;letter-spacing:.5px;margin-left:72px}
   .chartlegend{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:700;color:#d0d0d0;margin-right:78px}
   .chartlegend .sq{width:12px;height:12px;border-radius:2px;display:inline-block}
-  .chartwrap{position:relative}
+  .chartwrap{position:relative;overflow:hidden}
   .watermark{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
              font-size:72px;font-weight:800;color:rgba(255,255,255,.055);
              pointer-events:none;letter-spacing:2px;user-select:none}
   @media(max-width:900px){
-    header{position:static;width:auto;padding:20px}
+    body{overflow-x:hidden}
+    header{position:static;width:auto;min-height:0;padding:18px 16px 14px;border-right:0;border-bottom:1px solid #252525}
+    header h1{margin:0 0 12px}
+    header h1:before{font-size:24px}
     header h1:after,.side-disclaimer{display:none}
-    .side-nav{flex-direction:row;gap:14px;flex-wrap:wrap;font-size:14px}
-    .controls,main{margin-left:0}
+    .side-nav{width:100%;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;font-size:13px}
+    .side-nav span{background:#202020;border:1px solid #2d2d2d;border-radius:6px;padding:9px 10px;text-align:center}
+    .controls{margin-left:0;min-height:0;padding:12px;display:grid;grid-template-columns:1fr 1fr;gap:10px;align-items:end}
+    .ctrl{min-width:0}
+    .ctrl:first-child{grid-column:1 / -1}
+    .ctrl label{font-size:12px}
+    select,input{width:100%;min-width:0;font-size:13px;padding:9px 8px}
+    main{margin-left:0;padding:0 8px 12px}
+    .params{justify-content:flex-start;flex-wrap:nowrap;overflow-x:auto;gap:8px;padding:10px 8px;margin-bottom:8px;scrollbar-width:thin}
+    .plabel{flex:0 0 auto;font-size:13px;margin-right:0}
+    .pbtn{flex:0 0 auto;padding:9px 12px;font-size:13px}
+    .chartcard{min-height:auto;padding:16px 8px 12px;border-radius:6px}
+    .charttop{margin-bottom:4px;padding:0 4px}
+    .symlabel{margin-left:0;font-size:16px}
+    .chartlegend{margin-right:0;font-size:12px}
+    .watermark{font-size:44px}
+  }
+  @media(max-width:520px){
+    .controls{grid-template-columns:1fr}
+    .ctrl:first-child{grid-column:auto}
+    .side-nav{grid-template-columns:1fr 1fr}
+    .chartcard{padding-left:4px;padding-right:4px}
+    .watermark{font-size:34px}
   }
 </style>
 </head>
@@ -561,7 +585,8 @@ function drawChart(R){
   const cv = document.getElementById('gexChart');
   const dpr = window.devicePixelRatio||1;
   const W = cv.clientWidth;
-  const H = Math.max(620, Math.min(780, window.innerHeight - 245));
+  const mobile = W < 640;
+  const H = mobile ? Math.max(380, Math.min(520, window.innerHeight - 285)) : Math.max(620, Math.min(780, window.innerHeight - 245));
   cv.width=W*dpr; cv.height=H*dpr; cv.style.height=H+"px";
   const ctx = cv.getContext('2d'); ctx.setTransform(dpr,0,0,dpr,0,0);
   ctx.clearRect(0,0,W,H);
@@ -586,7 +611,10 @@ function drawChart(R){
     return sw+M.label;
   }).join('&nbsp;&nbsp;') || '<span style="color:#7d8799">×‘×—×¨ ×¤×¨×ž×˜×¨</span>';
 
-  const padL=70, padR=areas.length?62:42, padT=36, padB=56;
+  const padL=mobile ? 48 : 70;
+  const padR=mobile ? (areas.length ? 42 : 18) : (areas.length?62:42);
+  const padT=mobile ? 28 : 36;
+  const padB=mobile ? 44 : 56;
   const plotW = W-padL-padR, plotH = H-padT-padB;
   const slot = plotW/data.length;
   const xCenter = i => padL + slot*(i+0.5);
@@ -607,7 +635,7 @@ function drawChart(R){
   if(areas.length){ dom=areas.reduce((a,b)=>ownMax[b]>ownMax[a]?b:a,areas[0]); rMax=ownMax[dom]*1.08; }
 
   // ----- gridlines + tick labels -----
-  ctx.font="bold 13px Segoe UI"; ctx.textBaseline="middle";
+  ctx.font=(mobile ? "bold 10px Segoe UI" : "bold 13px Segoe UI"); ctx.textBaseline="middle";
   const ticks=6;
   for(let t=0;t<=ticks;t++){
     const f=t/ticks, yy=bottom-f*plotH;
@@ -649,8 +677,8 @@ function drawChart(R){
   }
 
   // ----- x-axis strike labels -----
-  const labelStep=Math.ceil(data.length/45);
-  ctx.fillStyle="#c4c4c4"; ctx.font="bold 12px Segoe UI"; ctx.textAlign="center"; ctx.textBaseline="top";
+  const labelStep=Math.ceil(data.length/(mobile ? 16 : 45));
+  ctx.fillStyle="#c4c4c4"; ctx.font=(mobile ? "bold 10px Segoe UI" : "bold 12px Segoe UI"); ctx.textAlign="center"; ctx.textBaseline="top";
   data.forEach((s,i)=>{ if(i%labelStep===0) ctx.fillText(fmtPrice(s.strike), xCenter(i), bottom+7); });
 
   // ----- vertical price line + label -----
@@ -668,16 +696,16 @@ function drawChart(R){
   const px=xAt(R.spot);
   ctx.strokeStyle="#d58b16"; ctx.lineWidth=2;
   ctx.beginPath(); ctx.moveTo(px,padT-6); ctx.lineTo(px,bottom); ctx.stroke();
-  ctx.fillStyle="#d58b16"; ctx.font="bold 12px Segoe UI"; ctx.textBaseline="alphabetic";
+  ctx.fillStyle="#d58b16"; ctx.font=(mobile ? "bold 10px Segoe UI" : "bold 12px Segoe UI"); ctx.textBaseline="alphabetic";
   ctx.textAlign = px>W-120?"right":"left";
   ctx.fillText("Price: "+fmtPrice(R.spot), px+(px>W-120?-6:6), padT-9);
 
   // ----- axis titles -----
   if(hasBar){ ctx.save(); ctx.translate(14,padT+plotH/2); ctx.rotate(-Math.PI/2);
-    ctx.fillStyle="#d0d0d0"; ctx.font="bold 13px Segoe UI"; ctx.textAlign="center";
+    ctx.fillStyle="#d0d0d0"; ctx.font=(mobile ? "bold 11px Segoe UI" : "bold 13px Segoe UI"); ctx.textAlign="center";
     ctx.fillText("Net GEX",0,0); ctx.restore(); }
   if(areas.length){ ctx.save(); ctx.translate(W-12,padT+plotH/2); ctx.rotate(Math.PI/2);
-    ctx.fillStyle="#d0d0d0"; ctx.font="bold 13px Segoe UI"; ctx.textAlign="center";
+    ctx.fillStyle="#d0d0d0"; ctx.font=(mobile ? "bold 11px Segoe UI" : "bold 13px Segoe UI"); ctx.textAlign="center";
     ctx.fillText(METRICS[dom].label,0,0); ctx.restore(); }
 }
 function fmtAxis(v){
