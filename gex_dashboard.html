@@ -398,6 +398,15 @@ function calcGEX(chain, mode){
   const strikes = Object.values(byStrike).sort((a,b)=>a.strike-b.strike);
   strikes.forEach(s=>{ s.totalOI=s.callOI+s.putOI; s.totalVol=s.callVol+s.putVol;
                        s.pcr=s.callOI>0?s.putOI/s.callOI:0; });
+  const maxAG = Math.max(...strikes.map(s=>Math.abs(s.callGex)+Math.abs(s.putGex)), 1);
+  const maxOI = Math.max(...strikes.map(s=>s.totalOI), 1);
+  const maxVol = Math.max(...strikes.map(s=>s.totalVol), 1);
+  strikes.forEach(s=>{
+    const agScore = (Math.abs(s.callGex)+Math.abs(s.putGex)) / maxAG;
+    const oiScore = s.totalOI / maxOI;
+    const volScore = s.totalVol / maxVol;
+    s.powerZone = (0.58*agScore + 0.28*oiScore + 0.14*volScore) * maxAG;
+  });
 
   // 3. totals
   const totalCallGex = strikes.reduce((a,s)=>a+s.callGex,0);
@@ -590,7 +599,7 @@ const METRICS = {
   put_oi:   {label:"Put OI",      color:"#ef5350", kind:"area", val:s=>s.putOI},
   call_vol: {label:"Call Volume", color:"#2f73ff", kind:"area", val:s=>s.callVol},
   put_vol:  {label:"Put Volume",  color:"#ff8a3d", kind:"area", val:s=>s.putVol},
-  power:    {label:"Power Zone",  color:"#ffc107", kind:"area", val:s=>s.totalOI + s.totalVol},
+  power:    {label:"Power Zone",  color:"#fff200", kind:"area", val:s=>s.powerZone || 0},
 };
 function hexA(hex,a){const n=parseInt(hex.slice(1),16);return `rgba(${n>>16&255},${n>>8&255},${n&255},${a})`;}
 
@@ -767,7 +776,7 @@ function showChartTooltip(ev){
     if(m==='put_oi') return row('Put OI',fmtNum(s.putOI),'neg');
     if(m==='call_vol') return row('Call Volume',fmtNum(s.callVol),'pos');
     if(m==='put_vol') return row('Put Volume',fmtNum(s.putVol),'neg');
-    if(m==='power') return row('Power Zone',fmtNum(s.totalOI+s.totalVol));
+    if(m==='power') return row('Power Zone',fmtNum(s.powerZone || 0));
     return '';
   }).join('');
   tt.innerHTML = `
