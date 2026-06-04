@@ -103,7 +103,7 @@
   .chart-tooltip .tt-row{display:flex;justify-content:space-between;gap:18px}
   .chart-tooltip .pos{color:#22aaf2;font-weight:800}
   .chart-tooltip .neg{color:#ff3b2f;font-weight:800}
-  .chart-crosshair-x{position:absolute;left:0;right:0;display:none;border-top:1px dashed rgba(255,255,255,.55);
+  .chart-crosshair-x{position:absolute;top:0;bottom:0;display:none;border-left:1px dashed rgba(255,255,255,.55);
                      z-index:4;pointer-events:none}
   .watermark{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
              font-size:72px;font-weight:800;color:rgba(255,255,255,.055);
@@ -834,7 +834,7 @@ function showChartTooltip(ev){
   `;
   tt.style.display='block';
   cross.style.display='block';
-  cross.style.top=Math.max(0,Math.min(rect.height,y))+'px';
+  cross.style.left=Math.max(0,Math.min(rect.width,hit.x+hit.w/2))+'px';
   const tw=tt.offsetWidth, th=tt.offsetHeight;
   let left=x+14, top=y+14;
   if(left+tw>rect.width) left=x-tw-14;
