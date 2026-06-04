@@ -95,6 +95,14 @@
   .chartlegend{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:700;color:#d0d0d0;margin-right:78px}
   .chartlegend .sq{width:12px;height:12px;border-radius:2px;display:inline-block}
   .chartwrap{position:relative;overflow:hidden}
+  .chart-tooltip{position:absolute;z-index:5;display:none;min-width:190px;max-width:260px;
+                 background:rgba(18,18,18,.94);border:1px solid #555;border-radius:7px;
+                 padding:10px 11px;color:#e7e7e7;font-size:12px;line-height:1.5;
+                 box-shadow:0 12px 30px rgba(0,0,0,.45);pointer-events:none}
+  .chart-tooltip .tt-title{font-weight:800;color:#fff;margin-bottom:5px}
+  .chart-tooltip .tt-row{display:flex;justify-content:space-between;gap:18px}
+  .chart-tooltip .pos{color:#22aaf2;font-weight:800}
+  .chart-tooltip .neg{color:#ff3b2f;font-weight:800}
   .watermark{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
              font-size:72px;font-weight:800;color:rgba(255,255,255,.055);
              pointer-events:none;letter-spacing:2px;user-select:none}
@@ -219,6 +227,7 @@
     </div>
     <div class="chartwrap">
       <div class="watermark">Matrix</div>
+      <div class="chart-tooltip" id="chartTooltip"></div>
       <canvas id="gexChart" height="540"></canvas>
     </div>
   </div>
@@ -666,16 +675,23 @@ function drawChart(R){
   });
 
   // ----- Net GEX bars (drawn on top) -----
+  const hitBars = [];
   if(hasBar){
     const bw=Math.min(slot*0.70,32);
     data.forEach((s,i)=>{
       const v=METRICS.net_gex.val(s), yy=yL(v);
+      const x=xCenter(i)-bw/2;
+      const y=Math.min(yy,y0);
+      const h=Math.max(1,Math.abs(yy-y0));
       ctx.fillStyle = v>=0 ? "#22aaf2" : "#ff2417";
-      ctx.fillRect(xCenter(i)-bw/2, Math.min(yy,y0), bw, Math.max(1,Math.abs(yy-y0)));
+      ctx.fillRect(x, y, bw, h);
+      hitBars.push({x,y,w:bw,h,s});
     });
     ctx.strokeStyle="rgba(255,255,255,.18)"; ctx.lineWidth=1;
     ctx.beginPath(); ctx.moveTo(padL,y0); ctx.lineTo(W-padR,y0); ctx.stroke();
   }
+  cv._matrixBars = hitBars;
+  cv._matrixPlot = {top,bottom,padL,padR,W,H};
 
   // ----- x-axis strike labels -----
   const labelStep=Math.ceil(data.length/(mobile ? 16 : 45));
@@ -774,6 +790,49 @@ function fmtAxis(v){
   if(a>=1e3) return (v/1e3).toFixed(0)+"k";
   return v.toFixed(0);
 }
+function showChartTooltip(ev){
+  const cv=document.getElementById('gexChart');
+  const tt=document.getElementById('chartTooltip');
+  const bars=cv._matrixBars||[];
+  if(!bars.length) return;
+
+  const rect=cv.getBoundingClientRect();
+  const point=ev.touches && ev.touches[0] ? ev.touches[0] : ev;
+  const x=point.clientX-rect.left;
+  const y=point.clientY-rect.top;
+  let hit=bars.find(b=>x>=b.x-3 && x<=b.x+b.w+3 && y>=Math.min(b.y,b.y+b.h)-8 && y<=Math.max(b.y+b.h,b.y)+8);
+  if(!hit){
+    hit=bars.reduce((best,b)=>{
+      const cx=b.x+b.w/2;
+      const dist=Math.abs(cx-x);
+      return !best || dist<best.dist ? {bar:b,dist} : best;
+    },null)?.bar;
+    if(!hit || Math.abs((hit.x+hit.w/2)-x)>18){ tt.style.display='none'; return; }
+  }
+
+  const s=hit.s;
+  const sign=s.netGex>=0?'pos':'neg';
+  tt.innerHTML = `
+    <div class="tt-title">${window._lastR?.symbol || ''} Strike ${fmtPrice(s.strike)}</div>
+    <div class="tt-row"><span>Net GEX</span><span class="${sign}">${fmtNum(s.netGex)}</span></div>
+    <div class="tt-row"><span>Call GEX</span><span class="pos">${fmtNum(s.callGex)}</span></div>
+    <div class="tt-row"><span>Put GEX</span><span class="neg">${fmtNum(s.putGex)}</span></div>
+    <div class="tt-row"><span>Call OI</span><span>${fmtNum(s.callOI)}</span></div>
+    <div class="tt-row"><span>Put OI</span><span>${fmtNum(s.putOI)}</span></div>
+    <div class="tt-row"><span>Volume</span><span>${fmtNum(s.totalVol)}</span></div>
+    <div class="tt-row"><span>PCR</span><span>${s.pcr.toFixed(2)}</span></div>
+  `;
+  tt.style.display='block';
+  const tw=tt.offsetWidth, th=tt.offsetHeight;
+  let left=x+14, top=y+14;
+  if(left+tw>rect.width) left=x-tw-14;
+  if(top+th>rect.height) top=y-th-14;
+  tt.style.left=Math.max(6,left)+'px';
+  tt.style.top=Math.max(6,top)+'px';
+}
+function hideChartTooltip(){
+  document.getElementById('chartTooltip').style.display='none';
+}
 
 // ---------- Wiring ----------
 function populateSymbols(){
@@ -853,6 +912,11 @@ document.getElementById('strikeCount').addEventListener('change',run);
 document.getElementById('run').textContent = 'Refresh';
 document.getElementById('run').addEventListener('click',()=>loadData(true));
 window.addEventListener('resize',()=>{ if(window._lastR) drawChart(window._lastR); });
+document.getElementById('gexChart').addEventListener('mousemove',showChartTooltip);
+document.getElementById('gexChart').addEventListener('mouseleave',hideChartTooltip);
+document.getElementById('gexChart').addEventListener('touchstart',showChartTooltip,{passive:true});
+document.getElementById('gexChart').addEventListener('touchmove',showChartTooltip,{passive:true});
+document.getElementById('gexChart').addEventListener('touchend',()=>setTimeout(hideChartTooltip,1200),{passive:true});
 
 // parameter buttons â€” toggle metrics on/off (multi-select overlay)
 document.querySelectorAll('.pbtn').forEach(btn=>{
