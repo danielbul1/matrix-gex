@@ -1,0 +1,818 @@
+﻿<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GEX Analytics Dashboard</title>
+<style>
+  :root{
+    --bg:#171717; --panel:#1f1f1f; --panel2:#303030; --border:#252525;
+    --text:#d8d8d8; --muted:#a0a0a0; --accent:#1fa9f4;
+    --green:#17b65f; --red:#ff2a17; --amber:#d8921f; --purple:#8b5fe8;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+       font-family:"Segoe UI",Roboto,Arial,sans-serif;min-height:100vh;overflow-x:hidden}
+  header{position:fixed;inset:0 auto 0 0;width:220px;background:#181818;
+         border-right:1px solid #202020;padding:42px 22px 24px;
+         display:flex;flex-direction:column;align-items:flex-start;z-index:10}
+  header h1{order:0;font-size:0;margin:0 0 24px;font-weight:800;color:#f2f2f2}
+  header h1:before{content:"Matrix";font-size:26px}
+  header h1:after{content:"";display:block;width:170px;height:2px;background:#d9d9d9;margin-top:24px}
+  header .sub{display:none}
+  .side-nav{order:1;display:flex;flex-direction:column;gap:20px;font-size:16px;font-weight:700;color:#d0d0d0}
+  .side-nav span{white-space:nowrap}
+  .side-disclaimer{order:2;margin-top:auto;width:170px;border-top:2px solid #d9d9d9;padding-top:20px;
+                   color:#9b9b9b;font-size:22px}
+  .badge-demo{display:none}
+  .controls{margin-left:220px;padding:8px 18px 10px;min-height:84px;background:#191919;
+            border-bottom:1px solid #222;display:flex;gap:10px;align-items:end;justify-content:center;flex-wrap:wrap}
+  .ctrl{display:flex;flex-direction:column;gap:4px}
+  .ctrl:nth-child(n+4){display:none}
+  .ctrl label{font-size:14px;color:#d0d0d0;font-weight:700}
+  select,input{background:#3a3a3a;color:var(--text);border:1px solid #262626;
+               border-radius:5px;padding:8px 10px;font-size:14px;min-width:112px}
+  button{background:var(--accent);color:white;border:none;border-radius:5px;
+         padding:9px 18px;font-weight:800;cursor:pointer;align-self:flex-end;font-size:14px}
+  .controls > button{display:none}
+  button:hover{filter:brightness(1.1)}
+  main{margin-left:220px;padding:0 10px 22px;max-width:none}
+  .grid{display:grid;gap:16px}
+  .row-top{display:none}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:16px}
+  .card .k{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;margin-bottom:6px}
+  .card .v{font-size:24px;font-weight:700}
+  .card .v small{font-size:13px;color:var(--muted);font-weight:400}
+  .regime-badge{display:inline-block;padding:6px 14px;border-radius:20px;font-weight:700;font-size:14px}
+  .reg-pos{background:rgba(38,166,154,.15);color:var(--green);border:1px solid var(--green)}
+  .reg-neg{background:rgba(239,83,80,.15);color:var(--red);border:1px solid var(--red)}
+  .reg-neu{background:rgba(255,183,77,.12);color:var(--amber);border:1px solid var(--amber)}
+  .section{grid-template-columns:1.6fr 1fr}
+  .panel-title{font-size:14px;font-weight:700;margin:0 0 14px;display:flex;align-items:center;gap:8px}
+  .panel-title .hint{font-size:11px;color:var(--muted);font-weight:400}
+  table{width:100%;border-collapse:collapse;font-size:12.5px}
+  th,td{padding:7px 8px;text-align:center;border-bottom:1px solid var(--border);font-variant-numeric:tabular-nums}
+  th{color:var(--muted);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.4px}
+  td.pos{color:var(--green)} td.neg{color:var(--red)}
+  tr.spotrow{background:rgba(78,161,255,.12)}
+  tr.spotrow td{font-weight:700}
+  .levels-list{display:flex;flex-direction:column;gap:10px}
+  .lvl{display:flex;justify-content:space-between;align-items:center;padding:10px 12px;
+       background:var(--panel2);border-radius:8px;border-inline-start:3px solid var(--border)}
+  .lvl.call{border-inline-start-color:var(--red)}
+  .lvl.put{border-inline-start-color:var(--green)}
+  .lvl.maxg{border-inline-start-color:var(--purple)}
+  .lvl.flip{border-inline-start-color:var(--amber)}
+  .lvl .name{font-size:12px;color:var(--muted)}
+  .lvl .val{font-size:16px;font-weight:700}
+  canvas{width:100%;display:block}
+  .flowgrid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:6px}
+  .flowitem{background:var(--panel2);border-radius:8px;padding:10px 12px}
+  .flowitem .k{font-size:11px;color:var(--muted)}
+  .flowitem .v{font-size:18px;font-weight:700;margin-top:2px}
+  footer{display:none}
+  .interp{font-size:12.5px;line-height:1.7;color:var(--text);background:var(--panel2);
+          border-radius:8px;padding:12px 14px;margin-top:12px}
+  .interp b{color:var(--accent)}
+  .legend{display:flex;gap:16px;font-size:11px;color:var(--muted);margin-top:8px;justify-content:center;flex-wrap:wrap}
+  .legend span{display:inline-flex;align-items:center;gap:5px}
+  .dot{width:10px;height:10px;border-radius:2px;display:inline-block}
+  @media(max-width:900px){.section{grid-template-columns:1fr}}
+
+  /* Quant-Power style */
+  .params{display:flex;align-items:center;justify-content:center;gap:10px;flex-wrap:wrap;
+          background:#1c1c1c;border:0;border-radius:0;padding:16px;margin:0 0 10px;
+          box-shadow:0 8px 18px rgba(0,0,0,.25)}
+  .plabel{color:#d0d0d0;font-size:16px;font-weight:700;margin-right:8px}
+  .pbtn{background:var(--c);color:white;border:none;border-radius:6px;
+        padding:10px 14px;font-size:14px;font-weight:800;cursor:pointer;
+        opacity:1;transition:filter .15s,transform .1s;align-self:auto}
+  .pbtn:hover{opacity:.8}
+  .pbtn.active{box-shadow:inset 0 0 0 2px rgba(255,255,255,.35)}
+  .chartcard{min-height:calc(100vh - 205px);padding:44px 34px 28px;background:#202020;border:0;border-radius:8px}
+  .charttop{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+  .symlabel{font-size:18px;font-weight:800;color:#d5d5d5;letter-spacing:.5px;margin-left:72px}
+  .chartlegend{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:700;color:#d0d0d0;margin-right:78px}
+  .chartlegend .sq{width:12px;height:12px;border-radius:2px;display:inline-block}
+  .chartwrap{position:relative}
+  .watermark{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+             font-size:72px;font-weight:800;color:rgba(255,255,255,.055);
+             pointer-events:none;letter-spacing:2px;user-select:none}
+  @media(max-width:900px){
+    header{position:static;width:auto;padding:20px}
+    header h1:after,.side-disclaimer{display:none}
+    .side-nav{flex-direction:row;gap:14px;flex-wrap:wrap;font-size:14px}
+    .controls,main{margin-left:0}
+  }
+</style>
+</head>
+<body>
+<header>
+  <nav class="side-nav">
+    <span>OI Volume</span>
+    <span>Key Levels</span>
+    <span>P/C Ratio</span>
+    <span>How to use GEX</span>
+  </nav>
+  <div class="side-disclaimer">Disclaimer</div>
+  <h1>ðŸ“Š GEX Analytics</h1>
+  <span class="sub">Gamma Exposure &amp; Options Flow Engine â€” ×ž×™×ž×•×© ×ž×§×•×ž×™ ×œ×¤×™ ×”×ª×™×¢×•×“ ×©×œ KaranChavan21/GEX_Dashboard</span>
+  <span class="badge-demo" id="srcBadge">DEMO â€” × ×ª×•× ×™× ×ž×¡×•× ×ª×–×™×</span>
+</header>
+
+<div class="controls">
+  <div class="ctrl">
+    <label>Symbol</label>
+    <select id="symbol"></select>
+  </div>
+  <div class="ctrl">
+    <label>From</label>
+    <select id="expirationFrom"></select>
+  </div>
+  <div class="ctrl">
+    <label>To</label>
+    <select id="expirationTo"></select>
+  </div>
+  <div class="ctrl">
+    <label>Market</label>
+    <select id="market">
+      <option value="US">US (CBOE / Alpaca)</option>
+      <option value="IN">IN (Dhan)</option>
+    </select>
+  </div>
+  <div class="ctrl">
+    <label>Data Source</label>
+    <select id="source">
+      <option value="live">LIVE â€” CBOE (×ž×•×©×”×”)</option>
+      <option value="synthetic">Synthetic</option>
+    </select>
+  </div>
+  <div class="ctrl">
+    <label>Auto-Refresh</label>
+    <select id="autorefresh">
+      <option value="5">×›×œ 5 ×©× ×™×•×ª</option>
+      <option value="60">×›×œ 60 ×©× ×™×•×ª</option>
+      <option value="30">×›×œ 30 ×©× ×™×•×ª</option>
+      <option value="300">×›×œ 5 ×“×§×•×ª</option>
+      <option value="0">×›×‘×•×™</option>
+    </select>
+  </div>
+  <div class="ctrl">
+    <label>Mode</label>
+    <select id="mode">
+      <option value="intraday">intraday (Â±20%, â‰¤7 DTE)</option>
+      <option value="0dte">0DTE (Â±15%)</option>
+      <option value="full">full (×›×œ ×”×©×¨×©×¨×ª)</option>
+    </select>
+  </div>
+  <div class="ctrl">
+    <label>Strike Count (Â±N)</label>
+    <input id="strikeCount" type="number" value="20" min="5" max="40">
+  </div>
+  <div class="ctrl">
+    <label>Spot Override</label>
+    <input id="spotOverride" type="number" placeholder="auto" step="0.01">
+  </div>
+  <button id="run">×—×©×‘ GEX â†»</button>
+</div>
+
+<main>
+  <div class="params">
+    <span class="plabel">Parameters:</span>
+    <button class="pbtn active" data-metric="net_gex"  style="--c:#22b8ff">Net GEX</button>
+    <button class="pbtn"        data-metric="ag"       style="--c:#ab7df6">AG</button>
+    <button class="pbtn"        data-metric="call_oi"  style="--c:#26c281">Call OI</button>
+    <button class="pbtn"        data-metric="put_oi"   style="--c:#ef5350">Put OI</button>
+    <button class="pbtn"        data-metric="call_vol" style="--c:#2f73ff">Call Volume</button>
+    <button class="pbtn"        data-metric="put_vol"  style="--c:#ff8a3d">Put Volume</button>
+    <button class="pbtn"        data-metric="power"    style="--c:#ffc107">Power Zone</button>
+  </div>
+
+  <div class="card chartcard">
+    <div class="charttop">
+      <span class="symlabel" id="symLabel"></span>
+      <span class="chartlegend" id="chartLegend"></span>
+    </div>
+    <div class="chartwrap">
+      <div class="watermark">Matrix</div>
+      <canvas id="gexChart" height="540"></canvas>
+    </div>
+  </div>
+
+  <div class="grid row-top" id="topCards"></div>
+
+</main>
+
+<footer>
+  ×ž×™×ž×•×© ×ž×‘×•×¡×¡ ×¢×œ ×”×ª×™×¢×•×“: Black-Scholes Greeks Â· GEX = Î“ Ã— OI Ã— Multiplier Ã— SpotÂ² Â·
+  Regime Detection Â· Zero-Gamma Flip (××™× ×˜×¨×¤×•×œ×¦×™×”) Â· Call/Put Walls.
+  ×”× ×ª×•× ×™× ×ž×¡×•× ×ª×–×™× ×‘×“×¤×“×¤×Ÿ (××™×Ÿ ×—×™×‘×•×¨ ×œ-Alpaca/Dhan). ×”×“×ž×• ×”×ž×§×•×¨×™: gex.kctradings.com
+</footer>
+
+<script>
+/* ============================================================
+   GEX Analytics Engine â€” JavaScript port of the documented backend
+   ×ž×§×•×¨×•×ª: OPTIONS_MATHEMATICS.md, TECHNICAL_ARCHITECTURE.md,
+           GREEKS_IMPLEMENTATION_RESEARCH.md, GEX_INTRADAY_FIX.md
+   ============================================================ */
+
+// ---------- Normal distribution ----------
+function normPDF(x){ return Math.exp(-0.5*x*x)/Math.sqrt(2*Math.PI); }
+function normCDF(x){                       // Abramowitz & Stegun 7.1.26
+  const t = 1/(1+0.2316419*Math.abs(x));
+  const d = 0.3989423*Math.exp(-x*x/2);
+  let p = d*t*(0.3193815+t*(-0.3565638+t*(1.781478+t*(-1.821256+t*1.330274))));
+  return x>0 ? 1-p : p;
+}
+
+// ---------- Black-Scholes Greeks (OPTIONS_MATHEMATICS.md Â§3) ----------
+function calcGreeks(S,K,T,sigma,r,isCall){
+  T = Math.max(T, 1/365/24);               // min 1 hour (research edge-case)
+  sigma = Math.max(sigma, 0.01);
+  const sqrtT = Math.sqrt(T);
+  const d1 = (Math.log(S/K)+(r+0.5*sigma*sigma)*T)/(sigma*sqrtT);
+  const d2 = d1 - sigma*sqrtT;
+  const nd1 = normPDF(d1);
+  const delta = isCall ? normCDF(d1) : normCDF(d1)-1;
+  const gamma = nd1/(S*sigma*sqrtT);       // same for calls/puts
+  const vega  = S*sqrtT*nd1/100;           // per 1% vol
+  let theta;
+  if(isCall) theta = -(S*nd1*sigma)/(2*sqrtT) - r*K*Math.exp(-r*T)*normCDF(d2);
+  else       theta = -(S*nd1*sigma)/(2*sqrtT) + r*K*Math.exp(-r*T)*normCDF(-d2);
+  return {delta, gamma, theta:theta/365, vega, iv:sigma};
+}
+
+// ---------- Symbol universe ----------
+const SYMBOLS = {
+  SPY:{spot:580.50, step:5,  mult:100, baseIV:0.135, market:"US"},
+  QQQ:{spot:525.50, step:5,  mult:100, baseIV:0.165, market:"US"},
+  IWM:{spot:228.0,  step:2,  mult:100, baseIV:0.200, market:"US"},
+  NVDA:{spot:145.80,step:2.5,mult:100, baseIV:0.520, market:"US"},
+  AAPL:{spot:228.0, step:5,  mult:100, baseIV:0.260, market:"US"},
+  TSLA:{spot:352.0, step:10, mult:100, baseIV:0.620, market:"US"},
+  NIFTY:{spot:23450,step:50, mult:50,  baseIV:0.155, market:"IN"},
+  BANKNIFTY:{spot:51250,step:100,mult:15,baseIV:0.175,market:"IN"},
+  FINNIFTY:{spot:23100,step:50, mult:40, baseIV:0.165,market:"IN"},
+};
+// × ×ª×•× ×™ CBOE ××ž×™×ª×™×™× (×ž×•×©×”×™×) â€” × ×˜×¢× ×™× ×ž-cboe_data.json. ×¨×™×§ = ×ž×©×ª×ž×© ×‘×¡×™× ×ª×˜×™.
+let REAL = {};
+let REAL_ASOF = {};
+const RISK_FREE = {US:0.05, IN:0.065};
+
+function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
+
+// ---------- Synthetic option chain (stands in for Alpaca/Dhan connector) ----------
+function buildChain(symKey, spot){
+  const cfg = SYMBOLS[symKey];
+  const rnd = mulberry32(symKey.split('').reduce((a,c)=>a+c.charCodeAt(0),0) + Math.round(spot));
+  const r = RISK_FREE[cfg.market];
+  const N = 22;
+  const atm = Math.round(spot/cfg.step)*cfg.step;
+  const expiries = cfg.market==="US" ? [0/365, 2/365, 6/365] : [3/365, 9/365];
+  const quotes = [];
+  const now = Date.now();
+
+  for(let i=-N;i<=N;i++){
+    const K = atm + i*cfg.step;
+    if(K<=0) continue;
+    const moneyness = (K-spot)/spot;
+    const smile = cfg.baseIV*(1 + 1.4*moneyness*moneyness);   // volatility smile
+    const putSkew = 0.020*Math.max(0,-moneyness)/0.1;         // puts richer
+
+    expiries.forEach((T,ei)=>{
+      const dte = Math.round(T*365);
+      const exp = new Date(now + dte*86400000).toISOString().slice(0,10);
+      const decay = Math.exp(-Math.pow(i/8,2));               // OI concentrates near ATM
+      const expiryW = ei===0?1.0:(ei===1?0.85:0.5);
+      const callIV = Math.max(0.05, smile - putSkew*0.3 + (rnd()-0.5)*0.01);
+      const putIV  = Math.max(0.05, smile + putSkew + (rnd()-0.5)*0.01);
+      const callOI = Math.round((6000 + 50000*decay*expiryW)*(moneyness>0?1.15:0.85)*(0.7+rnd()*0.6));
+      const putOI  = Math.round((6000 + 50000*decay*expiryW)*(moneyness<0?1.15:0.80)*(0.7+rnd()*0.6));
+      const callVol= Math.round(callOI*(0.15+rnd()*0.4));
+      const putVol = Math.round(putOI *(0.15+rnd()*0.4));
+      const ts = now - Math.round(rnd()*12000);              // per-strike quote timestamp
+
+      quotes.push({K, dte, T, exp, isCall:true,  iv:callIV, oi:callOI, vol:callVol, ts,
+                   g:calcGreeks(spot,K,T,callIV,r,true)});
+      quotes.push({K, dte, T, exp, isCall:false, iv:putIV,  oi:putOI,  vol:putVol,  ts,
+                   g:calcGreeks(spot,K,T,putIV,r,false)});
+    });
+  }
+  return {symbol:symKey, market:cfg.market, spot, mult:cfg.mult, fetchTs:now, quotes};
+}
+
+// ---------- Real chain from CBOE delayed quotes ----------
+// ×ž×©×ª×ž×© ×‘-gamma/delta/IV/OI/volume ×”××ž×™×ª×™×™× ×ž-CBOE (××™×Ÿ ×¦×•×¨×š ×œ×—×©×‘ Black-Scholes ×ž×—×“×©).
+function buildChainReal(symKey, spotOverride){
+  const rec = REAL[symKey];
+  const spot = spotOverride || rec.spot;
+  const r = RISK_FREE[SYMBOLS[symKey] ? SYMBOLS[symKey].market : "US"] || 0.05;
+  const now = Date.parse(rec.asof) || Date.now();
+  const quotes = rec.opts.map(o=>{
+    const isCall = o.t==="C";
+    // CBOE ×œ× ×ª×ž×™×“ ×ž×¡×¤×§ gamma â†’ ×× ×—×¡×¨, ×ž×—×©×‘×™× ×ž-Black-Scholes ×›×’×™×‘×•×™
+    let g = {gamma:o.g, delta:o.d, theta:0, vega:0, iv:o.iv};
+    if(!o.g || o.g<=0){
+      g = calcGreeks(spot, o.k, o.dte/365, o.iv>0?o.iv:0.2, r, isCall);
+    }
+    return {K:o.k, dte:o.dte, T:o.dte/365, exp:o.exp, isCall, iv:o.iv, oi:o.oi, vol:o.vol, ts:now, g};
+  });
+  return {symbol:symKey, market:"US", spot, mult:rec.mult||100, fetchTs:now, quotes, live:true};
+}
+
+// ---------- GEX engine (TECHNICAL_ARCHITECTURE.md + GEX_INTRADAY_FIX.md) ----------
+function calcGEX(chain, mode){
+  const {spot, mult} = chain;
+  const cfg = {
+    intraday:{dte:7,  range:0.20, maxR:0.10, flipR:0.15},
+    "0dte":  {dte:0,  range:0.15, maxR:0.08, flipR:0.12},
+    full:    {dte:999,range:5.0,  maxR:5.0,  flipR:5.0},
+  }[mode];
+
+  // 1. filter (DTE + strike range + liquidity)
+  let kept = chain.quotes.filter(q=>{
+    if(mode==="0dte"){ if(q.dte>0) return false; }
+    else if(q.dte>cfg.dte) return false;
+    if(Math.abs(q.K-spot)/spot > cfg.range) return false;
+    if(q.oi < 10) return false;
+    return true;
+  });
+  if(mode==="0dte" && kept.length===0){          // fallback to shortest expiry
+    const minDte = Math.min(...chain.quotes.map(q=>q.dte));
+    kept = chain.quotes.filter(q=>q.dte===minDte && Math.abs(q.K-spot)/spot<=cfg.range && q.oi>=10);
+  }
+
+  // 2. aggregate by strike  (GEX = Î“ Ã— OI Ã— mult Ã— SpotÂ² Ã— 1%, calls +, puts âˆ’)
+  //    Ã—0.01 = "per 1% move" â€” the standard GEX convention (SqueezeMetrics),
+  //    keeps totals in the documented $-billions range.
+  const byStrike = {};
+  for(const q of kept){
+    const gex = q.g.gamma * q.oi * mult * spot * spot * 0.01;
+    if(!byStrike[q.K]) byStrike[q.K] = {strike:q.K, callGex:0, putGex:0, netGex:0,
+        callOI:0, putOI:0, callVol:0, putVol:0, callIV:0, putIV:0, gamma:0, ts:q.ts};
+    const s = byStrike[q.K];
+    if(q.isCall){ s.callGex += gex; s.callOI+=q.oi; s.callVol+=q.vol; s.callIV=q.iv; }
+    else        { s.putGex  -= gex; s.putOI +=q.oi; s.putVol +=q.vol; s.putIV =q.iv; }
+    s.gamma = Math.max(s.gamma, q.g.gamma);
+    s.netGex = s.callGex + s.putGex;
+    s.ts = Math.max(s.ts, q.ts);
+  }
+  const strikes = Object.values(byStrike).sort((a,b)=>a.strike-b.strike);
+  strikes.forEach(s=>{ s.totalOI=s.callOI+s.putOI; s.totalVol=s.callVol+s.putVol;
+                       s.pcr=s.callOI>0?s.putOI/s.callOI:0; });
+
+  // 3. totals
+  const totalCallGex = strikes.reduce((a,s)=>a+s.callGex,0);
+  const totalPutGex  = strikes.reduce((a,s)=>a+s.putGex,0);
+  const totalGex     = totalCallGex + totalPutGex;
+  const netCallOI = strikes.reduce((a,s)=>a+s.callOI,0);
+  const netPutOI  = strikes.reduce((a,s)=>a+s.putOI,0);
+  const pcr = netCallOI>0 ? netPutOI/netCallOI : 0;
+
+  // 4. max gamma strike (within Â±maxR of spot)
+  let maxGammaStrike=spot, maxAbs=0;
+  for(const s of strikes){
+    if(Math.abs(s.strike-spot)/spot<=cfg.maxR && Math.abs(s.netGex)>maxAbs){
+      maxAbs=Math.abs(s.netGex); maxGammaStrike=s.strike;
+    }
+  }
+
+  // 5. zero-gamma flip â€” cumulative net GEX zero crossing + interpolation
+  let flip=null;
+  const inFlip = strikes.filter(s=>Math.abs(s.strike-spot)/spot<=cfg.flipR);
+  let cum=0, prevCum=null, prevK=null;
+  for(const s of inFlip){
+    const newCum = cum + s.netGex;
+    if(prevCum!==null && prevCum*newCum<0){
+      const ratio = Math.abs(prevCum)/(Math.abs(prevCum)+Math.abs(newCum));
+      flip = prevK + ratio*(s.strike-prevK); break;
+    }
+    prevCum=newCum; prevK=s.strike; cum=newCum;
+  }
+
+  // 6. call wall (max +netGex), put wall (most âˆ’netGex)
+  let callWall=null,cwG=-Infinity, putWall=null,pwG=Infinity;
+  for(const s of strikes){
+    if(s.netGex>cwG){cwG=s.netGex; callWall=s.strike;}
+    if(s.netGex<pwG){pwG=s.netGex; putWall=s.strike;}
+  }
+
+  // 7. regime detection
+  const distPct = maxGammaStrike>0 ? (spot-maxGammaStrike)/spot*100 : 0;
+  const strongMag = Math.abs(totalCallGex)+Math.abs(totalPutGex);
+  let regime,strength;
+  if(totalGex > strongMag*0.04){
+    regime="positive_gamma";
+    strength=Math.abs(distPct)>2?"strong":(Math.abs(distPct)>0.5?"moderate":"weak");
+  } else if(totalGex < -strongMag*0.04){
+    regime="negative_gamma";
+    strength=Math.abs(distPct)>2?"strong":(Math.abs(distPct)>0.5?"moderate":"weak");
+  } else { regime="neutral"; strength="very_weak"; }
+
+  // 8. IV skew & sentiment
+  const near = strikes.filter(s=>Math.abs(s.strike-spot)/spot<=0.05);
+  const avgCallIV = avg(near.map(s=>s.callIV).filter(x=>x>0));
+  const avgPutIV  = avg(near.map(s=>s.putIV).filter(x=>x>0));
+  const ivSkew = avgPutIV - avgCallIV;
+  const callGexPct = totalCallGex/(Math.abs(totalCallGex)+Math.abs(totalPutGex))*100;
+  const sentiment = pcr<0.7?"bullish_positioning":(pcr>1.3?"bearish_positioning":"neutral_positioning");
+
+  const atmQ = kept.filter(q=>q.isCall).sort((a,b)=>Math.abs(a.K-spot)-Math.abs(b.K-spot))[0];
+
+  return {symbol:chain.symbol, market:chain.market, spot, mult, fetchTs:chain.fetchTs,
+    strikes, totalGex, totalCallGex, totalPutGex,
+    maxGammaStrike, flip, callWall, putWall, callWallGex:cwG, putWallGex:pwG,
+    regime, strength, distPct, pcr, netCallOI, netPutOI, callGexPct,
+    avgCallIV, avgPutIV, ivSkew, sentiment, atmGreeks:atmQ?atmQ.g:null,
+    keptCount:kept.length, totalCount:chain.quotes.length,
+    expiries:[...new Set(kept.map(q=>q.dte))].sort((a,b)=>a-b)};
+}
+function avg(a){return a.length?a.reduce((x,y)=>x+y,0)/a.length:0;}
+
+// ---------- Formatting ----------
+function fmtNum(n){
+  const a=Math.abs(n);
+  if(a>=1e9) return (n/1e9).toFixed(2)+"B";
+  if(a>=1e6) return (n/1e6).toFixed(1)+"M";
+  if(a>=1e3) return (n/1e3).toFixed(1)+"K";
+  return n.toFixed(0);
+}
+function fmtPrice(n){
+  if(n >= 100) return n.toLocaleString(undefined,{maximumFractionDigits:0});
+  if(n >= 10) return n.toLocaleString(undefined,{maximumFractionDigits:1});
+  return n.toFixed(2);
+}
+function ts(t){return new Date(t).toISOString().substring(11,19)+"Z";}
+
+// ---------- Rendering ----------
+function renderImpl(R){
+  window._lastR=R;
+  const badge=document.getElementById('srcBadge');
+  const nowClient=new Date().toLocaleTimeString('he-IL');
+  if(R.live){ badge.style.color="var(--green)"; badge.style.borderColor="var(--green)";
+              badge.textContent="ðŸŸ¢ LIVE â€” CBOE delayed Â· data "+(R.asof||"")+" Â· â†» "+nowClient; }
+  else      { badge.style.color="var(--amber)"; badge.style.borderColor="var(--amber)";
+              badge.textContent="DEMO â€” × ×ª×•× ×™× ×ž×¡×•× ×ª×–×™× Â· â†» "+nowClient; }
+  const regClass = R.regime==="positive_gamma"?"reg-pos":R.regime==="negative_gamma"?"reg-neg":"reg-neu";
+  const regHeb = {positive_gamma:"Positive Gamma",negative_gamma:"Negative Gamma",neutral:"Neutral"}[R.regime];
+  document.getElementById('topCards').innerHTML = `
+    <div class="card"><div class="k">Symbol / Spot</div>
+      <div class="v">${R.symbol} <small>${fmtPrice(R.spot)}</small></div></div>
+    <div class="card"><div class="k">Regime</div>
+      <div class="v"><span class="regime-badge ${regClass}">${regHeb}</span></div>
+      <div class="k" style="margin-top:8px">strength: ${R.strength}</div></div>
+    <div class="card"><div class="k">Total Net GEX</div>
+      <div class="v" style="color:${R.totalGex>=0?'var(--green)':'var(--red)'}">${fmtNum(R.totalGex)}</div>
+      <div class="k" style="margin-top:6px">$ ×œ×›×œ ×ª×–×•×–×” ×©×œ 1 × ×§'</div></div>
+    <div class="card"><div class="k">PCR (OI)</div>
+      <div class="v">${R.pcr.toFixed(2)}</div>
+      <div class="k" style="margin-top:6px">${R.sentiment.replace(/_/g,' ')}</div></div>
+    <div class="card"><div class="k">Broker Timestamp</div>
+      <div class="v" style="font-size:16px">${ts(R.fetchTs)}</div>
+      <div class="k" style="margin-top:6px">${R.keptCount}/${R.totalCount} quotes Â· DTE: ${R.expiries.join(', ')}</div></div>
+  `;
+
+  drawChart(R);
+  return;
+
+  document.getElementById('levels').innerHTML = `
+    <div class="lvl maxg"><span class="name">Max Gamma Strike (pivot)</span><span class="val">${fmtPrice(R.maxGammaStrike)}</span></div>
+    <div class="lvl flip"><span class="name">Zero-Gamma Flip</span><span class="val">${R.flip?fmtPrice(R.flip):'â€”'}</span></div>
+    <div class="lvl call"><span class="name">Call Wall (resistance)</span><span class="val">${fmtPrice(R.callWall)} <small style="color:var(--muted)">${fmtNum(R.callWallGex)}</small></span></div>
+    <div class="lvl put"><span class="name">Put Wall (support)</span><span class="val">${fmtPrice(R.putWall)} <small style="color:var(--muted)">${fmtNum(R.putWallGex)}</small></span></div>
+  `;
+
+  const above = R.spot>=R.maxGammaStrike;
+  let txt;
+  if(R.regime==="positive_gamma"){
+    txt = `<b>Positive Gamma</b>: ×¢×•×©×™ ×”×©×•×§ ×ž×•×›×¨×™× ×œ×ª×•×š ×¢×œ×™×•×ª ×•×§×•× ×™× ×œ×ª×•×š ×™×¨×™×“×•×ª â†’ ×¦×¤×™ ×œ<b>mean-reversion</b> ×•×ª× ×•×“×ª×™×•×ª × ×ž×•×›×”.
+           ×”-spot ${above?'×ž×¢×œ':'×ž×ª×—×ª'} ×œ-Max Gamma (${fmtPrice(R.maxGammaStrike)}).
+           ××–×•×¨ ×ž×¡×—×¨ ×¦×¤×•×™ ×‘×™×Ÿ Put Wall ${fmtPrice(R.putWall)} ×œ-Call Wall ${fmtPrice(R.callWall)}. ××¡×˜×¨×˜×’×™×”: ×ž×›×™×¨×ª ×¤×¨×ž×™×” / range trading.`;
+  } else if(R.regime==="negative_gamma"){
+    txt = `<b>Negative Gamma</b>: ×¢×•×©×™ ×”×©×•×§ ×§×•× ×™× ×œ×ª×•×š ×¢×œ×™×•×ª ×•×ž×•×›×¨×™× ×œ×ª×•×š ×™×¨×™×“×•×ª â†’ ×¦×¤×™ ×œ<b>×ž×•×ž× ×˜×•× ×•×ª× ×•×“×ª×™×•×ª ×’×‘×•×”×”</b>.
+           ×©×‘×™×¨×ª ×”-Flip (${R.flip?fmtPrice(R.flip):'â€”'}) ×¢× × ×¤×— ×¢×©×•×™×” ×œ×”××™×¥ ××ª ×”×ª× ×•×¢×”. ××¡×˜×¨×˜×’×™×”: ×ž×¡×—×¨ ×œ×¤×™ ×ž×’×ž×” / ×§× ×™×™×ª ××•×¤×¦×™×•×ª.`;
+  } else {
+    txt = `<b>Neutral</b>: Total GEX × ×ž×•×š â†’ ××™×Ÿ ×œ×—×¥ ×’×™×“×•×¨ ×ž×©×ž×¢×•×ª×™, ××•×ª ×œ× ××ž×™×Ÿ. ×ž×•×ž×œ×¥ ×œ×”×ž×ª×™×Ÿ ×œ×‘×”×™×¨×•×ª ×•×œ×”×§×˜×™×Ÿ ×¡×™×›×•×Ÿ.`;
+  }
+  txt += ` PCR=${R.pcr.toFixed(2)} (${R.sentiment.replace(/_/g,' ')}), IV skew=${(R.ivSkew*100).toFixed(1)}% (${R.ivSkew>0.005?'puts ×™×§×¨×•×ª':R.ivSkew<-0.005?'calls ×™×§×¨×•×ª':'×ž××•×–×Ÿ'}).`;
+  document.getElementById('interp').innerHTML = txt;
+
+  const N = +document.getElementById('strikeCount').value;
+  const nearest = R.strikes.reduce((a,s)=>Math.abs(s.strike-R.spot)<Math.abs(a-R.spot)?s.strike:a, R.strikes[0].strike);
+  const sorted = [...R.strikes].sort((a,b)=>Math.abs(a.strike-R.spot)-Math.abs(b.strike-R.spot)).slice(0,N*2+1)
+                   .sort((a,b)=>b.strike-a.strike);
+  let rows = `<tr><th>Strike</th><th>Net GEX</th><th>Call GEX</th><th>Put GEX</th>
+              <th>Call OI</th><th>Put OI</th><th>PCR</th><th>Call IV</th><th>Put IV</th><th>Vol</th></tr>`;
+  for(const s of sorted){
+    const isSpot = s.strike===nearest;
+    rows += `<tr class="${isSpot?'spotrow':''}">
+      <td>${fmtPrice(s.strike)}</td>
+      <td class="${s.netGex>=0?'pos':'neg'}">${fmtNum(s.netGex)}</td>
+      <td class="pos">${fmtNum(s.callGex)}</td>
+      <td class="neg">${fmtNum(s.putGex)}</td>
+      <td>${fmtNum(s.callOI)}</td>
+      <td>${fmtNum(s.putOI)}</td>
+      <td>${s.pcr.toFixed(2)}</td>
+      <td>${(s.callIV*100).toFixed(1)}%</td>
+      <td>${(s.putIV*100).toFixed(1)}%</td>
+      <td>${fmtNum(s.totalVol)}</td></tr>`;
+  }
+  document.getElementById('strikeTable').innerHTML = rows;
+
+  document.getElementById('flow').innerHTML = `
+    <div class="flowitem"><div class="k">Total Call GEX</div><div class="v" style="color:var(--green)">${fmtNum(R.totalCallGex)}</div></div>
+    <div class="flowitem"><div class="k">Total Put GEX</div><div class="v" style="color:var(--red)">${fmtNum(R.totalPutGex)}</div></div>
+    <div class="flowitem"><div class="k">Net Call OI</div><div class="v">${fmtNum(R.netCallOI)}</div></div>
+    <div class="flowitem"><div class="k">Net Put OI</div><div class="v">${fmtNum(R.netPutOI)}</div></div>
+    <div class="flowitem"><div class="k">Call GEX %</div><div class="v">${R.callGexPct.toFixed(1)}%</div></div>
+    <div class="flowitem"><div class="k">IV Skew</div><div class="v">${(R.ivSkew*100).toFixed(2)}%</div></div>
+    <div class="flowitem"><div class="k">Avg Call IV</div><div class="v">${(R.avgCallIV*100).toFixed(1)}%</div></div>
+    <div class="flowitem"><div class="k">Avg Put IV</div><div class="v">${(R.avgPutIV*100).toFixed(1)}%</div></div>
+  `;
+
+  if(R.atmGreeks){
+    const g=R.atmGreeks;
+    document.getElementById('greeks').innerHTML = `
+      <div class="flowitem"><div class="k">Delta</div><div class="v">${g.delta.toFixed(3)}</div></div>
+      <div class="flowitem"><div class="k">Gamma</div><div class="v">${g.gamma.toFixed(5)}</div></div>
+      <div class="flowitem"><div class="k">Theta /day</div><div class="v">${g.theta.toFixed(3)}</div></div>
+      <div class="flowitem"><div class="k">Vega /1%</div><div class="v">${g.vega.toFixed(3)}</div></div>
+    `;
+  }
+  drawChart(R);
+}
+
+// ---------- Metric definitions (Quant-Power style param buttons) ----------
+// net_gex = ×¢×ž×•×“×•×ª (kind:bar). ×›×œ ×”×©××¨ = ×’×¨×£ ×©×˜×—/×”×¨ (kind:area) ×©×ž×¦×˜×‘×¨ ×‘×©×›×‘×•×ª.
+let ACTIVE = new Set(["net_gex"]);
+const METRICS = {
+  net_gex:  {label:"Net GEX",     color:"#22b8ff", kind:"bar",  signed:true,  val:s=>s.netGex},
+  ag:       {label:"AG",          color:"#ab7df6", kind:"area", val:s=>Math.abs(s.callGex)+Math.abs(s.putGex)},
+  call_oi:  {label:"Call OI",     color:"#26c281", kind:"area", val:s=>s.callOI},
+  put_oi:   {label:"Put OI",      color:"#ef5350", kind:"area", val:s=>s.putOI},
+  call_vol: {label:"Call Volume", color:"#2f73ff", kind:"area", val:s=>s.callVol},
+  put_vol:  {label:"Put Volume",  color:"#ff8a3d", kind:"area", val:s=>s.putVol},
+  power:    {label:"Power Zone",  color:"#ffc107", kind:"area", val:s=>s.totalOI + s.totalVol},
+};
+function hexA(hex,a){const n=parseInt(hex.slice(1),16);return `rgba(${n>>16&255},${n>>8&255},${n&255},${a})`;}
+
+// ---------- Canvas chart: bars (Net GEX) + stacked area overlays ----------
+function drawChart(R){
+  const cv = document.getElementById('gexChart');
+  const dpr = window.devicePixelRatio||1;
+  const W = cv.clientWidth;
+  const H = Math.max(620, Math.min(780, window.innerHeight - 245));
+  cv.width=W*dpr; cv.height=H*dpr; cv.style.height=H+"px";
+  const ctx = cv.getContext('2d'); ctx.setTransform(dpr,0,0,dpr,0,0);
+  ctx.clearRect(0,0,W,H);
+
+  const N = +document.getElementById('strikeCount').value;
+  const data = [...R.strikes].sort((a,b)=>Math.abs(a.strike-R.spot)-Math.abs(b.strike-R.spot))
+                 .slice(0,N*2+1).sort((a,b)=>a.strike-b.strike);
+  if(!data.length) return;
+
+  const order = Object.keys(METRICS);
+  const active = order.filter(m=>ACTIVE.has(m));
+  const hasBar = ACTIVE.has("net_gex");
+  const areas = active.filter(m=>METRICS[m].kind==="area");
+
+  // header symbol + legend
+  document.getElementById('symLabel').textContent = R.symbol;
+  document.getElementById('chartLegend').innerHTML = active.map(m=>{
+    const M=METRICS[m];
+    const sw = M.kind==="bar"
+      ? `<span class="sq" style="background:${M.color}"></span>`
+      : `<span class="sq" style="background:${hexA(M.color,.5)};border-top:2px solid ${M.color}"></span>`;
+    return sw+M.label;
+  }).join('&nbsp;&nbsp;') || '<span style="color:#7d8799">×‘×—×¨ ×¤×¨×ž×˜×¨</span>';
+
+  const padL=70, padR=areas.length?62:42, padT=36, padB=56;
+  const plotW = W-padL-padR, plotH = H-padT-padB;
+  const slot = plotW/data.length;
+  const xCenter = i => padL + slot*(i+0.5);
+  const top = padT, bottom = padT+plotH;
+
+  // ----- LEFT axis (Net GEX, signed) -----
+  let lMin=0,lMax=1,yL=v=>bottom,y0=bottom;
+  if(hasBar){
+    const vals=data.map(METRICS.net_gex.val);
+    lMax=Math.max(...vals,0); lMin=Math.min(...vals,0);
+    if(lMax===lMin) lMax=lMin+1;
+    const padv=(lMax-lMin)*0.08; lMax+=padv; lMin-=padv;
+    yL=v=>top+(lMax-v)/(lMax-lMin)*plotH; y0=yL(0);
+  }
+  // ----- RIGHT axis (dominant area metric) -----
+  const ownMax={}; areas.forEach(m=>ownMax[m]=Math.max(...data.map(METRICS[m].val),1));
+  let dom=areas[0], rMax=1;
+  if(areas.length){ dom=areas.reduce((a,b)=>ownMax[b]>ownMax[a]?b:a,areas[0]); rMax=ownMax[dom]*1.08; }
+
+  // ----- gridlines + tick labels -----
+  ctx.font="bold 13px Segoe UI"; ctx.textBaseline="middle";
+  const ticks=6;
+  for(let t=0;t<=ticks;t++){
+    const f=t/ticks, yy=bottom-f*plotH;
+    ctx.strokeStyle="rgba(255,255,255,.025)"; ctx.lineWidth=1;
+    ctx.beginPath(); ctx.moveTo(padL,yy); ctx.lineTo(W-padR,yy); ctx.stroke();
+    if(hasBar){ ctx.fillStyle="#c4c4c4"; ctx.textAlign="right";
+      ctx.fillText(fmtAxis(lMin+(lMax-lMin)*f), padL-8, yy); }
+    if(areas.length){ ctx.fillStyle="#c4c4c4"; ctx.textAlign="left";
+      ctx.fillText(fmtAxis(rMax*f), W-padR+8, yy); }
+  }
+
+  // ----- area mountains (each normalized to own max) -----
+  areas.forEach(m=>{
+    const M=METRICS[m], own=ownMax[m];
+    const yA=v=>bottom-(v/own)*0.92*plotH;
+    ctx.beginPath(); ctx.moveTo(xCenter(0),bottom);
+    data.forEach((s,i)=>ctx.lineTo(xCenter(i),yA(M.val(s))));
+    ctx.lineTo(xCenter(data.length-1),bottom); ctx.closePath();
+    ctx.fillStyle=hexA(M.color,.33); ctx.fill();
+    // outline
+    ctx.beginPath();
+    data.forEach((s,i)=>{const x=xCenter(i),y=yA(M.val(s)); i?ctx.lineTo(x,y):ctx.moveTo(x,y);});
+    ctx.strokeStyle=M.color; ctx.lineWidth=1.6; ctx.stroke();
+    // dots
+    ctx.fillStyle=M.color;
+    data.forEach((s,i)=>{ctx.beginPath();ctx.arc(xCenter(i),yA(M.val(s)),1.8,0,7);ctx.fill();});
+  });
+
+  // ----- Net GEX bars (drawn on top) -----
+  if(hasBar){
+    const bw=Math.min(slot*0.70,32);
+    data.forEach((s,i)=>{
+      const v=METRICS.net_gex.val(s), yy=yL(v);
+      ctx.fillStyle = v>=0 ? "#22aaf2" : "#ff2417";
+      ctx.fillRect(xCenter(i)-bw/2, Math.min(yy,y0), bw, Math.max(1,Math.abs(yy-y0)));
+    });
+    ctx.strokeStyle="rgba(255,255,255,.18)"; ctx.lineWidth=1;
+    ctx.beginPath(); ctx.moveTo(padL,y0); ctx.lineTo(W-padR,y0); ctx.stroke();
+  }
+
+  // ----- x-axis strike labels -----
+  const labelStep=Math.ceil(data.length/45);
+  ctx.fillStyle="#c4c4c4"; ctx.font="bold 12px Segoe UI"; ctx.textAlign="center"; ctx.textBaseline="top";
+  data.forEach((s,i)=>{ if(i%labelStep===0) ctx.fillText(fmtPrice(s.strike), xCenter(i), bottom+7); });
+
+  // ----- vertical price line + label -----
+  const xAt=price=>{
+    if(price<=data[0].strike) return padL;
+    if(price>=data[data.length-1].strike) return padL+plotW;
+    for(let i=0;i<data.length-1;i++){
+      if(price>=data[i].strike && price<=data[i+1].strike){
+        const frac=(price-data[i].strike)/(data[i+1].strike-data[i].strike);
+        return xCenter(i)+frac*slot;
+      }
+    }
+    return padL+plotW/2;
+  };
+  const px=xAt(R.spot);
+  ctx.strokeStyle="#d58b16"; ctx.lineWidth=2;
+  ctx.beginPath(); ctx.moveTo(px,padT-6); ctx.lineTo(px,bottom); ctx.stroke();
+  ctx.fillStyle="#d58b16"; ctx.font="bold 12px Segoe UI"; ctx.textBaseline="alphabetic";
+  ctx.textAlign = px>W-120?"right":"left";
+  ctx.fillText("Price: "+fmtPrice(R.spot), px+(px>W-120?-6:6), padT-9);
+
+  // ----- axis titles -----
+  if(hasBar){ ctx.save(); ctx.translate(14,padT+plotH/2); ctx.rotate(-Math.PI/2);
+    ctx.fillStyle="#d0d0d0"; ctx.font="bold 13px Segoe UI"; ctx.textAlign="center";
+    ctx.fillText("Net GEX",0,0); ctx.restore(); }
+  if(areas.length){ ctx.save(); ctx.translate(W-12,padT+plotH/2); ctx.rotate(Math.PI/2);
+    ctx.fillStyle="#d0d0d0"; ctx.font="bold 13px Segoe UI"; ctx.textAlign="center";
+    ctx.fillText(METRICS[dom].label,0,0); ctx.restore(); }
+}
+function fmtAxis(v){
+  const a=Math.abs(v);
+  if(a>=1e9) return (v/1e9).toFixed(1)+"B";
+  if(a>=1e6) return (v/1e6).toFixed(1)+"M";
+  if(a>=1e3) return (v/1e3).toFixed(0)+"k";
+  return v.toFixed(0);
+}
+
+// ---------- Wiring ----------
+function populateSymbols(){
+  const sel=document.getElementById('symbol');
+  const mkt=document.getElementById('market').value;
+  sel.innerHTML="";
+  Object.keys(SYMBOLS).filter(k=>SYMBOLS[k].market===mkt).forEach(k=>{
+    const o=document.createElement('option');o.value=k;o.textContent=k;sel.appendChild(o);
+  });
+}
+function populateExpirations(chain){
+  const fromSel = document.getElementById('expirationFrom');
+  const toSel = document.getElementById('expirationTo');
+  const prevFrom = fromSel.value;
+  const prevTo = toSel.value;
+  const byExp = new Map();
+  const todayIso = new Date().toISOString().slice(0,10);
+  chain.quotes.forEach(q=>{
+    if(q.exp && q.exp >= todayIso && !byExp.has(q.exp)) byExp.set(q.exp, q.dte);
+  });
+  const expiries = [...byExp.keys()].sort();
+  const fill = (sel)=>{
+    sel.innerHTML = "";
+    expiries.forEach(exp=>{
+      const dte = byExp.get(exp);
+      const o = document.createElement('option');
+      o.value = exp;
+      o.textContent = `${exp} (${dte}DTE)`;
+      sel.appendChild(o);
+    });
+  };
+  fill(fromSel);
+  fill(toSel);
+  fromSel.value = expiries.includes(prevFrom) ? prevFrom : (expiries[0] || "");
+  toSel.value = expiries.includes(prevTo) ? prevTo : (fromSel.value || expiries[0] || "");
+  if(fromSel.value && toSel.value && fromSel.value > toSel.value) toSel.value = fromSel.value;
+}
+function run(){
+  const sym=document.getElementById('symbol').value;
+  const mode=document.getElementById('mode').value;
+  const src=document.getElementById('source').value;
+  const ov=parseFloat(document.getElementById('spotOverride').value);
+  const useLive = src==="live" && REAL[sym];
+  let chain;
+  if(useLive){
+    chain = buildChainReal(sym, (!isNaN(ov)&&ov>0)?ov:null);
+  } else {
+    const spot=!isNaN(ov)&&ov>0?ov:SYMBOLS[sym].spot;
+    chain = buildChain(sym,spot);
+  }
+  populateExpirations(chain);
+  const expFrom = document.getElementById('expirationFrom').value;
+  const expTo = document.getElementById('expirationTo').value || expFrom;
+  if(expFrom && expTo){
+    const lo = expFrom <= expTo ? expFrom : expTo;
+    const hi = expFrom <= expTo ? expTo : expFrom;
+    chain = {...chain, quotes: chain.quotes.filter(q=>q.exp>=lo && q.exp<=hi)};
+  }
+  const R = calcGEX(chain,mode);
+  R.live = !!chain.live;
+  R.asof = useLive ? REAL[sym].asof : null;
+  renderImpl(R);
+}
+document.getElementById('market').addEventListener('change',()=>{populateSymbols();run();});
+document.getElementById('symbol').addEventListener('change',()=>{
+  document.getElementById('spotOverride').value='';
+  document.getElementById('expirationFrom').value='';
+  document.getElementById('expirationTo').value='';
+  run();
+});
+document.getElementById('expirationFrom').addEventListener('change',run);
+document.getElementById('expirationTo').addEventListener('change',run);
+document.getElementById('mode').addEventListener('change',run);
+document.getElementById('source').addEventListener('change',run);
+document.getElementById('autorefresh').addEventListener('change',setupAutoRefresh);
+document.getElementById('strikeCount').addEventListener('change',run);
+document.getElementById('run').textContent = 'Refresh';
+document.getElementById('run').addEventListener('click',()=>loadData(true));
+window.addEventListener('resize',()=>{ if(window._lastR) drawChart(window._lastR); });
+
+// parameter buttons â€” toggle metrics on/off (multi-select overlay)
+document.querySelectorAll('.pbtn').forEach(btn=>{
+  btn.addEventListener('click',()=>{
+    const m=btn.dataset.metric;
+    if(ACTIVE.has(m)) ACTIVE.delete(m); else ACTIVE.add(m);
+    btn.classList.toggle('active', ACTIVE.has(m));
+    if(window._lastR) drawChart(window._lastR);
+  });
+});
+
+// ---------- Data loading + auto-refresh ----------
+// ×ž×•×©×š ×ž×—×“×© ××ª cboe_data.json (×©×ž×ª×¢×“×›×Ÿ ×¢"×™ fetch_cboe.py ×‘×¨×§×¢) ×•×ž×¨×¢× ×Ÿ ××ª ×”×ª×¦×•×’×”
+let _refreshTimer=null, _firstLoad=true, _loadingData=false;
+function dataUrl(){
+  return 'cboe_data.json?t=' + Date.now();
+}
+function loadData(thenRun){
+  if(_loadingData) return Promise.resolve();
+  _loadingData = true;
+  return fetch(dataUrl(), {cache:'no-store'})
+    .then(r=>r.ok?r.json():null)
+    .then(d=>{ if(d){ REAL=d; } })
+    .catch(()=>{})
+    .finally(()=>{
+      if(_firstLoad){
+        _firstLoad=false;
+        if(Object.keys(REAL).length===0){
+          document.getElementById('source').value="synthetic";
+          document.querySelector('#source option[value=live]').textContent="LIVE â€” ×œ× ×–×ž×™×Ÿ (×¤×ª×— ×“×¨×š ×©×¨×ª)";
+        }
+      }
+      _loadingData = false;
+      if(thenRun!==false) run();
+    });
+}
+function setupAutoRefresh(){
+  if(_refreshTimer){ clearInterval(_refreshTimer); _refreshTimer=null; }
+  const sec=Math.max(5,+document.getElementById('autorefresh').value || 5);
+  if(sec>0){ _refreshTimer=setInterval(()=>loadData(true), sec*1000); }
+}
+
+populateSymbols();
+document.getElementById('mode').value = 'full';
+document.getElementById('source').value = 'live';
+document.getElementById('autorefresh').value = '5';
+loadData(true).then(setupAutoRefresh);
+</script>
+</body>
+</html>

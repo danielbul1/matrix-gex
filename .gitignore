@@ -1,0 +1,7 @@
+__pycache__/
+.claude/
+*.pyc
+*.log
+.wrangler/
+.DS_Store
+spy.json
