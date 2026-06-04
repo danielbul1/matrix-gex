@@ -701,6 +701,64 @@ function drawChart(R){
   ctx.textAlign = px>W-120?"right":"left";
   ctx.fillText("Price: "+fmtPrice(R.spot), px+(px>W-120?-6:6), padT-9);
 
+  // ----- interpretation markers -----
+  const totalNet = data.reduce((a,s)=>a+s.netGex,0);
+  const posWall = data.reduce((a,s)=>s.netGex>a.netGex?s:a,data[0]);
+  const negWall = data.reduce((a,s)=>s.netGex<a.netGex?s:a,data[0]);
+  let flipLevel = null;
+  for(let i=0;i<data.length-1;i++){
+    const a=data[i], b=data[i+1];
+    if(a.netGex===0){ flipLevel=a.strike; break; }
+    if(a.netGex*b.netGex<0){
+      const ratio=Math.abs(a.netGex)/(Math.abs(a.netGex)+Math.abs(b.netGex));
+      flipLevel=a.strike+ratio*(b.strike-a.strike);
+      break;
+    }
+  }
+  const drawMarker = (price,color,label,row=0)=>{
+    const x=xAt(price);
+    ctx.save();
+    ctx.strokeStyle=color;
+    ctx.setLineDash([4,4]);
+    ctx.lineWidth=1.4;
+    ctx.beginPath(); ctx.moveTo(x,top); ctx.lineTo(x,bottom); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.font=(mobile ? "bold 9px Segoe UI" : "bold 11px Segoe UI");
+    ctx.textBaseline="middle";
+    const text=mobile ? label.replace("Positive ","+").replace("Negative ","-").replace("Wall","W") : label;
+    const tw=ctx.measureText(text).width+12;
+    const bx=Math.max(padL,Math.min(W-padR-tw,x-tw/2));
+    const by=top+10+row*(mobile?18:22);
+    ctx.fillStyle="rgba(20,20,20,.82)";
+    ctx.fillRect(bx,by,tw,mobile?16:18);
+    ctx.strokeStyle=color;
+    ctx.strokeRect(bx,by,tw,mobile?16:18);
+    ctx.fillStyle=color;
+    ctx.textAlign="center";
+    ctx.fillText(text,bx+tw/2,by+(mobile?8:9));
+    ctx.restore();
+  };
+  if(hasBar){
+    drawMarker(posWall.strike,"#22aaf2","Positive Wall",0);
+    drawMarker(negWall.strike,"#ff3b2f","Negative Wall",1);
+    if(flipLevel!==null) drawMarker(flipLevel,"#f2c94c","Flip Zone",2);
+  }
+  const regime = totalNet>=0 ? "Positive Gamma" : "Negative Gamma";
+  ctx.save();
+  ctx.font=(mobile ? "bold 10px Segoe UI" : "bold 12px Segoe UI");
+  ctx.textAlign="left";
+  ctx.textBaseline="middle";
+  const regColor=totalNet>=0 ? "#22aaf2" : "#ff3b2f";
+  const regText=`Regime: ${regime}`;
+  const regW=ctx.measureText(regText).width+16;
+  ctx.fillStyle="rgba(20,20,20,.86)";
+  ctx.fillRect(padL,top-28,regW,20);
+  ctx.strokeStyle=regColor;
+  ctx.strokeRect(padL,top-28,regW,20);
+  ctx.fillStyle=regColor;
+  ctx.fillText(regText,padL+8,top-18);
+  ctx.restore();
+
   // ----- axis titles -----
   if(hasBar){ ctx.save(); ctx.translate(14,padT+plotH/2); ctx.rotate(-Math.PI/2);
     ctx.fillStyle="#d0d0d0"; ctx.font=(mobile ? "bold 11px Segoe UI" : "bold 13px Segoe UI"); ctx.textAlign="center";
