@@ -103,6 +103,8 @@
   .chart-tooltip .tt-row{display:flex;justify-content:space-between;gap:18px}
   .chart-tooltip .pos{color:#22aaf2;font-weight:800}
   .chart-tooltip .neg{color:#ff3b2f;font-weight:800}
+  .chart-crosshair-x{position:absolute;left:0;right:0;display:none;border-top:1px dashed rgba(255,255,255,.55);
+                     z-index:4;pointer-events:none}
   .watermark{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
              font-size:72px;font-weight:800;color:rgba(255,255,255,.055);
              pointer-events:none;letter-spacing:2px;user-select:none}
@@ -227,6 +229,7 @@
     </div>
     <div class="chartwrap">
       <div class="watermark">Matrix</div>
+      <div class="chart-crosshair-x" id="chartCrosshairX"></div>
       <div class="chart-tooltip" id="chartTooltip"></div>
       <canvas id="gexChart" height="540"></canvas>
     </div>
@@ -277,6 +280,7 @@ function calcGreeks(S,K,T,sigma,r,isCall){
 
 // ---------- Symbol universe ----------
 const SYMBOLS = {
+  NDX:{spot:30570,  step:25, mult:100, baseIV:0.170, market:"US"},
   SPX:{spot:7550,   step:5,  mult:100, baseIV:0.140, market:"US"},
   SPY:{spot:580.50, step:5,  mult:100, baseIV:0.135, market:"US"},
   QQQ:{spot:525.50, step:5,  mult:100, baseIV:0.165, market:"US"},
@@ -675,7 +679,7 @@ function drawChart(R){
   });
 
   // ----- Net GEX bars (drawn on top) -----
-  const hitBars = [];
+  const hitBars = data.map((s,i)=>({x:padL+slot*i,y:top,w:slot,h:plotH,s}));
   if(hasBar){
     const bw=Math.min(slot*0.70,32);
     data.forEach((s,i)=>{
@@ -685,7 +689,7 @@ function drawChart(R){
       const h=Math.max(1,Math.abs(yy-y0));
       ctx.fillStyle = v>=0 ? "#22aaf2" : "#ff2417";
       ctx.fillRect(x, y, bw, h);
-      hitBars.push({x,y,w:bw,h,s});
+      hitBars[i]={x,y,w:bw,h,s};
     });
     ctx.strokeStyle="rgba(255,255,255,.18)"; ctx.lineWidth=1;
     ctx.beginPath(); ctx.moveTo(padL,y0); ctx.lineTo(W-padR,y0); ctx.stroke();
@@ -793,6 +797,7 @@ function fmtAxis(v){
 function showChartTooltip(ev){
   const cv=document.getElementById('gexChart');
   const tt=document.getElementById('chartTooltip');
+  const cross=document.getElementById('chartCrosshairX');
   const bars=cv._matrixBars||[];
   if(!bars.length) return;
 
@@ -807,22 +812,29 @@ function showChartTooltip(ev){
       const dist=Math.abs(cx-x);
       return !best || dist<best.dist ? {bar:b,dist} : best;
     },null)?.bar;
-    if(!hit || Math.abs((hit.x+hit.w/2)-x)>18){ tt.style.display='none'; return; }
+    if(!hit || Math.abs((hit.x+hit.w/2)-x)>18){ tt.style.display='none'; cross.style.display='none'; return; }
   }
 
   const s=hit.s;
-  const sign=s.netGex>=0?'pos':'neg';
+  const active = Object.keys(METRICS).filter(m=>ACTIVE.has(m));
+  const row = (label,value,cls='') => `<div class="tt-row"><span>${label}</span><span class="${cls}">${value}</span></div>`;
+  const metricRows = active.map(m=>{
+    if(m==='net_gex') return row('Net GEX',fmtNum(s.netGex),s.netGex>=0?'pos':'neg');
+    if(m==='ag') return row('AG',fmtNum(Math.abs(s.callGex)+Math.abs(s.putGex)));
+    if(m==='call_oi') return row('Call OI',fmtNum(s.callOI),'pos');
+    if(m==='put_oi') return row('Put OI',fmtNum(s.putOI),'neg');
+    if(m==='call_vol') return row('Call Volume',fmtNum(s.callVol),'pos');
+    if(m==='put_vol') return row('Put Volume',fmtNum(s.putVol),'neg');
+    if(m==='power') return row('Power Zone',fmtNum(s.totalOI+s.totalVol));
+    return '';
+  }).join('');
   tt.innerHTML = `
     <div class="tt-title">${window._lastR?.symbol || ''} Strike ${fmtPrice(s.strike)}</div>
-    <div class="tt-row"><span>Net GEX</span><span class="${sign}">${fmtNum(s.netGex)}</span></div>
-    <div class="tt-row"><span>Call GEX</span><span class="pos">${fmtNum(s.callGex)}</span></div>
-    <div class="tt-row"><span>Put GEX</span><span class="neg">${fmtNum(s.putGex)}</span></div>
-    <div class="tt-row"><span>Call OI</span><span>${fmtNum(s.callOI)}</span></div>
-    <div class="tt-row"><span>Put OI</span><span>${fmtNum(s.putOI)}</span></div>
-    <div class="tt-row"><span>Volume</span><span>${fmtNum(s.totalVol)}</span></div>
-    <div class="tt-row"><span>PCR</span><span>${s.pcr.toFixed(2)}</span></div>
+    ${metricRows || row('No metric selected','')}
   `;
   tt.style.display='block';
+  cross.style.display='block';
+  cross.style.top=Math.max(0,Math.min(rect.height,y))+'px';
   const tw=tt.offsetWidth, th=tt.offsetHeight;
   let left=x+14, top=y+14;
   if(left+tw>rect.width) left=x-tw-14;
@@ -832,6 +844,7 @@ function showChartTooltip(ev){
 }
 function hideChartTooltip(){
   document.getElementById('chartTooltip').style.display='none';
+  document.getElementById('chartCrosshairX').style.display='none';
 }
 
 // ---------- Wiring ----------

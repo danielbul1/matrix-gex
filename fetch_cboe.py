@@ -7,6 +7,7 @@ import json, re, datetime, urllib.request, sys
 
 # ETF/מניות (multiplier=100). אינדקסים דורשים תחילית "_" ב-CBOE (למשל _SPX).
 SYMBOLS = [
+    ("_NDX", "NDX"),
     ("_SPX", "SPX"),
     ("SPY", "SPY"),
     ("QQQ", "QQQ"),
