@@ -651,9 +651,8 @@ function drawChart(R){
   let lMin=0,lMax=1,xL=v=>padL,x0=padL;
   if(hasBar){
     const vals=data.map(METRICS.net_gex.val);
-    lMax=Math.max(...vals,0); lMin=Math.min(...vals,0);
-    if(lMax===lMin) lMax=lMin+1;
-    const padv=(lMax-lMin)*0.08; lMax+=padv; lMin-=padv;
+    const maxAbs=Math.max(...vals.map(v=>Math.abs(v)),1)*1.08;
+    lMin=-maxAbs; lMax=maxAbs;
     xL=v=>padL+(v-lMin)/(lMax-lMin)*plotW; x0=xL(0);
   }
   // ----- Area metrics use their own normalized horizontal scale -----
