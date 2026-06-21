@@ -876,13 +876,17 @@ let _refreshTimer=null, _firstLoad=true, _loadingData=false;
 function dataUrl(){
   return 'cboe_data.json?t=' + Date.now();
 }
+function fetchLiveData(url){
+  return fetch(url, {cache:'no-store'})
+    .then(r=>r.ok?r.json():null)
+    .catch(()=>null);
+}
 function loadData(thenRun){
   if(_loadingData) return Promise.resolve();
   _loadingData = true;
-  return fetch(dataUrl(), {cache:'no-store'})
-    .then(r=>r.ok?r.json():null)
+  return fetchLiveData(dataUrl())
+    .then(d=>d || fetchLiveData('https://raw.githubusercontent.com/danielbul1/matrix-gex/main/cboe_data.json?t='+Date.now()))
     .then(d=>{ if(d){ REAL=d; } })
-    .catch(()=>{})
     .finally(()=>{
       if(_firstLoad){
         _firstLoad=false;
