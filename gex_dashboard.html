@@ -103,7 +103,7 @@
   .chart-tooltip .tt-row{display:flex;justify-content:space-between;gap:18px}
   .chart-tooltip .pos{color:#22aaf2;font-weight:800}
   .chart-tooltip .neg{color:#ff3b2f;font-weight:800}
-  .chart-crosshair-x{position:absolute;top:0;bottom:0;display:none;border-left:1px dashed rgba(255,255,255,.55);
+  .chart-crosshair-x{position:absolute;left:0;right:0;display:none;border-top:1px dashed rgba(255,255,255,.55);
                      z-index:4;pointer-events:none}
   .watermark{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
              font-size:72px;font-weight:800;color:rgba(255,255,255,.055);
@@ -603,20 +603,20 @@ const METRICS = {
 };
 function hexA(hex,a){const n=parseInt(hex.slice(1),16);return `rgba(${n>>16&255},${n>>8&255},${n&255},${a})`;}
 
-// ---------- Canvas chart: bars (Net GEX) + stacked area overlays ----------
+// ---------- Canvas chart: horizontal bars by strike + area overlays ----------
 function drawChart(R){
   const cv = document.getElementById('gexChart');
   const dpr = window.devicePixelRatio||1;
   const W = cv.clientWidth;
   const mobile = W < 640;
-  const H = mobile ? Math.max(380, Math.min(520, window.innerHeight - 285)) : Math.max(620, Math.min(780, window.innerHeight - 245));
+  const H = mobile ? Math.max(500, Math.min(680, window.innerHeight - 220)) : Math.max(680, Math.min(900, window.innerHeight - 170));
   cv.width=W*dpr; cv.height=H*dpr; cv.style.height=H+"px";
   const ctx = cv.getContext('2d'); ctx.setTransform(dpr,0,0,dpr,0,0);
   ctx.clearRect(0,0,W,H);
 
   const N = +document.getElementById('strikeCount').value;
   const data = [...R.strikes].sort((a,b)=>Math.abs(a.strike-R.spot)-Math.abs(b.strike-R.spot))
-                 .slice(0,N*2+1).sort((a,b)=>a.strike-b.strike);
+                 .slice(0,N*2+1).sort((a,b)=>b.strike-a.strike);
   if(!data.length) return;
 
   const order = Object.keys(METRICS);
@@ -634,109 +634,99 @@ function drawChart(R){
     return sw+M.label;
   }).join('&nbsp;&nbsp;') || '<span style="color:#7d8799">×‘×—×¨ ×¤×¨×ž×˜×¨</span>';
 
-  const padL=mobile ? 48 : 70;
-  const padR=mobile ? (areas.length ? 42 : 18) : (areas.length?62:42);
-  const padT=mobile ? 28 : 36;
-  const padB=mobile ? 44 : 56;
+  const padL=mobile ? 54 : 76;
+  const padR=mobile ? 18 : 42;
+  const padT=mobile ? 22 : 30;
+  const padB=mobile ? 48 : 58;
   const plotW = W-padL-padR, plotH = H-padT-padB;
-  const slot = plotW/data.length;
-  const xCenter = i => padL + slot*(i+0.5);
-  const top = padT, bottom = padT+plotH;
+  const slot = plotH/data.length;
+  const yCenter = i => padT + slot*(i+0.5);
+  const top = padT, bottom = padT+plotH, right=padL+plotW;
 
-  // ----- LEFT axis (Net GEX, signed) -----
-  let lMin=0,lMax=1,yL=v=>bottom,y0=bottom;
+  // ----- HORIZONTAL axis (Net GEX, signed) -----
+  let lMin=0,lMax=1,xL=v=>padL,x0=padL;
   if(hasBar){
     const vals=data.map(METRICS.net_gex.val);
     lMax=Math.max(...vals,0); lMin=Math.min(...vals,0);
     if(lMax===lMin) lMax=lMin+1;
     const padv=(lMax-lMin)*0.08; lMax+=padv; lMin-=padv;
-    yL=v=>top+(lMax-v)/(lMax-lMin)*plotH; y0=yL(0);
+    xL=v=>padL+(v-lMin)/(lMax-lMin)*plotW; x0=xL(0);
   }
-  // ----- RIGHT axis (dominant area metric) -----
+  // ----- Area metrics use their own normalized horizontal scale -----
   const ownMax={}; areas.forEach(m=>ownMax[m]=Math.max(...data.map(METRICS[m].val),1));
-  let dom=areas[0], rMax=1;
-  if(areas.length){ dom=areas.reduce((a,b)=>ownMax[b]>ownMax[a]?b:a,areas[0]); rMax=ownMax[dom]*1.08; }
 
   // ----- gridlines + tick labels -----
-  ctx.font=(mobile ? "bold 10px Segoe UI" : "bold 13px Segoe UI"); ctx.textBaseline="middle";
+  ctx.font=(mobile ? "bold 9px Segoe UI" : "bold 12px Segoe UI");
   const ticks=6;
   for(let t=0;t<=ticks;t++){
-    const f=t/ticks, yy=bottom-f*plotH;
+    const f=t/ticks, xx=padL+f*plotW;
     ctx.strokeStyle="rgba(255,255,255,.025)"; ctx.lineWidth=1;
-    ctx.beginPath(); ctx.moveTo(padL,yy); ctx.lineTo(W-padR,yy); ctx.stroke();
-    if(hasBar){ ctx.fillStyle="#c4c4c4"; ctx.textAlign="right";
-      ctx.fillText(fmtAxis(lMin+(lMax-lMin)*f), padL-8, yy); }
-    if(areas.length){ ctx.fillStyle="#c4c4c4"; ctx.textAlign="left";
-      ctx.fillText(fmtAxis(rMax*f), W-padR+8, yy); }
+    ctx.beginPath(); ctx.moveTo(xx,top); ctx.lineTo(xx,bottom); ctx.stroke();
+    if(hasBar){ ctx.fillStyle="#c4c4c4"; ctx.textAlign="center"; ctx.textBaseline="top";
+      ctx.fillText(fmtAxis(lMin+(lMax-lMin)*f), xx, bottom+8); }
   }
 
-  // ----- area mountains (each normalized to own max) -----
+  // ----- area overlays, rotated with the strike axis -----
   areas.forEach(m=>{
     const M=METRICS[m], own=ownMax[m];
-    const yA=v=>bottom-(v/own)*0.92*plotH;
-    ctx.beginPath(); ctx.moveTo(xCenter(0),bottom);
-    data.forEach((s,i)=>ctx.lineTo(xCenter(i),yA(M.val(s))));
-    ctx.lineTo(xCenter(data.length-1),bottom); ctx.closePath();
+    const xA=v=>padL+(v/own)*0.92*plotW;
+    ctx.beginPath(); ctx.moveTo(padL,yCenter(0));
+    data.forEach((s,i)=>ctx.lineTo(xA(M.val(s)),yCenter(i)));
+    ctx.lineTo(padL,yCenter(data.length-1)); ctx.closePath();
     ctx.fillStyle=hexA(M.color,.33); ctx.fill();
-    // outline
     ctx.beginPath();
-    data.forEach((s,i)=>{const x=xCenter(i),y=yA(M.val(s)); i?ctx.lineTo(x,y):ctx.moveTo(x,y);});
+    data.forEach((s,i)=>{const x=xA(M.val(s)),y=yCenter(i); i?ctx.lineTo(x,y):ctx.moveTo(x,y);});
     ctx.strokeStyle=M.color; ctx.lineWidth=1.6; ctx.stroke();
-    // dots
     ctx.fillStyle=M.color;
-    data.forEach((s,i)=>{ctx.beginPath();ctx.arc(xCenter(i),yA(M.val(s)),1.8,0,7);ctx.fill();});
+    data.forEach((s,i)=>{ctx.beginPath();ctx.arc(xA(M.val(s)),yCenter(i),1.8,0,7);ctx.fill();});
   });
 
-  // ----- Net GEX bars (drawn on top) -----
-  const hitBars = data.map((s,i)=>({x:padL+slot*i,y:top,w:slot,h:plotH,s}));
+  // ----- Net GEX horizontal bars -----
+  const hitBars = data.map((s,i)=>({x:padL,y:padT+slot*i,w:plotW,h:slot,s,rowY:yCenter(i)}));
   if(hasBar){
-    const bw=Math.min(slot*0.70,32);
+    const bh=Math.max(2,Math.min(slot*0.68,18));
     data.forEach((s,i)=>{
-      const v=METRICS.net_gex.val(s), yy=yL(v);
-      const x=xCenter(i)-bw/2;
-      const y=Math.min(yy,y0);
-      const h=Math.max(1,Math.abs(yy-y0));
+      const v=METRICS.net_gex.val(s), xx=xL(v);
+      const x=Math.min(xx,x0);
+      const y=yCenter(i)-bh/2;
+      const w=Math.max(1,Math.abs(xx-x0));
       ctx.fillStyle = v>=0 ? "#22aaf2" : "#ff2417";
-      ctx.fillRect(x, y, bw, h);
-      hitBars[i]={x,y,w:bw,h,s};
+      ctx.fillRect(x, y, w, bh);
+      hitBars[i]={x,y,w,h:bh,s,rowY:yCenter(i)};
     });
     ctx.strokeStyle="rgba(255,255,255,.18)"; ctx.lineWidth=1;
-    ctx.beginPath(); ctx.moveTo(padL,y0); ctx.lineTo(W-padR,y0); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x0,top); ctx.lineTo(x0,bottom); ctx.stroke();
   }
   cv._matrixBars = hitBars;
   cv._matrixPlot = {top,bottom,padL,padR,W,H};
 
-  // ----- x-axis strike labels -----
-  const labelStep=Math.ceil(data.length/(mobile ? 16 : 45));
-  ctx.fillStyle="#c4c4c4"; ctx.font=(mobile ? "bold 10px Segoe UI" : "bold 12px Segoe UI"); ctx.textAlign="center"; ctx.textBaseline="top";
-  data.forEach((s,i)=>{ if(i%labelStep===0) ctx.fillText(fmtPrice(s.strike), xCenter(i), bottom+7); });
+  // ----- vertical strike labels -----
+  const labelStep=Math.ceil(data.length/(mobile ? 28 : 48));
+  ctx.fillStyle="#c4c4c4"; ctx.font=(mobile ? "bold 9px Segoe UI" : "bold 11px Segoe UI"); ctx.textAlign="right"; ctx.textBaseline="middle";
+  data.forEach((s,i)=>{ if(i%labelStep===0) ctx.fillText(fmtPrice(s.strike), padL-9, yCenter(i)); });
 
-  // ----- vertical price line + label -----
-  const xAt=price=>{
-    if(price<=data[0].strike) return padL;
-    if(price>=data[data.length-1].strike) return padL+plotW;
+  // ----- horizontal price line + label -----
+  const yAt=price=>{
+    if(price>=data[0].strike) return top;
+    if(price<=data[data.length-1].strike) return bottom;
     for(let i=0;i<data.length-1;i++){
-      if(price>=data[i].strike && price<=data[i+1].strike){
-        const frac=(price-data[i].strike)/(data[i+1].strike-data[i].strike);
-        return xCenter(i)+frac*slot;
+      if(price<=data[i].strike && price>=data[i+1].strike){
+        const frac=(data[i].strike-price)/(data[i].strike-data[i+1].strike);
+        return yCenter(i)+frac*slot;
       }
     }
-    return padL+plotW/2;
+    return top+plotH/2;
   };
-  const px=xAt(R.spot);
+  const py=yAt(R.spot);
   ctx.strokeStyle="#d58b16"; ctx.lineWidth=2;
-  ctx.beginPath(); ctx.moveTo(px,padT-6); ctx.lineTo(px,bottom); ctx.stroke();
-  ctx.fillStyle="#d58b16"; ctx.font=(mobile ? "bold 10px Segoe UI" : "bold 12px Segoe UI"); ctx.textBaseline="alphabetic";
-  ctx.textAlign = px>W-120?"right":"left";
-  ctx.fillText("Price: "+fmtPrice(R.spot), px+(px>W-120?-6:6), padT-9);
+  ctx.beginPath(); ctx.moveTo(padL,py); ctx.lineTo(right,py); ctx.stroke();
+  ctx.fillStyle="#d58b16"; ctx.font=(mobile ? "bold 10px Segoe UI" : "bold 12px Segoe UI"); ctx.textBaseline="bottom"; ctx.textAlign="right";
+  ctx.fillText("Price: "+fmtPrice(R.spot), right, py-5);
 
   // ----- axis titles -----
-  if(hasBar){ ctx.save(); ctx.translate(14,padT+plotH/2); ctx.rotate(-Math.PI/2);
-    ctx.fillStyle="#d0d0d0"; ctx.font=(mobile ? "bold 11px Segoe UI" : "bold 13px Segoe UI"); ctx.textAlign="center";
-    ctx.fillText("Net GEX",0,0); ctx.restore(); }
-  if(areas.length){ ctx.save(); ctx.translate(W-12,padT+plotH/2); ctx.rotate(Math.PI/2);
-    ctx.fillStyle="#d0d0d0"; ctx.font=(mobile ? "bold 11px Segoe UI" : "bold 13px Segoe UI"); ctx.textAlign="center";
-    ctx.fillText(METRICS[dom].label,0,0); ctx.restore(); }
+  ctx.fillStyle="#d0d0d0"; ctx.font=(mobile ? "bold 11px Segoe UI" : "bold 13px Segoe UI"); ctx.textAlign="center"; ctx.textBaseline="bottom";
+  ctx.fillText(hasBar ? "Net GEX" : "Value", padL+plotW/2, H-5);
+  ctx.save(); ctx.translate(14,padT+plotH/2); ctx.rotate(-Math.PI/2); ctx.fillText("Strike",0,0); ctx.restore();
 }
 function fmtAxis(v){
   const a=Math.abs(v);
@@ -756,14 +746,14 @@ function showChartTooltip(ev){
   const point=ev.touches && ev.touches[0] ? ev.touches[0] : ev;
   const x=point.clientX-rect.left;
   const y=point.clientY-rect.top;
-  let hit=bars.find(b=>x>=b.x-3 && x<=b.x+b.w+3 && y>=Math.min(b.y,b.y+b.h)-8 && y<=Math.max(b.y+b.h,b.y)+8);
+  let hit=bars.find(b=>y>=b.y-3 && y<=b.y+b.h+3 && x>=Math.min(b.x,b.x+b.w)-8 && x<=Math.max(b.x+b.w,b.x)+8);
   if(!hit){
     hit=bars.reduce((best,b)=>{
-      const cx=b.x+b.w/2;
-      const dist=Math.abs(cx-x);
+      const cy=b.rowY ?? (b.y+b.h/2);
+      const dist=Math.abs(cy-y);
       return !best || dist<best.dist ? {bar:b,dist} : best;
     },null)?.bar;
-    if(!hit || Math.abs((hit.x+hit.w/2)-x)>18){ tt.style.display='none'; cross.style.display='none'; return; }
+    if(!hit || Math.abs((hit.rowY ?? (hit.y+hit.h/2))-y)>18){ tt.style.display='none'; cross.style.display='none'; return; }
   }
 
   const s=hit.s;
@@ -785,7 +775,7 @@ function showChartTooltip(ev){
   `;
   tt.style.display='block';
   cross.style.display='block';
-  cross.style.left=Math.max(0,Math.min(rect.width,hit.x+hit.w/2))+'px';
+  cross.style.top=Math.max(0,Math.min(rect.height,hit.rowY ?? (hit.y+hit.h/2)))+'px';
   const tw=tt.offsetWidth, th=tt.offsetHeight;
   let left=x+14, top=y+14;
   if(left+tw>rect.width) left=x-tw-14;
