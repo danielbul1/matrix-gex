@@ -91,6 +91,11 @@
           background:#1c1c1c;border:0;border-radius:0;padding:16px;margin:0 0 10px;
           box-shadow:0 8px 18px rgba(0,0,0,.25)}
   .plabel{color:#d0d0d0;font-size:16px;font-weight:700;margin-right:8px}
+  .range-control{display:inline-flex;align-items:center;gap:3px;padding-right:12px;margin-right:4px;border-right:1px solid #3a3a3a}
+  .range-label{color:#aaa;font-size:12px;font-weight:800;margin-right:5px}
+  .range-btn{min-width:38px;background:#303030;color:#cfcfcf;border:1px solid #454545;border-radius:4px;
+             padding:8px 9px;font-size:12px;font-weight:800;align-self:auto}
+  .range-btn.active{background:#e7e7e7;color:#171717;border-color:#e7e7e7}
   .pbtn{background:var(--c);color:white;border:none;border-radius:6px;
         padding:10px 14px;font-size:14px;font-weight:800;cursor:pointer;
         opacity:1;transition:filter .15s,transform .1s;align-self:auto}
@@ -131,6 +136,7 @@
     select,input{width:100%;min-width:0;font-size:13px;padding:9px 8px}
     main{margin-left:0;padding:0 8px 12px}
     .params{justify-content:flex-start;flex-wrap:nowrap;overflow-x:auto;gap:8px;padding:10px 8px;margin-bottom:8px;scrollbar-width:thin}
+    .range-control{flex:0 0 auto}
     .plabel{flex:0 0 auto;font-size:13px;margin-right:0}
     .pbtn{flex:0 0 auto;padding:9px 12px;font-size:13px}
     .chartcard{min-height:auto;padding:16px 8px 12px;border-radius:6px}
@@ -216,6 +222,13 @@
 
 <main>
   <div class="params">
+    <div class="range-control" role="group" aria-label="Strike display range">
+      <span class="range-label">Range</span>
+      <button type="button" class="range-btn" data-sigma="1">1&sigma;</button>
+      <button type="button" class="range-btn active" data-sigma="2">2&sigma;</button>
+      <button type="button" class="range-btn" data-sigma="3">3&sigma;</button>
+      <button type="button" class="range-btn" data-sigma="all">All</button>
+    </div>
     <span class="plabel">Parameters:</span>
     <button class="pbtn active" data-metric="net_gex"  style="--c:#22b8ff">Net GEX</button>
     <button class="pbtn"        data-metric="ag"       style="--c:#ab7df6">AG</button>
@@ -360,6 +373,29 @@ function buildChainReal(symKey, spotOverride){
     return {K:o.k, dte:o.dte, T:o.dte/365, exp:o.exp, isCall, iv:o.iv, oi:o.oi, vol:o.vol, ts:now, g};
   });
   return {symbol:symKey, market:"US", spot, mult:rec.mult||100, fetchTs:now, quotes, live:true};
+}
+
+function calcExpectedMove(chain){
+  const byExpiry = new Map();
+  chain.quotes.forEach(q=>{
+    const key=q.exp || String(q.dte);
+    if(!byExpiry.has(key)) byExpiry.set(key,[]);
+    byExpiry.get(key).push(q);
+  });
+  const hourInYears=1/(365*24);
+  let widest=0;
+  byExpiry.forEach(quotes=>{
+    const nearest=Math.min(...quotes.map(q=>Math.abs(q.K-chain.spot)));
+    const atm=quotes.filter(q=>Math.abs(q.K-chain.spot)===nearest && Number.isFinite(q.iv) && q.iv>0);
+    if(!atm.length) return;
+    const iv=atm.reduce((sum,q)=>sum+q.iv,0)/atm.length;
+    const exp=quotes[0].exp;
+    const expiryMs=exp ? Date.parse(exp+'T20:00:00Z')-Date.now() : NaN;
+    const fallbackYears=Math.max(Number(quotes[0].T)||Number(quotes[0].dte)/365||0,hourInYears);
+    const years=Number.isFinite(expiryMs) ? Math.max(expiryMs/(365*86400000),hourInYears) : fallbackYears;
+    widest=Math.max(widest,chain.spot*iv*Math.sqrt(years));
+  });
+  return widest;
 }
 
 // ---------- GEX engine (TECHNICAL_ARCHITECTURE.md + GEX_INTRADAY_FIX.md) ----------
@@ -596,6 +632,7 @@ function renderImpl(R){
 // ---------- Metric definitions (Quant-Power style param buttons) ----------
 // net_gex = ×¢×ž×•×“×•×ª (kind:bar). ×›×œ ×”×©××¨ = ×’×¨×£ ×©×˜×—/×”×¨ (kind:area) ×©×ž×¦×˜×‘×¨ ×‘×©×›×‘×•×ª.
 let ACTIVE = new Set(["net_gex"]);
+let DISPLAY_SIGMA = 2;
 const METRICS = {
   net_gex:  {label:"Net GEX",     color:"#22b8ff", kind:"bar",  signed:true,  val:s=>s.netGex},
   ag:       {label:"AG",          color:"#ab7df6", kind:"area", val:s=>Math.abs(s.callGex)+Math.abs(s.putGex)},
@@ -618,9 +655,15 @@ function drawChart(R){
   const ctx = cv.getContext('2d'); ctx.setTransform(dpr,0,0,dpr,0,0);
   ctx.clearRect(0,0,W,H);
 
-  const N = +document.getElementById('strikeCount').value;
-  const data = [...R.strikes].sort((a,b)=>Math.abs(a.strike-R.spot)-Math.abs(b.strike-R.spot))
-                 .slice(0,N*2+1).sort((a,b)=>a.strike-b.strike);
+  let visibleStrikes=[...R.strikes];
+  if(Number.isFinite(DISPLAY_SIGMA) && R.expectedMove>0){
+    const radius=DISPLAY_SIGMA*R.expectedMove;
+    visibleStrikes=visibleStrikes.filter(s=>Math.abs(s.strike-R.spot)<=radius);
+  }
+  if(!visibleStrikes.length){
+    visibleStrikes=[...R.strikes].sort((a,b)=>Math.abs(a.strike-R.spot)-Math.abs(b.strike-R.spot)).slice(0,1);
+  }
+  const data=visibleStrikes.sort((a,b)=>a.strike-b.strike);
   if(!data.length) return;
 
   const order = Object.keys(METRICS);
@@ -850,7 +893,9 @@ function run(){
   if(selectedExpirations.size){
     chain = {...chain, quotes: chain.quotes.filter(q=>selectedExpirations.has(q.exp))};
   }
+  const expectedMove = calcExpectedMove(chain);
   const R = calcGEX(chain,mode);
+  R.expectedMove = expectedMove;
   R.live = !!chain.live;
   R.asof = useLive ? REAL[sym].asof : null;
   renderImpl(R);
@@ -881,6 +926,14 @@ document.querySelectorAll('.pbtn').forEach(btn=>{
     const m=btn.dataset.metric;
     if(ACTIVE.has(m)) ACTIVE.delete(m); else ACTIVE.add(m);
     btn.classList.toggle('active', ACTIVE.has(m));
+    if(window._lastR) drawChart(window._lastR);
+  });
+});
+
+document.querySelectorAll('.range-btn').forEach(btn=>{
+  btn.addEventListener('click',()=>{
+    DISPLAY_SIGMA=btn.dataset.sigma==='all' ? Infinity : Number(btn.dataset.sigma);
+    document.querySelectorAll('.range-btn').forEach(b=>b.classList.toggle('active',b===btn));
     if(window._lastR) drawChart(window._lastR);
   });
 });
