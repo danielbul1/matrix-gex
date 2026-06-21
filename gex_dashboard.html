@@ -30,6 +30,13 @@
   .ctrl{display:flex;flex-direction:column;gap:4px}
   .ctrl:nth-child(n+4){display:none}
   .ctrl label{font-size:14px;color:#d0d0d0;font-weight:700}
+  .expiry-picker{min-width:310px;max-width:520px;display:flex;gap:6px;overflow-x:auto;padding:6px;
+                 background:#292929;border:1px solid #383838;border-radius:6px;scrollbar-width:thin}
+  .expiry-option{display:inline-flex;align-items:center;gap:5px;white-space:nowrap;padding:4px 7px;
+                 background:#353535;border:1px solid #444;border-radius:5px;font-size:12px;cursor:pointer}
+  .expiry-option:has(input:checked){border-color:var(--accent);background:rgba(31,169,244,.16);color:#fff}
+  .expiry-option input{min-width:0;width:14px;height:14px;margin:0;accent-color:var(--accent)}
+  .expiry-empty{padding:4px 7px;color:var(--muted);font-size:12px}
   select,input{background:#3a3a3a;color:var(--text);border:1px solid #262626;
                border-radius:5px;padding:8px 10px;font-size:14px;min-width:112px;max-width:100%}
   button{background:var(--accent);color:white;border:none;border-radius:5px;
@@ -95,6 +102,24 @@
   .chartlegend{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:700;color:#d0d0d0;margin-right:78px}
   .chartlegend .sq{width:12px;height:12px;border-radius:2px;display:inline-block}
   .chartwrap{position:relative;overflow:hidden}
+  .quantum-stage{display:grid;grid-template-columns:minmax(0,1fr) 310px;gap:14px;align-items:stretch}
+  .battlefield{min-width:0}
+  .core-panel{background:#191919;border:1px solid #303030;border-radius:8px;padding:14px;display:flex;flex-direction:column;gap:12px}
+  .core-title{font-size:12px;color:#9f9f9f;text-transform:uppercase;font-weight:900;letter-spacing:.7px}
+  .core-readout{font-size:24px;font-weight:900;color:#f2f2f2;line-height:1}
+  .core-readout small{font-size:12px;color:#9f9f9f;font-weight:700}
+  .logic-gate{border-radius:7px;border:1px solid #3a3a3a;background:#232323;padding:12px;min-height:112px}
+  .logic-gate .state{font-size:12px;text-transform:uppercase;letter-spacing:.6px;font-weight:900;margin-bottom:8px}
+  .logic-gate .msg{font-size:13px;line-height:1.45;color:#d8d8d8}
+  .logic-gate.safe{border-color:rgba(24,192,113,.55)}.logic-gate.safe .state{color:#18c071}
+  .logic-gate.blocked{border-color:rgba(255,59,47,.65)}.logic-gate.blocked .state{color:#ff3b2f}
+  .logic-gate.pinned{border-color:rgba(216,146,31,.65)}.logic-gate.pinned .state{color:#d8921f}
+  .logic-gate.standard{border-color:rgba(180,180,180,.35)}.logic-gate.standard .state{color:#f2f2f2}
+  .logic-gate.blocked{animation:pulseAlert 1.1s ease-in-out infinite alternate}
+  @keyframes pulseAlert{from{box-shadow:0 0 0 rgba(255,69,0,0)}to{box-shadow:0 0 22px rgba(255,69,0,.28)}}
+  .topography-wrap{margin-top:14px;border-top:1px solid #333;padding-top:12px}
+  .topography-head{display:flex;justify-content:space-between;align-items:center;font-size:12px;color:#9f9f9f;font-weight:900;text-transform:uppercase;letter-spacing:.6px;margin-bottom:8px}
+  #vectorCore,#topoCanvas{width:100%;display:block}
   .chart-tooltip{position:absolute;z-index:5;display:none;min-width:190px;max-width:260px;
                  background:rgba(18,18,18,.94);border:1px solid #555;border-radius:7px;
                  padding:10px 11px;color:#e7e7e7;font-size:12px;line-height:1.5;
@@ -108,6 +133,11 @@
   .watermark{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
              font-size:72px;font-weight:800;color:rgba(255,255,255,.055);
              pointer-events:none;letter-spacing:2px;user-select:none}
+  .ofi-strip{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;margin:0 0 14px}
+  .ofi-cell{background:#292929;border:1px solid #343434;border-radius:6px;padding:10px 12px;min-height:64px}
+  .ofi-cell .k{font-size:10px;color:#9d9d9d;text-transform:uppercase;font-weight:800;letter-spacing:.5px}
+  .ofi-cell .v{font-size:18px;font-weight:900;margin-top:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .ofi-cell.buy .v{color:#18c071}.ofi-cell.sell .v{color:#ff3b2f}.ofi-cell.neutral .v{color:#d8921f}
   @media(max-width:900px){
     body{overflow-x:hidden}
     header{position:static;width:auto;min-height:0;padding:18px 16px 14px;border-right:0;border-bottom:1px solid #252525}
@@ -121,6 +151,7 @@
     .ctrl:first-child{grid-column:1 / -1}
     .ctrl label{font-size:12px}
     select,input{width:100%;min-width:0;font-size:13px;padding:9px 8px}
+    .expiry-picker{width:100%;min-width:0;max-width:none}
     main{margin-left:0;padding:0 8px 12px}
     .params{justify-content:flex-start;flex-wrap:nowrap;overflow-x:auto;gap:8px;padding:10px 8px;margin-bottom:8px;scrollbar-width:thin}
     .plabel{flex:0 0 auto;font-size:13px;margin-right:0}
@@ -129,7 +160,13 @@
     .charttop{margin-bottom:4px;padding:0 4px}
     .symlabel{margin-left:0;font-size:16px}
     .chartlegend{margin-right:0;font-size:12px}
+    .quantum-stage{grid-template-columns:1fr}
+    .core-panel{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+    .logic-gate{grid-column:1 / -1}
     .watermark{font-size:44px}
+    .ofi-strip{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+    .ofi-cell{min-height:58px;padding:9px 10px}
+    .ofi-cell .v{font-size:15px}
   }
   @media(max-width:520px){
     .controls{grid-template-columns:1fr}
@@ -160,12 +197,16 @@
     <select id="symbol"></select>
   </div>
   <div class="ctrl">
-    <label>From</label>
-    <select id="expirationFrom"></select>
+    <label>Expirations</label>
+    <div id="expirationPicker" class="expiry-picker" aria-label="Choose expiration dates"></div>
   </div>
   <div class="ctrl">
-    <label>To</label>
-    <select id="expirationTo"></select>
+    <label>Strike Range</label>
+    <select id="stdRange">
+      <option value="1">±1σ</option>
+      <option value="2" selected>±2σ</option>
+      <option value="3">±3σ</option>
+    </select>
   </div>
   <div class="ctrl">
     <label>Market</label>
@@ -213,25 +254,51 @@
 <main>
   <div class="params">
     <span class="plabel">Parameters:</span>
-    <button class="pbtn active" data-metric="net_gex"  style="--c:#22b8ff">Net GEX</button>
+    <button class="pbtn"        data-metric="net_gex"  style="--c:#22b8ff">Net GEX</button>
     <button class="pbtn"        data-metric="ag"       style="--c:#ab7df6">AG</button>
     <button class="pbtn"        data-metric="call_oi"  style="--c:#26c281">Call OI</button>
     <button class="pbtn"        data-metric="put_oi"   style="--c:#ef5350">Put OI</button>
     <button class="pbtn"        data-metric="call_vol" style="--c:#2f73ff">Call Volume</button>
     <button class="pbtn"        data-metric="put_vol"  style="--c:#ff8a3d">Put Volume</button>
-    <button class="pbtn"        data-metric="power"    style="--c:#ffc107">Power Zone</button>
+    <button class="pbtn active" data-metric="power"    style="--c:#ffc107">Power Zone</button>
+    <button class="pbtn active" data-metric="ofi"      style="--c:#ffffff">OFI</button>
+    <button class="pbtn active" data-metric="vanna"    style="--c:#00d4ff">Vanna</button>
+    <button class="pbtn active" data-metric="charm"    style="--c:#ff4fd8">Charm</button>
   </div>
 
   <div class="card chartcard">
-    <div class="charttop">
-      <span class="symlabel" id="symLabel"></span>
-      <span class="chartlegend" id="chartLegend"></span>
+    <div class="ofi-strip" id="ofiStrip"></div>
+    <div class="quantum-stage">
+      <section class="battlefield">
+        <div class="charttop">
+          <span class="symlabel" id="symLabel"></span>
+          <span class="chartlegend" id="chartLegend"></span>
+        </div>
+        <div class="chartwrap">
+          <div class="watermark">Matrix</div>
+          <div class="chart-crosshair-x" id="chartCrosshairX"></div>
+          <div class="chart-tooltip" id="chartTooltip"></div>
+          <canvas id="gexChart" height="540"></canvas>
+        </div>
+      </section>
+      <aside class="core-panel">
+        <div>
+          <div class="core-title">Vector Core</div>
+          <div class="core-readout" id="coreReadout">-- <small>OFI</small></div>
+        </div>
+        <canvas id="vectorCore" height="220"></canvas>
+        <div class="logic-gate pinned" id="logicGate">
+          <div class="state">STATUS</div>
+          <div class="msg">Loading flow model...</div>
+        </div>
+      </aside>
     </div>
-    <div class="chartwrap">
-      <div class="watermark">Matrix</div>
-      <div class="chart-crosshair-x" id="chartCrosshairX"></div>
-      <div class="chart-tooltip" id="chartTooltip"></div>
-      <canvas id="gexChart" height="540"></canvas>
+    <div class="topography-wrap">
+      <div class="topography-head">
+        <span>Volatility Topography</span>
+        <span id="topoHint">GEX + Vanna + Charm surface</span>
+      </div>
+      <canvas id="topoCanvas" height="210"></canvas>
     </div>
   </div>
 
@@ -272,10 +339,13 @@ function calcGreeks(S,K,T,sigma,r,isCall){
   const delta = isCall ? normCDF(d1) : normCDF(d1)-1;
   const gamma = nd1/(S*sigma*sqrtT);       // same for calls/puts
   const vega  = S*sqrtT*nd1/100;           // per 1% vol
+  const vanna = -nd1*d2/sigma;              // dDelta / dVol
+  const charmCall = -nd1*(2*r*T - d2*sigma*sqrtT)/(2*T*sigma*sqrtT);
+  const charm = isCall ? charmCall : -charmCall;
   let theta;
   if(isCall) theta = -(S*nd1*sigma)/(2*sqrtT) - r*K*Math.exp(-r*T)*normCDF(d2);
   else       theta = -(S*nd1*sigma)/(2*sqrtT) + r*K*Math.exp(-r*T)*normCDF(-d2);
-  return {delta, gamma, theta:theta/365, vega, iv:sigma};
+  return {delta, gamma, theta:theta/365, vega, vanna, charm, iv:sigma};
 }
 
 // ---------- Symbol universe ----------
@@ -348,11 +418,10 @@ function buildChainReal(symKey, spotOverride){
   const now = Date.parse(rec.asof) || Date.now();
   const quotes = rec.opts.map(o=>{
     const isCall = o.t==="C";
-    // CBOE ×œ× ×ª×ž×™×“ ×ž×¡×¤×§ gamma â†’ ×× ×—×¡×¨, ×ž×—×©×‘×™× ×ž-Black-Scholes ×›×’×™×‘×•×™
-    let g = {gamma:o.g, delta:o.d, theta:0, vega:0, iv:o.iv};
-    if(!o.g || o.g<=0){
-      g = calcGreeks(spot, o.k, o.dte/365, o.iv>0?o.iv:0.2, r, isCall);
-    }
+    const bs = calcGreeks(spot, o.k, Math.max(o.dte/365, 1/365/24), o.iv>0?o.iv:0.2, r, isCall);
+    let g = {...bs, iv:o.iv || bs.iv};
+    if(o.g && o.g>0) g.gamma = o.g;
+    if(o.d || o.d===0) g.delta = o.d;
     return {K:o.k, dte:o.dte, T:o.dte/365, exp:o.exp, isCall, iv:o.iv, oi:o.oi, vol:o.vol, ts:now, g};
   });
   return {symbol:symKey, market:"US", spot, mult:rec.mult||100, fetchTs:now, quotes, live:true};
@@ -386,13 +455,23 @@ function calcGEX(chain, mode){
   const byStrike = {};
   for(const q of kept){
     const gex = q.g.gamma * q.oi * mult * spot * spot * 0.01;
+    const vex = (q.g.vanna || 0) * q.oi * mult * spot * 0.01;
+    const cex = (q.g.charm || 0) * q.oi * mult * spot / 252;
     if(!byStrike[q.K]) byStrike[q.K] = {strike:q.K, callGex:0, putGex:0, netGex:0,
+        callVex:0, putVex:0, netVex:0, callCharm:0, putCharm:0, netCharm:0,
         callOI:0, putOI:0, callVol:0, putVol:0, callIV:0, putIV:0, gamma:0, ts:q.ts};
     const s = byStrike[q.K];
-    if(q.isCall){ s.callGex += gex; s.callOI+=q.oi; s.callVol+=q.vol; s.callIV=q.iv; }
-    else        { s.putGex  -= gex; s.putOI +=q.oi; s.putVol +=q.vol; s.putIV =q.iv; }
+    if(q.isCall){
+      s.callGex += gex; s.callVex += vex; s.callCharm += cex;
+      s.callOI+=q.oi; s.callVol+=q.vol; s.callIV=q.iv;
+    } else {
+      s.putGex  -= gex; s.putVex  -= vex; s.putCharm  -= cex;
+      s.putOI +=q.oi; s.putVol +=q.vol; s.putIV =q.iv;
+    }
     s.gamma = Math.max(s.gamma, q.g.gamma);
     s.netGex = s.callGex + s.putGex;
+    s.netVex = s.callVex + s.putVex;
+    s.netCharm = s.callCharm + s.putCharm;
     s.ts = Math.max(s.ts, q.ts);
   }
   const strikes = Object.values(byStrike).sort((a,b)=>a.strike-b.strike);
@@ -401,17 +480,66 @@ function calcGEX(chain, mode){
   const maxAG = Math.max(...strikes.map(s=>Math.abs(s.callGex)+Math.abs(s.putGex)), 1);
   const maxOI = Math.max(...strikes.map(s=>s.totalOI), 1);
   const maxVol = Math.max(...strikes.map(s=>s.totalVol), 1);
+  const maxNetGex = Math.max(...strikes.map(s=>Math.abs(s.netGex)), 1);
+  const maxNetVex = Math.max(...strikes.map(s=>Math.abs(s.netVex)), 1);
+  const maxNetCharm = Math.max(...strikes.map(s=>Math.abs(s.netCharm)), 1);
+  const prelimTotalGex = strikes.reduce((a,s)=>a+s.netGex,0);
+  const gammaState = prelimTotalGex >= 0 ? 1 : -1;
+  const gammaAccel = gammaState > 0 ? 0.85 : 1.25;
   strikes.forEach(s=>{
     const agScore = (Math.abs(s.callGex)+Math.abs(s.putGex)) / maxAG;
     const oiScore = s.totalOI / maxOI;
     const volScore = s.totalVol / maxVol;
-    s.powerZone = (0.58*agScore + 0.28*oiScore + 0.14*volScore) * maxAG;
+    const g = s.netGex / maxNetGex;
+    const v = s.netVex / maxNetVex;
+    const c = s.netCharm / maxNetCharm;
+    const rawOfi = 0.50*g + gammaAccel*(0.32*v + 0.28*c);
+    s.ofi = Math.tanh(rawOfi) * 100;
+    s.ofiAbs = Math.abs(s.ofi);
+    s.vannaPressure = v * 100;
+    s.charmPressure = c * 100;
+    s.powerZone = (0.42*agScore + 0.24*Math.abs(v) + 0.20*Math.abs(c) + 0.14*volScore) * maxAG;
   });
 
   // 3. totals
   const totalCallGex = strikes.reduce((a,s)=>a+s.callGex,0);
   const totalPutGex  = strikes.reduce((a,s)=>a+s.putGex,0);
   const totalGex     = totalCallGex + totalPutGex;
+  const totalVex     = strikes.reduce((a,s)=>a+s.netVex,0);
+  const totalCharm   = strikes.reduce((a,s)=>a+s.netCharm,0);
+  const totalOfi     = strikes.reduce((a,s)=>a+s.ofi*Math.max(1,s.totalOI+s.totalVol),0) /
+                       Math.max(1, strikes.reduce((a,s)=>a+Math.max(1,s.totalOI+s.totalVol),0));
+  const pressureStrike = strikes.reduce((best,s)=>!best || s.ofiAbs>best.ofiAbs ? s : best, null);
+  const topZones = [...strikes].sort((a,b)=>(b.powerZone||0)-(a.powerZone||0)).slice(0,5).map(s=>({
+    strike:s.strike, ofi:s.ofi, netGex:s.netGex, netVex:s.netVex, netCharm:s.netCharm,
+    powerZone:s.powerZone, side:s.ofi>8?"buy":(s.ofi<-8?"sell":"neutral")
+  }));
+  const minutesToClose = minutesToEtClose();
+  const timeFactor = 1 - minutesToClose / 390;
+  const vannaScore = clamp(totalVex / 500e6 * 100, -100, 100);
+  const charmScore = clamp(totalCharm / 500e6 * 100, -100, 100);
+  const combinedFlow = totalOfi * 0.4 + vannaScore * 0.3 + charmScore * 0.3 * timeFactor;
+  let flowRegime, flowMessage;
+  if(combinedFlow > 15 && totalVex > 0){
+    flowRegime = "VANNA_SQUEEZE";
+    flowMessage = "Makers aggressively buying futures as IV pressure fades. Bullish acceleration.";
+  } else if(combinedFlow < -15 && totalVex < 0){
+    flowRegime = "LIQUIDITY_CASCADE";
+    flowMessage = "Negative flow acceleration. Market makers reinforcing downside hedges.";
+  } else if(Math.abs(combinedFlow) <= 10){
+    flowRegime = "GAMMA_TRAP";
+    flowMessage = "Market pinned between high GEX walls. Scalp boundaries only. Avoid breakouts.";
+  } else {
+    flowRegime = "STANDARD_FLOW";
+    flowMessage = "Flow is operational. Trade the PowerZones normally.";
+  }
+  const institutionalPressure = {
+    ofi: totalOfi, combinedFlow, regime: flowRegime, message: flowMessage,
+    minutesToClose, timeFactor, vannaScore, charmScore,
+    side: combinedFlow > 8 ? "buy" : (combinedFlow < -8 ? "sell" : "neutral"),
+    topStrike: topZones[0]?.strike || null,
+    powerZones: topZones,
+  };
   const netCallOI = strikes.reduce((a,s)=>a+s.callOI,0);
   const netPutOI  = strikes.reduce((a,s)=>a+s.putOI,0);
   const pcr = netCallOI>0 ? netPutOI/netCallOI : 0;
@@ -468,6 +596,7 @@ function calcGEX(chain, mode){
 
   return {symbol:chain.symbol, market:chain.market, spot, mult, fetchTs:chain.fetchTs,
     strikes, totalGex, totalCallGex, totalPutGex,
+    totalVex, totalCharm, totalOfi, institutionalPressure, pressureStrike, topZones,
     maxGammaStrike, flip, callWall, putWall, callWallGex:cwG, putWallGex:pwG,
     regime, strength, distPct, pcr, netCallOI, netPutOI, callGexPct,
     avgCallIV, avgPutIV, ivSkew, sentiment, atmGreeks:atmQ?atmQ.g:null,
@@ -475,6 +604,18 @@ function calcGEX(chain, mode){
     expiries:[...new Set(kept.map(q=>q.dte))].sort((a,b)=>a-b)};
 }
 function avg(a){return a.length?a.reduce((x,y)=>x+y,0)/a.length:0;}
+function clamp(v,min,max){return Math.max(min,Math.min(max,v));}
+function minutesToEtClose(){
+  const parts = new Intl.DateTimeFormat('en-US',{
+    timeZone:'America/New_York',weekday:'short',hour:'numeric',minute:'numeric',hour12:false
+  }).formatToParts(new Date()).reduce((a,p)=>(a[p.type]=p.value,a),{});
+  if(['Sat','Sun'].includes(parts.weekday)) return 390;
+  const mins = (+parts.hour)*60 + (+parts.minute);
+  const open = 9*60+30, close = 16*60;
+  if(mins <= open) return 390;
+  if(mins >= close) return 0;
+  return close - mins;
+}
 
 // ---------- Formatting ----------
 function fmtNum(n){
@@ -494,6 +635,19 @@ function ts(t){return new Date(t).toISOString().substring(11,19)+"Z";}
 // ---------- Rendering ----------
 function renderImpl(R){
   window._lastR=R;
+  const pressure = R.institutionalPressure || {};
+  const flow = pressure.combinedFlow ?? R.totalOfi;
+  const ofiSide = flow>8 ? "buy" : (flow<-8 ? "sell" : "neutral");
+  const ofiLabel = flow>8 ? "Buy Pressure" : (flow<-8 ? "Sell Pressure" : "Balanced");
+  const pStrike = R.pressureStrike ? fmtPrice(R.pressureStrike.strike) : "-";
+  const zones = (R.topZones||[]).slice(0,3).map(z=>fmtPrice(z.strike)).join(" / ") || "-";
+  document.getElementById('ofiStrip').innerHTML = `
+    <div class="ofi-cell ${ofiSide}"><div class="k">Combined Flow</div><div class="v">${ofiLabel} ${flow.toFixed(0)}</div></div>
+    <div class="ofi-cell"><div class="k">Logic Regime</div><div class="v">${pressure.regime ? pressure.regime.replace(/_/g,' ') : (R.regime || '-').replace(/_/g,' ')}</div></div>
+    <div class="ofi-cell ${R.totalVex>=0?'buy':'sell'}"><div class="k">Net Vanna Flow</div><div class="v">${fmtNum(R.totalVex)}</div></div>
+    <div class="ofi-cell ${R.totalCharm>=0?'buy':'sell'}"><div class="k">Net Charm Flow</div><div class="v">${fmtNum(R.totalCharm)}</div></div>
+    <div class="ofi-cell"><div class="k">Power Zones / Time</div><div class="v">${pStrike} | ${pressure.minutesToClose ?? '--'}m</div></div>
+  `;
   const badge=document.getElementById('srcBadge');
   const nowClient=new Date().toLocaleTimeString('he-IL');
   if(R.live){ badge.style.color="var(--green)"; badge.style.borderColor="var(--green)";
@@ -591,10 +745,13 @@ function renderImpl(R){
 
 // ---------- Metric definitions (Quant-Power style param buttons) ----------
 // net_gex = ×¢×ž×•×“×•×ª (kind:bar). ×›×œ ×”×©××¨ = ×’×¨×£ ×©×˜×—/×”×¨ (kind:area) ×©×ž×¦×˜×‘×¨ ×‘×©×›×‘×•×ª.
-let ACTIVE = new Set(["net_gex"]);
+let ACTIVE = new Set(["ofi","power","vanna","charm"]);
 const METRICS = {
   net_gex:  {label:"Net GEX",     color:"#22b8ff", kind:"bar",  signed:true,  val:s=>s.netGex},
+  ofi:      {label:"OFI",         color:"#ffffff", kind:"bar",  signed:true,  val:s=>(s.ofi || 0) * 1e6},
   ag:       {label:"AG",          color:"#ab7df6", kind:"area", val:s=>Math.abs(s.callGex)+Math.abs(s.putGex)},
+  vanna:    {label:"Vanna",       color:"#00d4ff", kind:"area", val:s=>Math.abs(s.netVex || 0)},
+  charm:    {label:"Charm",       color:"#ff4fd8", kind:"area", val:s=>Math.abs(s.netCharm || 0)},
   call_oi:  {label:"Call OI",     color:"#26c281", kind:"area", val:s=>s.callOI},
   put_oi:   {label:"Put OI",      color:"#ef5350", kind:"area", val:s=>s.putOI},
   call_vol: {label:"Call Volume", color:"#2f73ff", kind:"area", val:s=>s.callVol},
@@ -602,8 +759,239 @@ const METRICS = {
   power:    {label:"Power Zone",  color:"#fff200", kind:"area", val:s=>s.powerZone || 0},
 };
 function hexA(hex,a){const n=parseInt(hex.slice(1),16);return `rgba(${n>>16&255},${n>>8&255},${n&255},${a})`;}
+function zoneColor(s, alpha){
+  if((s.ofi||0) > 8) return `rgba(24,192,113,${alpha})`;
+  if((s.ofi||0) < -8) return `rgba(255,59,47,${alpha})`;
+  return `rgba(216,146,31,${alpha})`;
+}
+function visibleStrikes(R){
+  const N = +document.getElementById('strikeCount').value;
+  return [...R.strikes].sort((a,b)=>Math.abs(a.strike-R.spot)-Math.abs(b.strike-R.spot))
+    .slice(0,N*2+1).sort((a,b)=>a.strike-b.strike);
+}
+function buildFlowStatus(R){
+  const p = R.institutionalPressure;
+  if(p?.regime && p?.message){
+    const kind = p.regime === 'VANNA_SQUEEZE' ? 'safe' :
+      p.regime === 'LIQUIDITY_CASCADE' ? 'blocked' :
+      p.regime === 'GAMMA_TRAP' ? 'pinned' : 'standard';
+    return {kind, title:p.regime.replace(/_/g,' '), msg:p.message};
+  }
+  const z = R.topZones?.[0];
+  const strike = z ? fmtPrice(z.strike) : fmtPrice(R.spot);
+  if(R.totalOfi > 35) return {kind:'safe', title:'LONG FLOW', msg:`ALERT: Vanna/Charm squeeze developing at ${strike}. Market makers are net buyers into this zone.`};
+  if(R.totalOfi < -35) return {kind:'blocked', title:'SHORT FLOW', msg:`ALERT: Negative flow acceleration at ${strike}. Long calls are fighting institutional sell pressure.`};
+  if(Math.abs(R.totalOfi) < 12) return {kind:'pinned', title:'GAMMA TRAP', msg:`STATUS: Market pinned between ${fmtPrice(R.putWall)} and ${fmtPrice(R.callWall)}. Directional trades need confirmation.`};
+  return R.totalOfi > 0
+    ? {kind:'safe', title:'BUY BIAS', msg:`STATUS: Buyers have the cleaner path, but pressure is not yet extreme. Watch ${strike}.`}
+    : {kind:'blocked', title:'SELL BIAS', msg:`STATUS: Sellers control the cleaner path, but pressure is not yet extreme. Watch ${strike}.`};
+}
+function renderLogicGate(R){
+  const gate = document.getElementById('logicGate');
+  const s = buildFlowStatus(R);
+  gate.className = `logic-gate ${s.kind}`;
+  gate.innerHTML = `<div class="state">${s.title}</div><div class="msg">${s.msg}</div>`;
+}
+function drawVectorCore(R, jitterDeg=0){
+  const cv=document.getElementById('vectorCore');
+  if(!cv) return;
+  const dpr=window.devicePixelRatio||1, W=cv.clientWidth||280, H=220;
+  cv.width=W*dpr; cv.height=H*dpr; cv.style.height=H+'px';
+  const ctx=cv.getContext('2d'); ctx.setTransform(dpr,0,0,dpr,0,0); ctx.clearRect(0,0,W,H);
+  const cx=W/2, cy=148, r=Math.min(W*.42,92);
+  const grad=ctx.createLinearGradient(cx-r,0,cx+r,0);
+  grad.addColorStop(0,'#ff2417'); grad.addColorStop(.48,'#d8921f'); grad.addColorStop(.52,'#d8921f'); grad.addColorStop(1,'#18c071');
+  ctx.lineWidth=18; ctx.lineCap='round'; ctx.strokeStyle=grad;
+  ctx.beginPath(); ctx.arc(cx,cy,r,Math.PI,Math.PI*2); ctx.stroke();
+  for(let i=-4;i<=4;i++){
+    const a=Math.PI+(i+4)/8*Math.PI;
+    const x1=cx+Math.cos(a)*(r-18), y1=cy+Math.sin(a)*(r-18);
+    const x2=cx+Math.cos(a)*(r+4), y2=cy+Math.sin(a)*(r+4);
+    ctx.strokeStyle='rgba(255,255,255,.28)'; ctx.lineWidth=i===0?2:1;
+    ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
+  }
+  const val=clamp(R.institutionalPressure?.combinedFlow ?? R.totalOfi ?? 0,-100,100);
+  const angle=Math.PI+(val+100)/200*Math.PI + jitterDeg*Math.PI/180;
+  ctx.strokeStyle='#f6f6f6'; ctx.lineWidth=4; ctx.lineCap='round';
+  ctx.beginPath(); ctx.moveTo(cx,cy); ctx.lineTo(cx+Math.cos(angle)*(r-24),cy+Math.sin(angle)*(r-24)); ctx.stroke();
+  ctx.fillStyle='#f6f6f6'; ctx.beginPath(); ctx.arc(cx,cy,6,0,7); ctx.fill();
+  ctx.fillStyle='#9f9f9f'; ctx.font='bold 11px Segoe UI'; ctx.textAlign='left'; ctx.fillText('SELL',cx-r-6,cy+26);
+  ctx.textAlign='right'; ctx.fillText('BUY',cx+r+6,cy+26);
+  ctx.textAlign='center'; ctx.fillStyle='#f2f2f2'; ctx.font='900 34px Segoe UI'; ctx.fillText(String(Math.round(val)),cx,70);
+  ctx.fillStyle='#9f9f9f'; ctx.font='bold 11px Segoe UI'; ctx.fillText('NET FLOW',cx,91);
+  document.getElementById('coreReadout').innerHTML = `${Math.round(val)} <small>FLOW</small>`;
+}
+function startVectorCoreJitter(R){
+  if(window._vectorJitterTimer) clearInterval(window._vectorJitterTimer);
+  const vannaAbs = Math.abs(R.totalVex || 0);
+  const intensity = clamp(vannaAbs / 500e6, 0, 1) * 2.5;
+  if(intensity < .08) return;
+  window._vectorJitterTimer = setInterval(()=>{
+    const jitter = (Math.random()*2-1) * intensity;
+    drawVectorCore(R, jitter);
+  }, 70);
+}
+function drawTopography(R, data){
+  const cv=document.getElementById('topoCanvas');
+  if(!cv || !data.length) return;
+  const dpr=window.devicePixelRatio||1, W=cv.clientWidth||900, H=210;
+  cv.width=W*dpr; cv.height=H*dpr; cv.style.height=H+'px';
+  const ctx=cv.getContext('2d'); ctx.setTransform(dpr,0,0,dpr,0,0); ctx.clearRect(0,0,W,H);
+  const left=44, right=16, top=12, bottom=28, plotW=W-left-right, plotH=H-top-bottom;
+  ctx.fillStyle='#181818'; ctx.fillRect(0,0,W,H);
+  const max=Math.max(...data.map(s=>Math.abs(s.ofi||0)+Math.abs(s.netGex||0)/Math.max(1,Math.abs(R.totalGex))*12),1);
+  const rows=8;
+  for(let y=0;y<rows;y++){
+    const time=y/(rows-1);
+    data.forEach((s,i)=>{
+      const x=left+i/data.length*plotW;
+      const w=Math.ceil(plotW/data.length)+1;
+      const decay=1-time*.62;
+      const charmBend=(s.netCharm||0)>=0 ? time*.28 : -time*.28;
+      const val=((s.ofi||0)/100 + charmBend) * decay;
+      const h=Math.abs(val)/Math.max(1,max/100);
+      const alpha=clamp(.10+Math.abs(val)*.55,.10,.75);
+      ctx.fillStyle=val>=0 ? `rgba(24,192,113,${alpha})` : `rgba(255,59,47,${alpha})`;
+      ctx.fillRect(x, top+y/rows*plotH, w, plotH/rows+1);
+      if(h>.55){
+        ctx.fillStyle=val>=0 ? 'rgba(180,255,215,.25)' : 'rgba(255,210,205,.25)';
+        ctx.fillRect(x, top+y/rows*plotH, w, 2);
+      }
+    });
+  }
+  ctx.strokeStyle='rgba(255,255,255,.12)'; ctx.lineWidth=1;
+  for(let y=0;y<=rows;y++){ const yy=top+y/rows*plotH; ctx.beginPath(); ctx.moveTo(left,yy); ctx.lineTo(W-right,yy); ctx.stroke(); }
+  ctx.fillStyle='#c4c4c4'; ctx.font='bold 11px Segoe UI'; ctx.textAlign='right';
+  ctx.fillText('open',left-8,top+8); ctx.fillText('close',left-8,top+plotH);
+  ctx.textAlign='center';
+  const step=Math.ceil(data.length/10);
+  data.forEach((s,i)=>{ if(i%step===0) ctx.fillText(fmtPrice(s.strike), left+i/data.length*plotW, H-17); });
+}
+function drawBattlefield(R, data, cv, ctx, W, H, mobile){
+  const active = Object.keys(METRICS).filter(m=>ACTIVE.has(m));
+  document.getElementById('symLabel').textContent = `${R.symbol} Battlefield`;
+  document.getElementById('chartLegend').innerHTML = active.map(m=>{
+    const M=METRICS[m];
+    return `<span class="sq" style="background:${M.color}"></span>${M.label}`;
+  }).join('&nbsp;&nbsp;');
+  const padL=mobile?48:72, padR=mobile?18:42, padT=30, padB=48;
+  const plotW=W-padL-padR, plotH=H-padT-padB;
+  const strikes=data.map(s=>s.strike);
+  let minP=Math.min(...strikes,R.spot), maxP=Math.max(...strikes,R.spot);
+  const range=Math.max(1,maxP-minP); minP-=range*.08; maxP+=range*.08;
+  const yFor=p=>padT+(maxP-p)/(maxP-minP)*plotH;
+  const xFor=t=>padL+t*plotW;
+  ctx.fillStyle='#171717'; ctx.fillRect(0,0,W,H);
+  ctx.strokeStyle='rgba(255,255,255,.045)'; ctx.lineWidth=1;
+  for(let i=0;i<=8;i++){ const y=padT+i/8*plotH; ctx.beginPath(); ctx.moveTo(padL,y); ctx.lineTo(W-padR,y); ctx.stroke(); }
+  for(let i=0;i<=10;i++){ const x=padL+i/10*plotW; ctx.beginPath(); ctx.moveTo(x,padT); ctx.lineTo(x,padT+plotH); ctx.stroke(); }
+  const maxPower=Math.max(...data.map(s=>s.powerZone||0),1);
+  const zones=[...data].sort((a,b)=>(b.powerZone||0)-(a.powerZone||0)).slice(0,9);
+  zones.forEach(s=>{
+    const y=yFor(s.strike);
+    const alpha=clamp(.18+(s.powerZone||0)/maxPower*.45,.14,.64);
+    const exactCloudH = Math.abs(yFor(s.strike-5) - yFor(s.strike+5));
+    const bandH=clamp(Math.max(exactCloudH, 14+(Math.abs(s.ofi||0)/100)*26),12,42);
+    const cloud=ctx.createLinearGradient(0,y-bandH/2,0,y+bandH/2);
+    cloud.addColorStop(0,'rgba(255,255,255,0)');
+    cloud.addColorStop(.28,zoneColor(s,alpha*.55));
+    cloud.addColorStop(.50,zoneColor(s,alpha));
+    cloud.addColorStop(.72,zoneColor(s,alpha*.55));
+    cloud.addColorStop(1,'rgba(255,255,255,0)');
+    ctx.save();
+    ctx.shadowColor=zoneColor(s,clamp(alpha+.18,.2,.75));
+    ctx.shadowBlur=18;
+    ctx.fillStyle=cloud; ctx.fillRect(padL,y-bandH/2,plotW,bandH);
+    ctx.restore();
+    const core=ctx.createLinearGradient(padL,y,W-padR,y);
+    core.addColorStop(0,'rgba(255,255,255,0)');
+    core.addColorStop(.22,zoneColor(s,alpha*.38));
+    core.addColorStop(.5,zoneColor(s,alpha*.70));
+    core.addColorStop(.78,zoneColor(s,alpha*.38));
+    core.addColorStop(1,'rgba(255,255,255,0)');
+    ctx.fillStyle=core; ctx.fillRect(padL,y-1,plotW,2);
+    ctx.fillStyle='rgba(240,240,240,.82)'; ctx.font='bold 11px Segoe UI'; ctx.textAlign='right'; ctx.textBaseline='middle';
+    ctx.fillText(fmtPrice(s.strike), padL-8, y);
+  });
+  const steps=54, drift=(R.totalOfi||0)/100*range*.45, charm=(R.totalCharm||0)>=0?1:-1;
+  const pts=[];
+  for(let i=0;i<=steps;i++){
+    const t=i/steps;
+    const wave=Math.sin(t*Math.PI*2.2)*range*.045 + Math.sin(t*Math.PI*5.1+1.2)*range*.018;
+    const p=R.spot + drift*(t-.5) + wave + charm*Math.pow(t,1.7)*range*.045;
+    pts.push({x:xFor(t), y:yFor(clamp(p,minP,maxP)), p});
+  }
+  for(let i=1;i<pts.length;i++){
+    const localCharm=(R.totalCharm||0)*(pts[i].p-pts[i-1].p)>=0;
+    ctx.strokeStyle=localCharm?'#ffd166':'rgba(180,188,194,.82)';
+    ctx.lineWidth=3; ctx.lineCap='round';
+    ctx.beginPath(); ctx.moveTo(pts[i-1].x,pts[i-1].y); ctx.lineTo(pts[i].x,pts[i].y); ctx.stroke();
+  }
+  const sy=yFor(R.spot);
+  ctx.strokeStyle='#d58b16'; ctx.lineWidth=2; ctx.setLineDash([6,5]);
+  ctx.beginPath(); ctx.moveTo(padL,sy); ctx.lineTo(W-padR,sy); ctx.stroke(); ctx.setLineDash([]);
+  ctx.fillStyle='#d58b16'; ctx.font='bold 12px Segoe UI'; ctx.textAlign='left'; ctx.fillText('Spot '+fmtPrice(R.spot),padL+8,sy-8);
+  ctx.fillStyle='#c4c4c4'; ctx.font='bold 11px Segoe UI'; ctx.textAlign='center';
+  ['now','+15m','+30m','+45m','close'].forEach((l,i)=>ctx.fillText(l,padL+i/4*plotW,padT+plotH+20));
+  cv._matrixBars = zones.map(s=>({x:padL,y:yFor(s.strike)-18,w:plotW,h:36,s}));
+  cv._matrixPlot = {top:padT,bottom:padT+plotH,padL,padR,W,H};
+}
 
 // ---------- Canvas chart: bars (Net GEX) + stacked area overlays ----------
+function drawGammaProfile(R, cv, ctx, W, H, mobile){
+  const sigma=Math.max(R.expectedMove||0,1);
+  const multiple=R.stdMultiple||2;
+  const lo=R.spot-sigma*multiple, hi=R.spot+sigma*multiple;
+  let data=R.strikes.filter(s=>s.strike>=lo && s.strike<=hi).sort((a,b)=>b.strike-a.strike);
+  if(data.length<7) data=[...R.strikes].sort((a,b)=>Math.abs(a.strike-R.spot)-Math.abs(b.strike-R.spot)).slice(0,41).sort((a,b)=>b.strike-a.strike);
+  if(!data.length) return;
+
+  document.getElementById('symLabel').textContent=`${R.symbol} Gamma Exposure`;
+  document.getElementById('chartLegend').innerHTML='<span class="sq" style="background:#17b65f"></span>Positive&nbsp;&nbsp;<span class="sq" style="background:#ff2a17"></span>Negative';
+  const padL=mobile?52:78, padR=mobile?18:46, padT=34, padB=46;
+  const plotW=W-padL-padR, plotH=H-padT-padB, center=padL+plotW/2;
+  const slot=plotH/data.length, barH=Math.max(2,Math.min(12,slot*.72));
+  const maxAbs=Math.max(...data.map(s=>Math.abs(s.netGex||0)),1);
+  const half=plotW/2-10;
+  ctx.fillStyle='#171717';ctx.fillRect(0,0,W,H);
+  ctx.strokeStyle='rgba(255,255,255,.055)';ctx.lineWidth=1;
+  for(let i=0;i<=8;i++){
+    const x=padL+i/8*plotW;ctx.beginPath();ctx.moveTo(x,padT);ctx.lineTo(x,padT+plotH);ctx.stroke();
+  }
+  ctx.strokeStyle='rgba(255,255,255,.55)';ctx.beginPath();ctx.moveTo(center,padT);ctx.lineTo(center,padT+plotH);ctx.stroke();
+  const bars=[];
+  data.forEach((s,i)=>{
+    const y=padT+i*slot+(slot-barH)/2, value=s.netGex||0;
+    const width=Math.max(1,Math.abs(value)/maxAbs*half);
+    const x=value>=0?center:center-width;
+    ctx.fillStyle=value>=0?'#17b65f':'#ff2a17';ctx.fillRect(x,y,width,barH);
+    bars.push({x,y,w:width,h:barH,s});
+    if(i%Math.max(1,Math.ceil(data.length/(mobile?24:44)))===0){
+      ctx.fillStyle='#d8d8d8';ctx.font=mobile?'9px Segoe UI':'10px Segoe UI';ctx.textAlign='right';ctx.textBaseline='middle';
+      ctx.fillText(fmtPrice(s.strike),padL-7,y+barH/2);
+    }
+  });
+  const yForPrice=price=>{
+    const topStrike=data[0].strike,bottomStrike=data[data.length-1].strike;
+    return padT+(topStrike-price)/Math.max(1,topStrike-bottomStrike)*plotH;
+  };
+  const spotY=yForPrice(R.spot);
+  if(spotY>=padT&&spotY<=padT+plotH){
+    ctx.strokeStyle='#f5c400';ctx.lineWidth=2;ctx.setLineDash([5,3]);ctx.beginPath();ctx.moveTo(padL,spotY);ctx.lineTo(W-padR,spotY);ctx.stroke();ctx.setLineDash([]);
+    ctx.fillStyle='#f5c400';ctx.font='bold 11px Segoe UI';ctx.textAlign='right';ctx.fillText(`SPOT ${fmtPrice(R.spot)}`,W-padR,spotY-5);
+  }
+  [-multiple,multiple].forEach(n=>{
+    const p=R.spot+n*sigma,y=yForPrice(p);if(y<padT||y>padT+plotH)return;
+    ctx.strokeStyle='rgba(31,169,244,.65)';ctx.lineWidth=1;ctx.setLineDash([3,4]);ctx.beginPath();ctx.moveTo(padL,y);ctx.lineTo(W-padR,y);ctx.stroke();ctx.setLineDash([]);
+    ctx.fillStyle='#64c7ff';ctx.font='10px Segoe UI';ctx.textAlign='left';ctx.fillText(`${n>0?'+':''}${n}σ`,padL+4,y-4);
+  });
+  ctx.fillStyle='#aaa';ctx.font=mobile?'9px Segoe UI':'11px Segoe UI';ctx.textAlign='center';ctx.textBaseline='top';
+  [-1,-.5,0,.5,1].forEach(f=>ctx.fillText(fmtAxis(f*maxAbs),center+f*half,padT+plotH+9));
+  ctx.fillStyle='#8f8f8f';ctx.textAlign='left';
+  const dates=(R.selectedExpirations||[]).join(', ');
+  ctx.fillText(`${multiple}σ range · 1σ = ${fmtPrice(sigma)}${dates?' · '+dates:''}`,padL,padT-22);
+  cv._matrixBars=bars;cv._matrixPlot={top:padT,bottom:padT+plotH,padL,padR,W,H};
+}
 function drawChart(R){
   const cv = document.getElementById('gexChart');
   const dpr = window.devicePixelRatio||1;
@@ -618,10 +1006,17 @@ function drawChart(R){
   const data = [...R.strikes].sort((a,b)=>Math.abs(a.strike-R.spot)-Math.abs(b.strike-R.spot))
                  .slice(0,N*2+1).sort((a,b)=>a.strike-b.strike);
   if(!data.length) return;
+  drawGammaProfile(R, cv, ctx, W, H, mobile);
+  drawVectorCore(R);
+  startVectorCoreJitter(R);
+  drawTopography(R, data);
+  renderLogicGate(R);
+  return;
 
   const order = Object.keys(METRICS);
   const active = order.filter(m=>ACTIVE.has(m));
-  const hasBar = ACTIVE.has("net_gex");
+  const barMetric = active.find(m=>METRICS[m].kind==="bar");
+  const hasBar = !!barMetric;
   const areas = active.filter(m=>METRICS[m].kind==="area");
 
   // header symbol + legend
@@ -646,7 +1041,7 @@ function drawChart(R){
   // ----- LEFT axis (Net GEX, signed) -----
   let lMin=0,lMax=1,yL=v=>bottom,y0=bottom;
   if(hasBar){
-    const vals=data.map(METRICS.net_gex.val);
+    const vals=data.map(METRICS[barMetric].val);
     lMax=Math.max(...vals,0); lMin=Math.min(...vals,0);
     if(lMax===lMin) lMax=lMin+1;
     const padv=(lMax-lMin)*0.08; lMax+=padv; lMin-=padv;
@@ -692,11 +1087,11 @@ function drawChart(R){
   if(hasBar){
     const bw=Math.min(slot*0.70,32);
     data.forEach((s,i)=>{
-      const v=METRICS.net_gex.val(s), yy=yL(v);
+      const v=METRICS[barMetric].val(s), yy=yL(v);
       const x=xCenter(i)-bw/2;
       const y=Math.min(yy,y0);
       const h=Math.max(1,Math.abs(yy-y0));
-      ctx.fillStyle = v>=0 ? "#22aaf2" : "#ff2417";
+      ctx.fillStyle = v>=0 ? (barMetric==="ofi" ? "#f2f2f2" : "#22aaf2") : "#ff2417";
       ctx.fillRect(x, y, bw, h);
       hitBars[i]={x,y,w:bw,h,s};
     });
@@ -733,7 +1128,7 @@ function drawChart(R){
   // ----- axis titles -----
   if(hasBar){ ctx.save(); ctx.translate(14,padT+plotH/2); ctx.rotate(-Math.PI/2);
     ctx.fillStyle="#d0d0d0"; ctx.font=(mobile ? "bold 11px Segoe UI" : "bold 13px Segoe UI"); ctx.textAlign="center";
-    ctx.fillText("Net GEX",0,0); ctx.restore(); }
+    ctx.fillText(METRICS[barMetric].label,0,0); ctx.restore(); }
   if(areas.length){ ctx.save(); ctx.translate(W-12,padT+plotH/2); ctx.rotate(Math.PI/2);
     ctx.fillStyle="#d0d0d0"; ctx.font=(mobile ? "bold 11px Segoe UI" : "bold 13px Segoe UI"); ctx.textAlign="center";
     ctx.fillText(METRICS[dom].label,0,0); ctx.restore(); }
@@ -771,7 +1166,10 @@ function showChartTooltip(ev){
   const row = (label,value,cls='') => `<div class="tt-row"><span>${label}</span><span class="${cls}">${value}</span></div>`;
   const metricRows = active.map(m=>{
     if(m==='net_gex') return row('Net GEX',fmtNum(s.netGex),s.netGex>=0?'pos':'neg');
+    if(m==='ofi') return row('OFI',((s.ofi||0).toFixed(0)),(s.ofi||0)>=0?'pos':'neg');
     if(m==='ag') return row('AG',fmtNum(Math.abs(s.callGex)+Math.abs(s.putGex)));
+    if(m==='vanna') return row('Vanna',fmtNum(s.netVex || 0),(s.netVex||0)>=0?'pos':'neg');
+    if(m==='charm') return row('Charm',fmtNum(s.netCharm || 0),(s.netCharm||0)>=0?'pos':'neg');
     if(m==='call_oi') return row('Call OI',fmtNum(s.callOI),'pos');
     if(m==='put_oi') return row('Put OI',fmtNum(s.putOI),'neg');
     if(m==='call_vol') return row('Call Volume',fmtNum(s.callVol),'pos');
@@ -806,33 +1204,23 @@ function populateSymbols(){
   Object.keys(SYMBOLS).filter(k=>SYMBOLS[k].market===mkt).forEach(k=>{
     const o=document.createElement('option');o.value=k;o.textContent=k;sel.appendChild(o);
   });
+  if([...sel.options].some(o=>o.value==='SPX')) sel.value='SPX';
 }
+let selectedExpirations = new Set();
 function populateExpirations(chain){
-  const fromSel = document.getElementById('expirationFrom');
-  const toSel = document.getElementById('expirationTo');
-  const prevFrom = fromSel.value;
-  const prevTo = toSel.value;
+  const picker = document.getElementById('expirationPicker');
   const byExp = new Map();
   const todayIso = new Date().toISOString().slice(0,10);
   chain.quotes.forEach(q=>{
     if(q.exp && q.exp >= todayIso && !byExp.has(q.exp)) byExp.set(q.exp, q.dte);
   });
   const expiries = [...byExp.keys()].sort();
-  const fill = (sel)=>{
-    sel.innerHTML = "";
-    expiries.forEach(exp=>{
-      const dte = byExp.get(exp);
-      const o = document.createElement('option');
-      o.value = exp;
-      o.textContent = `${exp} (${dte}DTE)`;
-      sel.appendChild(o);
-    });
-  };
-  fill(fromSel);
-  fill(toSel);
-  fromSel.value = expiries.includes(prevFrom) ? prevFrom : (expiries[0] || "");
-  toSel.value = expiries.includes(prevTo) ? prevTo : (fromSel.value || expiries[0] || "");
-  if(fromSel.value && toSel.value && fromSel.value > toSel.value) toSel.value = fromSel.value;
+  selectedExpirations = new Set([...selectedExpirations].filter(exp=>expiries.includes(exp)));
+  if(!selectedExpirations.size && expiries.length) selectedExpirations.add(expiries[0]);
+  picker.innerHTML = expiries.length ? expiries.map(exp=>{
+    const checked=selectedExpirations.has(exp)?' checked':'';
+    return `<label class="expiry-option"><input type="checkbox" value="${exp}"${checked}>${exp} (${byExp.get(exp)}DTE)</label>`;
+  }).join('') : '<span class="expiry-empty">No expiration dates available</span>';
 }
 function run(){
   const sym=document.getElementById('symbol').value;
@@ -848,14 +1236,14 @@ function run(){
     chain = buildChain(sym,spot);
   }
   populateExpirations(chain);
-  const expFrom = document.getElementById('expirationFrom').value;
-  const expTo = document.getElementById('expirationTo').value || expFrom;
-  if(expFrom && expTo){
-    const lo = expFrom <= expTo ? expFrom : expTo;
-    const hi = expFrom <= expTo ? expTo : expFrom;
-    chain = {...chain, quotes: chain.quotes.filter(q=>q.exp>=lo && q.exp<=hi)};
-  }
+  if(selectedExpirations.size) chain = {...chain, quotes:chain.quotes.filter(q=>selectedExpirations.has(q.exp))};
   const R = calcGEX(chain,mode);
+  const nearAtm = chain.quotes.filter(q=>q.iv>0 && Math.abs(q.K-chain.spot)/chain.spot<=0.02);
+  const avgIv = nearAtm.length ? nearAtm.reduce((a,q)=>a+q.iv,0)/nearAtm.length : SYMBOLS[sym].baseIV;
+  const maxDte = Math.max(1,...chain.quotes.map(q=>q.dte||1));
+  R.expectedMove = chain.spot * avgIv * Math.sqrt(maxDte/365);
+  R.stdMultiple = +document.getElementById('stdRange').value || 2;
+  R.selectedExpirations = [...selectedExpirations].sort();
   R.live = !!chain.live;
   R.asof = useLive ? REAL[sym].asof : null;
   renderImpl(R);
@@ -863,12 +1251,16 @@ function run(){
 document.getElementById('market').addEventListener('change',()=>{populateSymbols();run();});
 document.getElementById('symbol').addEventListener('change',()=>{
   document.getElementById('spotOverride').value='';
-  document.getElementById('expirationFrom').value='';
-  document.getElementById('expirationTo').value='';
+  selectedExpirations.clear();
   run();
 });
-document.getElementById('expirationFrom').addEventListener('change',run);
-document.getElementById('expirationTo').addEventListener('change',run);
+document.getElementById('expirationPicker').addEventListener('change',ev=>{
+  if(!ev.target.matches('input[type=checkbox]')) return;
+  if(ev.target.checked) selectedExpirations.add(ev.target.value);
+  else selectedExpirations.delete(ev.target.value);
+  run();
+});
+document.getElementById('stdRange').addEventListener('change',run);
 document.getElementById('mode').addEventListener('change',run);
 document.getElementById('source').addEventListener('change',run);
 document.getElementById('autorefresh').addEventListener('change',setupAutoRefresh);
@@ -886,8 +1278,11 @@ document.getElementById('gexChart').addEventListener('touchend',()=>setTimeout(h
 document.querySelectorAll('.pbtn').forEach(btn=>{
   btn.addEventListener('click',()=>{
     const m=btn.dataset.metric;
-    if(ACTIVE.has(m)) ACTIVE.delete(m); else ACTIVE.add(m);
-    btn.classList.toggle('active', ACTIVE.has(m));
+    if(METRICS[m]?.kind==="bar"){
+      Object.keys(METRICS).filter(k=>METRICS[k].kind==="bar").forEach(k=>ACTIVE.delete(k));
+      ACTIVE.add(m);
+    } else if(ACTIVE.has(m)) ACTIVE.delete(m); else ACTIVE.add(m);
+    document.querySelectorAll('.pbtn').forEach(b=>b.classList.toggle('active', ACTIVE.has(b.dataset.metric)));
     if(window._lastR) drawChart(window._lastR);
   });
 });
