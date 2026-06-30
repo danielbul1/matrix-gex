@@ -32,7 +32,7 @@ def parse_symbol(s):
         return None
     root, dt, cp, strike = m.groups()
     exp = datetime.date(2000 + int(dt[:2]), int(dt[2:4]), int(dt[4:6]))
-    return exp, cp, int(strike) / 1000.0
+    return root, exp, cp, int(strike) / 1000.0
 
 def main():
     today = datetime.date.today()
@@ -49,7 +49,7 @@ def main():
             p = parse_symbol(o["option"])
             if not p:
                 continue
-            exp, cp, K = p
+            root, exp, cp, K = p
             if exp < today:
                 continue
             if spot and abs(K - spot) / spot > RANGE:
@@ -61,6 +61,7 @@ def main():
             opts.append({
                 "k": round(K, 2),
                 "t": cp,                         # 'C' / 'P'
+                "root": root,                    # SPX/SPXW, NDX/NDXP, etc. determines AM/PM settlement
                 "exp": exp.isoformat(),          # תאריך תפוגה YYYY-MM-DD
                 "dte": dte,
                 "iv": round(o.get("iv") or 0, 4),

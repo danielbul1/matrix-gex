@@ -181,6 +181,7 @@
                 box-shadow:0 12px 30px rgba(0,0,0,.45);pointer-events:none}
   .edge-tooltip .tt-title{font-weight:900;color:#fff;margin-bottom:6px}
   .edge-tooltip .tt-row{display:flex;justify-content:space-between;gap:18px}
+  .edge-tooltip .tt-section{margin-top:7px;padding-top:6px;border-top:1px solid #3b3b3b;color:#fff;font-weight:900}
   .edge-crosshair{position:absolute;top:0;bottom:0;display:none;border-left:1px dashed rgba(255,255,255,.72);
                   z-index:4;pointer-events:none;box-shadow:0 0 8px rgba(255,255,255,.2)}
   footer{display:none}
@@ -490,7 +491,7 @@ function normCDF(x){                       // Abramowitz & Stegun 7.1.26
 
 // ---------- Black-Scholes Greeks (OPTIONS_MATHEMATICS.md Â§3) ----------
 function calcGreeks(S,K,T,sigma,r,isCall){
-  T = Math.max(T, 1/365/24);               // min 1 hour (research edge-case)
+  T = Math.max(T, 1/(365.25*24*60));       // min 1 minute; preserves precise 0DTE decay
   sigma = Math.max(sigma, 0.01);
   const sqrtT = Math.sqrt(T);
   const d1 = (Math.log(S/K)+(r+0.5*sigma*sigma)*T)/(sigma*sqrtT);
@@ -507,13 +508,36 @@ function calcGreeks(S,K,T,sigma,r,isCall){
   return {delta, gamma, theta:theta/365, vega, vanna, charm, iv:sigma};
 }
 function calcOptionPrice(S,K,T,sigma,r,isCall){
-  T = Math.max(T, 1/365/24);
+  T = Math.max(T, 1/(365.25*24*60));
   sigma = Math.max(sigma, 0.01);
   const sqrtT = Math.sqrt(T);
   const d1 = (Math.log(S/K)+(r+0.5*sigma*sigma)*T)/(sigma*sqrtT);
   const d2 = d1 - sigma*sqrtT;
   if(isCall) return S*normCDF(d1) - K*Math.exp(-r*T)*normCDF(d2);
   return K*Math.exp(-r*T)*normCDF(-d2) - S*normCDF(-d1);
+}
+function parseSourceTimestamp(value){
+  if(!value) return Date.now();
+  const text=String(value);
+  const hasZone=/Z$|[+-]\d{2}:?\d{2}$/.test(text);
+  const parsed=Date.parse(hasZone?text:text+'Z');
+  return Number.isFinite(parsed)?parsed:Date.now();
+}
+function zonedDateTimeToUtc(year,month,day,hour,minute,timeZone){
+  const guess=Date.UTC(year,month-1,day,hour,minute,0);
+  const parts=new Intl.DateTimeFormat('en-US',{
+    timeZone,year:'numeric',month:'2-digit',day:'2-digit',
+    hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'
+  }).formatToParts(new Date(guess));
+  const get=type=>Number(parts.find(part=>part.type===type)?.value||0);
+  const represented=Date.UTC(get('year'),get('month')-1,get('day'),get('hour'),get('minute'),get('second'));
+  return guess-(represented-guess);
+}
+function preciseYearsToExpiry(exp,root,valuationMs){
+  const [year,month,day]=String(exp).split('-').map(Number);
+  const isAmSettled=root==='SPX'||root==='NDX';
+  const expiryMs=zonedDateTimeToUtc(year,month,day,isAmSettled?9:16,isAmSettled?30:0,'America/New_York');
+  return Math.max((expiryMs-valuationMs)/(365.25*86400000),1/(365.25*24*60));
 }
 
 // ---------- Symbol universe ----------
@@ -583,16 +607,17 @@ function buildChainReal(symKey, spotOverride){
   const rec = REAL[symKey];
   const spot = rec.spot || spotOverride;
   const r = RISK_FREE[SYMBOLS[symKey] ? SYMBOLS[symKey].market : "US"] || 0.05;
-  const now = Date.parse(rec.asof) || Date.now();
+  const now = parseSourceTimestamp(rec.asof);
   const quotes = rec.opts.map(o=>{
     const isCall = o.t==="C";
+    const T = preciseYearsToExpiry(o.exp,o.root||'',now);
     // CBOE ×œ× ×ª×ž×™×“ ×ž×¡×¤×§ gamma â†’ ×× ×—×¡×¨, ×ž×—×©×‘×™× ×ž-Black-Scholes ×›×’×™×‘×•×™
-    const modelGreeks = calcGreeks(spot, o.k, o.dte/365, o.iv>0?o.iv:0.2, r, isCall);
+    const modelGreeks = calcGreeks(spot, o.k, T, o.iv>0?o.iv:0.2, r, isCall);
     let g = {...modelGreeks, gamma:o.g, delta:o.d, iv:o.iv};
     if(!o.g || o.g<=0){
       g = modelGreeks;
     }
-    return {K:o.k, dte:o.dte, T:o.dte/365, exp:o.exp, isCall, iv:o.iv, oi:o.oi, vol:o.vol, ts:now, g};
+    return {K:o.k, dte:o.dte, T, exp:o.exp, root:o.root||'', isCall, iv:o.iv, oi:o.oi, vol:o.vol, ts:now, g};
   });
   return {symbol:symKey, market:"US", spot, mult:rec.mult||100, fetchTs:now, quotes, live:true};
 }
@@ -1909,10 +1934,15 @@ function showEdgeTooltip(ev){
   const index=Math.max(0,Math.min(panel.data.length-1,Math.floor((x-panel.plotLeft)/panel.slot)));
   const s=panel.data[index];
   const valueRow=(label,value,color)=>`<div class="tt-row"><span>${label}</span><span style="color:${color};font-weight:900">${fmtNum(value)}</span></div>`;
+  const metricBlock=(label,callValue,putValue,netValue)=>`
+    <div class="tt-section">${label}</div>
+    ${valueRow('Call',callValue,callValue>=0?'#22aaf2':'#ff2a17')}
+    ${valueRow('Put',putValue,putValue>=0?'#22aaf2':'#ff2a17')}
+    ${valueRow('Net',netValue,netValue>=0?'#22aaf2':'#ff2a17')}`;
   tt.innerHTML=`<div class="tt-title">${window._lastR?.symbol||''} Strike ${fmtPrice(s.strike)}</div>
-    ${valueRow('Net GEX',s.netGex,s.netGex>=0?'#22aaf2':'#ff2a17')}
-    ${valueRow('Net Vanna',s.netVex,s.netVex>=0?'#22aaf2':'#ff2a17')}
-    ${valueRow('Net Charm',s.netCharm,s.netCharm>=0?'#22aaf2':'#ff2a17')}`;
+    ${metricBlock('GEX',s.callGex,s.putGex,s.netGex)}
+    ${metricBlock('Vanna',s.callVex,s.putVex,s.netVex)}
+    ${metricBlock('Charm',s.callCharm,s.putCharm,s.netCharm)}`;
   tt.style.display='block';
   panels.forEach((targetPanel,i)=>{
     const cross=document.getElementById(`edgeCrosshair${i}`);
