@@ -454,7 +454,9 @@
         </div>
       </div>
       <div class="edge-wrap">
-        <div class="edge-crosshair" id="edgeCrosshair"></div>
+        <div class="edge-crosshair" id="edgeCrosshair0"></div>
+        <div class="edge-crosshair" id="edgeCrosshair1"></div>
+        <div class="edge-crosshair" id="edgeCrosshair2"></div>
         <div class="edge-tooltip" id="edgeTooltip"></div>
         <canvas id="edgeChart" height="760"></canvas>
       </div>
@@ -1897,7 +1899,6 @@ function drawEdge(R){
 function showEdgeTooltip(ev){
   const cv=document.getElementById('edgeChart');
   const tt=document.getElementById('edgeTooltip');
-  const cross=document.getElementById('edgeCrosshair');
   const panels=cv?cv._edgePanels||[]:[];
   if(!panels.length) return;
   const rect=cv.getBoundingClientRect();
@@ -1907,17 +1908,22 @@ function showEdgeTooltip(ev){
   if(!panel||x<panel.plotLeft||x>panel.plotRight){ hideEdgeTooltip(); return; }
   const index=Math.max(0,Math.min(panel.data.length-1,Math.floor((x-panel.plotLeft)/panel.slot)));
   const s=panel.data[index];
-  const crossX=panel.plotLeft+panel.slot*(index+.5);
   const valueRow=(label,value,color)=>`<div class="tt-row"><span>${label}</span><span style="color:${color};font-weight:900">${fmtNum(value)}</span></div>`;
   tt.innerHTML=`<div class="tt-title">${window._lastR?.symbol||''} Strike ${fmtPrice(s.strike)}</div>
     ${valueRow('Net GEX',s.netGex,s.netGex>=0?'#22aaf2':'#ff2a17')}
     ${valueRow('Net Vanna',s.netVex,s.netVex>=0?'#22aaf2':'#ff2a17')}
     ${valueRow('Net Charm',s.netCharm,s.netCharm>=0?'#22aaf2':'#ff2a17')}`;
-  tt.style.display='block'; cross.style.display='block';
-  cross.style.left=crossX+'px';
-  cross.style.top=panel.top+'px';
-  cross.style.bottom='auto';
-  cross.style.height=(panel.bottom-panel.top)+'px';
+  tt.style.display='block';
+  panels.forEach((targetPanel,i)=>{
+    const cross=document.getElementById(`edgeCrosshair${i}`);
+    if(!cross) return;
+    const targetX=targetPanel.plotLeft+targetPanel.slot*(index+.5);
+    cross.style.display='block';
+    cross.style.left=targetX+'px';
+    cross.style.top=targetPanel.top+'px';
+    cross.style.bottom='auto';
+    cross.style.height=(targetPanel.bottom-targetPanel.top)+'px';
+  });
   let left=x+14, top=y+14;
   if(left+tt.offsetWidth>rect.width) left=x-tt.offsetWidth-14;
   if(top+tt.offsetHeight>rect.height) top=y-tt.offsetHeight-14;
@@ -1925,9 +1931,8 @@ function showEdgeTooltip(ev){
 }
 function hideEdgeTooltip(){
   const tt=document.getElementById('edgeTooltip');
-  const cross=document.getElementById('edgeCrosshair');
   if(tt) tt.style.display='none';
-  if(cross) cross.style.display='none';
+  document.querySelectorAll('.edge-crosshair').forEach(cross=>cross.style.display='none');
 }
 
 // ---------- Wiring ----------
