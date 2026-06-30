@@ -4,6 +4,7 @@ import requests
 import numpy as np
 from scipy.stats import norm
 from datetime import datetime
+from zoneinfo import ZoneInfo
 import time
 import re
 
@@ -50,6 +51,18 @@ def norm_iv(iv):
 
 def is_third_friday(d):
     return d.weekday() == 4 and 15 <= d.day <= 21
+
+def minutes_to_market_close():
+    now_et = datetime.now(ZoneInfo('America/New_York'))
+    close_et = now_et.replace(hour=16, minute=0, second=0, microsecond=0)
+    open_et = now_et.replace(hour=9, minute=30, second=0, microsecond=0)
+    if now_et.weekday() >= 5:
+        return 390
+    if now_et <= open_et:
+        return 390
+    if now_et >= close_et:
+        return 0
+    return int((close_et - now_et).total_seconds() // 60)
 
 # ── Black-Scholes greeks ──────────────────────────────────────────────────────
 def bs_d1d2(S, K, vol, T):
@@ -217,6 +230,85 @@ def compute():
 
     by_strike = make_by_strike(by_k)
 
+    def add_order_flow_imbalance(rows, total_gex_bn):
+        minutes_left = minutes_to_market_close()
+        time_factor = 1.0 - (minutes_left / 390.0)
+        if not rows:
+            return {
+                'ofi': 0, 'combinedFlow': 0, 'side': 'neutral', 'strength': 'none',
+                'regime': 'GAMMA_TRAP', 'message': 'No usable option flow parsed.',
+                'minutesToClose': minutes_left, 'timeFactor': round(time_factor, 4),
+                'topStrike': None, 'powerZones': [], 'components': {}
+            }
+        max_g = max(max(abs(r['netGEX']) for r in rows), 1e-9)
+        max_v = max(max(abs(r['netVEX']) for r in rows), 1e-9)
+        max_c = max(max(abs(r['netCharm']) for r in rows), 1e-9)
+        gamma_accel = 0.85 if total_gex_bn >= 0 else 1.25
+        weights = {'gex': 0.50, 'vanna': 0.32, 'charm': 0.28}
+        weighted_sum = 0.0
+        liquidity_sum = 0.0
+        for r in rows:
+            g = r['netGEX'] / max_g
+            v = r['netVEX'] / max_v
+            c = r['netCharm'] / max_c
+            raw = weights['gex']*g + gamma_accel*(weights['vanna']*v + weights['charm']*c)
+            r['ofi'] = round(float(np.tanh(raw) * 100), 2)
+            r['vannaPressure'] = round(float(v * 100), 2)
+            r['charmPressure'] = round(float(c * 100), 2)
+            r['powerZone'] = round(float(
+                0.42*abs(g) + 0.24*abs(v) + 0.20*abs(c) + 0.14*min(1.0, abs(r['netDEX'])/max_g)
+            ), 4)
+            liq = max(1.0, abs(r['netGEX']) + abs(r['netVEX']) + abs(r['netCharm']))
+            weighted_sum += r['ofi'] * liq
+            liquidity_sum += liq
+        ofi = weighted_sum / liquidity_sum if liquidity_sum else 0.0
+        vanna_total = sum(r['netVEX'] for r in rows)
+        charm_total = sum(r['netCharm'] for r in rows)
+        vanna_score = float(np.clip(vanna_total / 500.0 * 100.0, -100.0, 100.0))
+        charm_score = float(np.clip(charm_total / 500.0 * 100.0, -100.0, 100.0))
+        combined_flow = (ofi * 0.4) + (vanna_score * 0.3) + (charm_score * 0.3 * time_factor)
+        if combined_flow > 15 and vanna_total > 0:
+            regime = 'VANNA_SQUEEZE'
+            message = 'Makers aggressively buying futures as IV pressure fades. Bullish acceleration.'
+        elif combined_flow < -15 and vanna_total < 0:
+            regime = 'LIQUIDITY_CASCADE'
+            message = 'Negative flow acceleration. Market makers reinforcing downside hedges.'
+        elif abs(combined_flow) <= 10:
+            regime = 'GAMMA_TRAP'
+            message = 'Market pinned between high GEX walls. Scalp boundaries only. Avoid breakouts.'
+        else:
+            regime = 'STANDARD_FLOW'
+            message = 'Flow is operational. Trade the PowerZones normally.'
+        side = 'buy' if combined_flow > 8 else 'sell' if combined_flow < -8 else 'neutral'
+        strength = 'extreme' if abs(combined_flow) >= 65 else 'strong' if abs(combined_flow) >= 35 else 'moderate' if abs(combined_flow) >= 15 else 'light'
+        power_zones = sorted(rows, key=lambda r: r['powerZone'], reverse=True)[:5]
+        return {
+            'ofi': round(float(ofi), 2),
+            'combinedFlow': round(float(combined_flow), 2),
+            'side': side,
+            'strength': strength,
+            'regime': regime,
+            'message': message,
+            'minutesToClose': minutes_left,
+            'timeFactor': round(float(time_factor), 4),
+            'topStrike': power_zones[0]['strike'] if power_zones else None,
+            'powerZones': [{
+                'strike': r['strike'], 'ofi': r['ofi'], 'netGEX': r['netGEX'],
+                'netVEX': r['netVEX'], 'netCharm': r['netCharm'], 'score': r['powerZone']
+            } for r in power_zones],
+            'components': {
+                'netGEX': round(sum(r['netGEX'] for r in rows), 4),
+                'netVEX': round(vanna_total, 4),
+                'netCharm': round(charm_total, 4),
+                'vannaScore': round(vanna_score, 2),
+                'charmScore': round(charm_score, 2),
+                'gammaRegime': 'positive' if total_gex_bn >= 0 else 'negative',
+                'weights': weights,
+            }
+        }
+
+    institutional_pressure = add_order_flow_imbalance(by_strike, total_gex)
+
     by_k_0dte_full = {k: {'cgex':v['cgex'],'pgex':v['pgex'],
                            'cdex':0,'pdex':0,'cvex':0,'pvex':0,'ccharm':0,'pcharm':0}
                       for k,v in by_k_0dte.items()}
@@ -317,6 +409,7 @@ def compute():
         'putWall':    put_wall,
         'peakGEX':    peak_gex,
         'regime':     'positive' if total_gex >= 0 else 'negative',
+        'institutionalPressure': institutional_pressure,
         'byStrike':   by_strike,
         'byStrike0dte': by_strike_0dte,
         'byExpiry':   by_expiry,

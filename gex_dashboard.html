@@ -21,7 +21,8 @@
   header h1:after{content:"";display:block;width:170px;height:2px;background:#d9d9d9;margin-top:24px}
   header .sub{display:none}
   .side-nav{order:1;display:flex;flex-direction:column;gap:20px;font-size:16px;font-weight:700;color:#d0d0d0}
-  .side-nav span{white-space:nowrap}
+  .side-nav a{white-space:nowrap;color:inherit;text-decoration:none}
+  .side-nav a.active{color:#fff}
   .side-disclaimer{order:2;margin-top:auto;width:170px;border-top:2px solid #d9d9d9;padding-top:20px;
                    color:#9b9b9b;font-size:22px}
   .badge-demo{display:none}
@@ -44,6 +45,8 @@
   .controls > button{display:none}
   button:hover{filter:brightness(1.1)}
   main{margin-left:220px;padding:0 10px 22px;max-width:none}
+  .app-view{display:none}
+  .app-view.active{display:block}
   .grid{display:grid;gap:16px}
   .row-top{display:none}
   .card{background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:16px}
@@ -77,6 +80,96 @@
   .flowitem{background:var(--panel2);border-radius:8px;padding:10px 12px}
   .flowitem .k{font-size:11px;color:var(--muted)}
   .flowitem .v{font-size:18px;font-weight:700;margin-top:2px}
+  .feature-columns{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-top:12px}
+  .feature-card{background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:16px;scroll-margin-top:14px}
+  .feature-card.heatmap-card{grid-column:1 / -1}
+  .feature-card h2{font-size:16px;line-height:1.3;margin:0 0 8px;color:#f0f0f0}
+  .feature-card p{font-size:14px;line-height:1.55;margin:0;color:var(--muted)}
+  .options-heatmap{position:relative;margin-top:14px;overflow:auto;border:1px solid #2a2a2a;border-radius:8px;background:#191919}
+  .heatmap-table{width:100%;min-width:780px;border-collapse:separate;border-spacing:0;font-size:12px}
+  .heatmap-table th,.heatmap-table td{border:0;border-right:1px solid #252525;border-bottom:1px solid #252525;padding:0;text-align:center}
+  .heatmap-table th{position:sticky;top:0;z-index:2;background:#202020;color:#d0d0d0;padding:9px 10px;font-size:11px}
+  .heatmap-table th:first-child{left:0;z-index:3}
+  .heatmap-table th.heatmap-spot-col{border-left:4px solid var(--amber);box-shadow:inset 3px 0 0 rgba(216,146,31,.55)}
+  .heatmap-exp{position:sticky;left:0;z-index:1;background:#202020;color:#d0d0d0;font-weight:800;padding:9px 10px;white-space:nowrap}
+  .heatmap-cell{min-width:86px;height:46px;color:#fff;font-weight:900;cursor:default;transition:filter .15s;
+                -webkit-text-stroke:.35px rgba(0,0,0,.72);
+                text-shadow:0 1px 1px #000,0 -1px 1px #000,1px 0 1px #000,-1px 0 1px #000,0 0 5px rgba(0,0,0,.9)}
+  .heatmap-cell.heatmap-spot-col,.heatmap-empty.heatmap-spot-col{border-left:4px solid var(--amber);box-shadow:inset 3px 0 0 rgba(216,146,31,.55)}
+  .heatmap-cell:hover{filter:brightness(1.25)}
+  .heatmap-table tr.heatmap-row-hover td{box-shadow:inset 0 1px 0 rgba(255,255,255,.22),inset 0 -1px 0 rgba(255,255,255,.22)}
+  .heatmap-cell.heatmap-cell-hover{outline:3px solid rgba(255,255,255,.78);outline-offset:-3px;filter:brightness(1.22)}
+  .heatmap-empty{min-width:86px;height:46px;color:#777;background:#1b1b1b;font-weight:700}
+  .heatmap-price-line{position:absolute;top:40px;bottom:38px;border-left:4px solid var(--amber);z-index:5;pointer-events:none;
+                      box-shadow:0 0 9px rgba(216,146,31,.75)}
+  .heatmap-hover-line{position:absolute;top:40px;bottom:38px;display:none;border-left:1px dashed rgba(255,255,255,.72);
+                      z-index:6;pointer-events:none;box-shadow:0 0 8px rgba(255,255,255,.22)}
+  .heatmap-price-label{position:absolute;top:-28px;left:8px;background:#202020;border:1px solid var(--amber);color:#ffd28a;
+                       border-radius:4px;padding:2px 7px;font-size:11px;font-weight:900;white-space:nowrap;
+                       text-shadow:0 1px 2px #000}
+  .heatmap-note{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:10px 12px;color:var(--muted);font-size:12px;border-top:1px solid #2a2a2a}
+  .heatmap-tip{position:fixed;z-index:30;display:none;min-width:260px;max-width:320px;background:rgba(18,18,18,.96);
+               border:1px solid #555;border-radius:7px;padding:10px 11px;color:#e7e7e7;font-size:12px;line-height:1.55;
+               box-shadow:0 12px 30px rgba(0,0,0,.45);pointer-events:none}
+  .heatmap-tip-title{font-weight:800;color:#fff;margin-bottom:6px}
+  .heatmap-tip-row{display:flex;justify-content:space-between;gap:18px}
+  .heatmap-pos{color:#fff;font-weight:900}
+  .heatmap-neg{color:#fff;font-weight:900}
+  .heatmap-tip .heatmap-pos{color:#22b8ff}
+  .heatmap-tip .heatmap-neg{color:var(--red)}
+  .netflow-card{min-height:calc(100vh - 122px);padding:28px 24px;background:#202020;border:0;border-radius:8px}
+  .netflow-top{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:10px}
+  .netflow-title h2{font-size:18px;margin:0 0 6px;color:#f0f0f0}
+  .netflow-title p{font-size:13px;line-height:1.5;margin:0;color:var(--muted);max-width:920px}
+  .netflow-legend{display:flex;gap:12px;align-items:center;flex-wrap:wrap;color:#d0d0d0;font-size:12px;font-weight:800}
+  .netflow-legend span{display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+  .netflow-dot{width:11px;height:11px;border-radius:2px;display:inline-block}
+  .netflow-wrap{position:relative}
+  .netflow-tooltip{position:absolute;z-index:5;display:none;min-width:210px;background:rgba(18,18,18,.96);
+                   border:1px solid #555;border-radius:7px;padding:10px 11px;color:#e7e7e7;font-size:12px;line-height:1.55;
+                   box-shadow:0 12px 30px rgba(0,0,0,.45);pointer-events:none}
+  .chart-hover-line{position:absolute;top:0;bottom:0;display:none;border-left:1px dashed rgba(255,255,255,.72);
+                    z-index:4;pointer-events:none;box-shadow:0 0 8px rgba(255,255,255,.22)}
+  .darkpool-card{min-height:calc(100vh - 122px);padding:28px 24px;background:#202020;border:0;border-radius:8px}
+  .darkpool-top{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;margin-bottom:18px}
+  .darkpool-title h2{font-size:22px;margin:0 0 7px;color:#fff}
+  .darkpool-title p{font-size:12px;line-height:1.45;margin:0;color:#93a7b0;max-width:760px}
+  .darkpool-badge{border:1px solid #35556a;background:#182b35;color:#b9e8ff;border-radius:6px;padding:7px 10px;font-size:12px;font-weight:800;white-space:nowrap}
+  .darkpool-table{border:1px solid #26323a;border-radius:8px;overflow:hidden;background:#092d3a}
+  .darkpool-head,.darkpool-row{display:grid;grid-template-columns:130px minmax(260px,1fr) 140px 160px;align-items:center}
+  .darkpool-head{height:34px;background:#18242a;color:#a8bbc4;font-size:11px;text-transform:uppercase;letter-spacing:.6px;font-weight:900}
+  .darkpool-head div{padding:0 14px}
+  .darkpool-head div:nth-child(3),.darkpool-head div:nth-child(4){text-align:right}
+  .darkpool-row{position:relative;height:34px;border-top:1px solid rgba(255,255,255,.045);color:#f4fbff;font-size:13px;font-weight:900;background:#123f50}
+  .darkpool-row:hover,.darkpool-row.darkpool-row-hover{filter:brightness(1.18);box-shadow:inset 0 0 0 2px rgba(255,255,255,.22)}
+  .darkpool-row.current{box-shadow:inset 0 0 0 1px rgba(216,146,31,.25)}
+  .darkpool-level{position:relative;z-index:2;grid-column:1;grid-row:1;height:100%;display:flex;align-items:center;padding:0 14px;color:#fff;background:rgba(8,30,39,.38);
+                  font-variant-numeric:tabular-nums;text-shadow:0 1px 2px #000,0 0 5px rgba(0,0,0,.75)}
+  .darkpool-track{position:relative;grid-column:2 / -1;grid-row:1;height:100%;z-index:1;overflow:hidden}
+  .darkpool-bar{position:absolute;left:0;top:0;bottom:0;background:rgba(34,184,255,.55)}
+  .darkpool-size,.darkpool-notional{position:relative;z-index:2;padding:0 14px;text-align:right;font-variant-numeric:tabular-nums;
+                                    text-shadow:0 1px 2px #000,0 0 5px rgba(0,0,0,.75)}
+  .darkpool-size{grid-column:3;grid-row:1}
+  .darkpool-notional{grid-column:4;grid-row:1}
+  .darkpool-notional{color:#f7fbff}
+  .darkpool-price-line{height:0;border-top:3px solid var(--amber);position:relative;z-index:4;box-shadow:0 0 9px rgba(216,146,31,.75)}
+  .darkpool-price-label{position:absolute;right:10px;top:-13px;background:#202020;border:1px solid var(--amber);color:#ffd28a;
+                        border-radius:4px;padding:2px 7px;font-size:11px;font-weight:900;text-shadow:0 1px 2px #000}
+  .darkpool-empty{padding:26px;color:var(--muted);font-size:14px;text-align:center}
+  .maxpain-card{min-height:calc(100vh - 122px);padding:28px 24px;background:#202020;border:0;border-radius:8px}
+  .maxpain-tabs{display:flex;gap:8px;align-items:center;margin-bottom:14px}
+  .maxpain-tab{border:1px solid #333;background:#2a2a2a;color:#d0d0d0;border-radius:6px;padding:9px 13px;font-size:13px;font-weight:900;cursor:pointer}
+  .maxpain-tab.active{background:#22b8ff;border-color:#39c4ff;color:#fff;box-shadow:0 0 0 1px rgba(34,184,255,.2)}
+  .maxpain-top{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:8px}
+  .maxpain-title h2{font-size:18px;margin:0 0 6px;color:#f0f0f0}
+  .maxpain-title p{font-size:13px;line-height:1.5;margin:0;color:var(--muted);max-width:900px}
+  .maxpain-legend{display:flex;gap:12px;align-items:center;flex-wrap:wrap;color:#d0d0d0;font-size:12px;font-weight:800}
+  .maxpain-legend span{display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+  .maxpain-dot{width:11px;height:11px;border-radius:2px;display:inline-block}
+  .maxpain-wrap{position:relative}
+  .maxpain-tooltip{position:absolute;z-index:5;display:none;min-width:210px;background:rgba(18,18,18,.96);
+                   border:1px solid #555;border-radius:7px;padding:10px 11px;color:#e7e7e7;font-size:12px;line-height:1.55;
+                   box-shadow:0 12px 30px rgba(0,0,0,.45);pointer-events:none}
   footer{display:none}
   .interp{font-size:12.5px;line-height:1.7;color:var(--text);background:var(--panel2);
           border-radius:8px;padding:12px 14px;margin-top:12px}
@@ -85,6 +178,7 @@
   .legend span{display:inline-flex;align-items:center;gap:5px}
   .dot{width:10px;height:10px;border-radius:2px;display:inline-block}
   @media(max-width:900px){.section{grid-template-columns:1fr}}
+  @media(max-width:1100px){.feature-columns{grid-template-columns:repeat(2,minmax(0,1fr))}}
 
   /* Quant-Power style */
   .params{display:flex;align-items:center;justify-content:center;gap:10px;flex-wrap:wrap;
@@ -127,7 +221,7 @@
     header h1:before{font-size:24px}
     header h1:after,.side-disclaimer{display:none}
     .side-nav{width:100%;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;font-size:13px}
-    .side-nav span{background:#202020;border:1px solid #2d2d2d;border-radius:6px;padding:9px 10px;text-align:center}
+    .side-nav a{background:#202020;border:1px solid #2d2d2d;border-radius:6px;padding:9px 10px;text-align:center}
     .controls{margin-left:0;min-height:0;padding:12px;display:grid;grid-template-columns:1fr 1fr;gap:10px;align-items:end}
     .ctrl{min-width:0}
     .ctrl:first-child{grid-column:1 / -1}
@@ -140,6 +234,8 @@
     .plabel{flex:0 0 auto;font-size:13px;margin-right:0}
     .pbtn{flex:0 0 auto;padding:9px 12px;font-size:13px}
     .chartcard{min-height:auto;padding:16px 8px 12px;border-radius:6px}
+    .feature-columns{grid-template-columns:1fr;margin-top:8px}
+    .feature-card{padding:14px}
     .charttop{margin-bottom:4px;padding:0 4px}
     .symlabel{margin-left:0;font-size:16px}
     .chartlegend{margin-right:0;font-size:12px}
@@ -157,10 +253,11 @@
 <body>
 <header>
   <nav class="side-nav">
-    <span>OI Volume</span>
-    <span>Key Levels</span>
-    <span>P/C Ratio</span>
-    <span>How to use GEX</span>
+    <a href="#" class="active" data-view="gex">GEX</a>
+    <a href="#" data-view="options-heat-map">Options Heat Map</a>
+    <a href="#" data-view="net-flow">Net Flow</a>
+    <a href="#" data-view="dark-pool-levels">Dark Pool Levels</a>
+    <a href="#" data-view="max-pain">Max Pain</a>
   </nav>
   <div class="side-disclaimer">Disclaimer</div>
   <h1>ðŸ“Š GEX Analytics</h1>
@@ -194,9 +291,9 @@
   <div class="ctrl">
     <label>Auto-Refresh</label>
     <select id="autorefresh">
-      <option value="5">×›×œ 5 ×©× ×™×•×ª</option>
+      <option value="30">Every 30 seconds</option>
       <option value="60">×›×œ 60 ×©× ×™×•×ª</option>
-      <option value="30">×›×œ 30 ×©× ×™×•×ª</option>
+      <option value="5">×›×œ 5 ×©× ×™×•×ª</option>
       <option value="300">×›×œ 5 ×“×§×•×ª</option>
       <option value="0">×›×‘×•×™</option>
     </select>
@@ -221,40 +318,111 @@
 </div>
 
 <main>
-  <div class="params">
-    <div class="range-control" role="group" aria-label="Strike display range">
-      <span class="range-label">Range</span>
-      <button type="button" class="range-btn" data-sigma="1">1&sigma;</button>
-      <button type="button" class="range-btn active" data-sigma="2">2&sigma;</button>
-      <button type="button" class="range-btn" data-sigma="3">3&sigma;</button>
-      <button type="button" class="range-btn" data-sigma="all">All</button>
+  <section class="app-view active" id="view-gex">
+    <div class="params">
+      <div class="range-control" role="group" aria-label="Strike display range">
+        <span class="range-label">Range</span>
+        <button type="button" class="range-btn" data-sigma="1">1&sigma;</button>
+        <button type="button" class="range-btn active" data-sigma="2">2&sigma;</button>
+        <button type="button" class="range-btn" data-sigma="3">3&sigma;</button>
+        <button type="button" class="range-btn" data-sigma="all">All</button>
+      </div>
+      <span class="plabel">Parameters:</span>
+      <button class="pbtn active" data-metric="net_gex"  style="--c:#22b8ff">Net GEX</button>
+      <button class="pbtn"        data-metric="ag"       style="--c:#ab7df6">AG</button>
+      <button class="pbtn"        data-metric="call_oi"  style="--c:#26c281">Call OI</button>
+      <button class="pbtn"        data-metric="put_oi"   style="--c:#ef5350">Put OI</button>
+      <button class="pbtn"        data-metric="call_vol" style="--c:#2f73ff">Call Volume</button>
+      <button class="pbtn"        data-metric="put_vol"  style="--c:#ff8a3d">Put Volume</button>
+      <button class="pbtn"        data-metric="power"    style="--c:#ffc107">Power Zone</button>
     </div>
-    <span class="plabel">Parameters:</span>
-    <button class="pbtn active" data-metric="net_gex"  style="--c:#22b8ff">Net GEX</button>
-    <button class="pbtn"        data-metric="ag"       style="--c:#ab7df6">AG</button>
-    <button class="pbtn"        data-metric="call_oi"  style="--c:#26c281">Call OI</button>
-    <button class="pbtn"        data-metric="put_oi"   style="--c:#ef5350">Put OI</button>
-    <button class="pbtn"        data-metric="call_vol" style="--c:#2f73ff">Call Volume</button>
-    <button class="pbtn"        data-metric="put_vol"  style="--c:#ff8a3d">Put Volume</button>
-    <button class="pbtn"        data-metric="power"    style="--c:#ffc107">Power Zone</button>
-  </div>
 
-  <div class="card chartcard">
-    <div class="charttop">
-      <span class="symlabel" id="symLabel"></span>
-      <span class="chartlegend" id="chartLegend"></span>
+    <div class="card chartcard">
+      <div class="charttop">
+        <span class="symlabel" id="symLabel"></span>
+        <span class="chartlegend" id="chartLegend"></span>
+      </div>
+      <div class="chartwrap">
+        <div class="watermark">Matrix</div>
+        <div class="chart-crosshair-x" id="chartCrosshairX"></div>
+        <div class="chart-tooltip" id="chartTooltip"></div>
+        <canvas id="gexChart" height="540"></canvas>
+      </div>
     </div>
-    <div class="chartwrap">
-      <div class="watermark">Matrix</div>
-      <div class="chart-crosshair-x" id="chartCrosshairX"></div>
-      <div class="chart-tooltip" id="chartTooltip"></div>
-      <canvas id="gexChart" height="540"></canvas>
-    </div>
-  </div>
 
-  <div class="grid row-top" id="topCards"></div>
+    <div class="grid row-top" id="topCards"></div>
+  </section>
 
+  <section class="app-view" id="view-options-heat-map">
+    <article class="feature-card heatmap-card">
+      <h2>What is the Options Heat Map?</h2>
+      <p>The Options Heat Map shows where call/put premium is concentrated across strike prices and expiration dates. Blue cells show call premium leading, red cells show put premium leading, and brighter cells mark stronger relative activity.</p>
+      <div class="options-heatmap" id="optionsHeatMap"></div>
+    </article>
+  </section>
+
+  <section class="app-view" id="view-net-flow">
+    <article class="feature-card netflow-card">
+      <div class="netflow-top">
+        <div class="netflow-title">
+          <h2>Net Flow (Premium)</h2>
+          <p>Net Flow tracks call premium, put premium, and the underlying reference price over the market session. Spikes can help show where options activity is leaning toward confidence or fear.</p>
+        </div>
+        <div class="netflow-legend">
+          <span><i class="netflow-dot" style="background:#22b8ff"></i>Price</span>
+          <span><i class="netflow-dot" style="background:#17b65f"></i>Call Premium</span>
+          <span><i class="netflow-dot" style="background:#ff2a17"></i>Put Premium</span>
+        </div>
+      </div>
+      <div class="netflow-wrap">
+        <div class="chart-hover-line" id="netFlowCrosshair"></div>
+        <div class="netflow-tooltip" id="netFlowTooltip"></div>
+        <canvas id="netFlowChart" height="640"></canvas>
+      </div>
+    </article>
+  </section>
+
+  <section class="app-view" id="view-dark-pool-levels">
+    <article class="feature-card darkpool-card">
+      <div class="darkpool-top">
+        <div class="darkpool-title">
+          <h2>Dark Pool Levels</h2>
+          <p>Estimated support/resistance levels from option-chain liquidity concentration.</p>
+        </div>
+        <div class="darkpool-badge">Estimated from options chain</div>
+      </div>
+      <div class="darkpool-table" id="darkPoolLevels"></div>
+    </article>
+  </section>
+
+  <section class="app-view" id="view-max-pain">
+    <article class="feature-card maxpain-card">
+      <div class="maxpain-tabs" role="group" aria-label="Max Pain view">
+        <button type="button" class="maxpain-tab active" data-maxpain-view="chart">Max Pain</button>
+        <button type="button" class="maxpain-tab" data-maxpain-view="time">Max Pain / Time</button>
+      </div>
+      <div class="maxpain-top">
+        <div class="maxpain-title">
+          <h2 id="maxPainTitle">Max Pain</h2>
+          <p>Max Pain estimates the strike where option-holder payout is lowest at expiration. Use it as a reference zone, especially when current price is far from the Max Pain strike.</p>
+        </div>
+        <div class="maxpain-legend" id="maxPainLegend">
+          <span><i class="maxpain-dot" style="background:#ff2a17"></i>Below Max Pain</span>
+          <span><i class="maxpain-dot" style="background:#17b65f"></i>Above Max Pain</span>
+          <span><i class="maxpain-dot" style="background:#ffc107"></i>Max Pain</span>
+          <span><i class="maxpain-dot" style="background:#f5f5f5"></i>Price</span>
+        </div>
+      </div>
+      <div class="maxpain-wrap">
+        <div class="chart-hover-line" id="maxPainCrosshair"></div>
+        <div class="maxpain-tooltip" id="maxPainTooltip"></div>
+        <canvas id="maxPainChart" height="640"></canvas>
+      </div>
+    </article>
+  </section>
 </main>
+
+<div class="heatmap-tip" id="heatMapTooltip"></div>
 
 <footer>
   ×ž×™×ž×•×© ×ž×‘×•×¡×¡ ×¢×œ ×”×ª×™×¢×•×“: Black-Scholes Greeks Â· GEX = Î“ Ã— OI Ã— Multiplier Ã— SpotÂ² Â·
@@ -293,6 +461,15 @@ function calcGreeks(S,K,T,sigma,r,isCall){
   if(isCall) theta = -(S*nd1*sigma)/(2*sqrtT) - r*K*Math.exp(-r*T)*normCDF(d2);
   else       theta = -(S*nd1*sigma)/(2*sqrtT) + r*K*Math.exp(-r*T)*normCDF(-d2);
   return {delta, gamma, theta:theta/365, vega, iv:sigma};
+}
+function calcOptionPrice(S,K,T,sigma,r,isCall){
+  T = Math.max(T, 1/365/24);
+  sigma = Math.max(sigma, 0.01);
+  const sqrtT = Math.sqrt(T);
+  const d1 = (Math.log(S/K)+(r+0.5*sigma*sigma)*T)/(sigma*sqrtT);
+  const d2 = d1 - sigma*sqrtT;
+  if(isCall) return S*normCDF(d1) - K*Math.exp(-r*T)*normCDF(d2);
+  return K*Math.exp(-r*T)*normCDF(-d2) - S*normCDF(-d1);
 }
 
 // ---------- Symbol universe ----------
@@ -360,7 +537,7 @@ function buildChain(symKey, spot){
 // ×ž×©×ª×ž×© ×‘-gamma/delta/IV/OI/volume ×”××ž×™×ª×™×™× ×ž-CBOE (××™×Ÿ ×¦×•×¨×š ×œ×—×©×‘ Black-Scholes ×ž×—×“×©).
 function buildChainReal(symKey, spotOverride){
   const rec = REAL[symKey];
-  const spot = spotOverride || rec.spot;
+  const spot = rec.spot || spotOverride;
   const r = RISK_FREE[SYMBOLS[symKey] ? SYMBOLS[symKey].market : "US"] || 0.05;
   const now = Date.parse(rec.asof) || Date.now();
   const quotes = rec.opts.map(o=>{
@@ -529,9 +706,689 @@ function fmtPrice(n){
   if(n >= 10) return n.toLocaleString(undefined,{maximumFractionDigits:1});
   return n.toFixed(2);
 }
+function fmtMoney(n){
+  const sign = n < 0 ? "-" : "";
+  const a = Math.abs(n);
+  if(a>=1e9) return `${sign}$${(a/1e9).toFixed(2)} B`;
+  if(a>=1e6) return `${sign}$${(a/1e6).toFixed(2)} M`;
+  if(a>=1e3) return `${sign}$${(a/1e3).toFixed(2)} K`;
+  return `${sign}$${a.toFixed(0)}`;
+}
+function esc(v){
+  return String(v).replace(/[&<>"']/g,ch=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[ch]));
+}
 function ts(t){return new Date(t).toISOString().substring(11,19)+"Z";}
 
 // ---------- Rendering ----------
+function buildOptionsHeatMap(chain){
+  const r = RISK_FREE[chain.market] || 0.05;
+  const byCell = new Map();
+  for(const q of chain.quotes){
+    const price = calcOptionPrice(chain.spot, q.K, q.T || q.dte/365, q.iv || 0.2, r, q.isCall);
+    const premium = price * (q.vol || 0) * chain.mult;
+    const key = `${q.exp}|${q.K}`;
+    if(!byCell.has(key)){
+      byCell.set(key,{exp:q.exp,K:q.K,callPremium:0,putPremium:0,callVol:0,putVol:0,callOI:0,putOI:0});
+    }
+    const cell = byCell.get(key);
+    if(q.isCall){ cell.callPremium += premium; cell.callVol += q.vol || 0; cell.callOI += q.oi || 0; }
+    else        { cell.putPremium  += premium; cell.putVol  += q.vol || 0; cell.putOI  += q.oi || 0; }
+  }
+  const cells = [...byCell.values()].map(c=>({
+    ...c,
+    netPremium:c.callPremium-c.putPremium,
+    netVolume:c.callVol-c.putVol,
+    netOI:c.callOI-c.putOI
+  }));
+  const expiries = [...new Set(cells.map(c=>c.exp).filter(Boolean))].sort();
+  let strikes = [...new Set(cells.map(c=>c.K))].sort((a,b)=>a-b);
+  const near = strikes.filter(K=>Math.abs(K-chain.spot) <= Math.max(chain.spot*0.08, 1));
+  if(near.length >= 8) strikes = near;
+  const absPremiums = cells.map(c=>Math.abs(c.netPremium)).filter(v=>v>0).sort((a,b)=>a-b);
+  const scaleIndex = Math.max(0, Math.floor(absPremiums.length*0.92)-1);
+  const maxAbs = Math.max(absPremiums[scaleIndex] || absPremiums.at(-1) || 1, 1);
+  return {expiries,strikes,cells,maxAbs,spot:chain.spot,symbol:chain.symbol};
+}
+function heatColor(value,maxAbs){
+  if(!value) return '#202020';
+  const t = Math.min(1, Math.abs(value)/maxAbs);
+  const intensity = Math.pow(t, 0.62);
+  const a = 0.12 + intensity*0.62;
+  return value > 0 ? `rgba(34,184,255,${a})` : `rgba(255,42,23,${a})`;
+}
+function renderOptionsHeatMap(R){
+  const host = document.getElementById('optionsHeatMap');
+  if(!host || !R.optionsHeatMap) return;
+  const H = R.optionsHeatMap;
+  if(!H.expiries.length || !H.strikes.length){
+    host.innerHTML = '<div class="heatmap-note">No options heat map data available for the current selection.</div>';
+    return;
+  }
+  const cellByKey = new Map(H.cells.map(c=>[`${c.exp}|${c.K}`,c]));
+  const spotIndex = H.strikes.reduce((best,K,i)=>Math.abs(K-H.spot)<Math.abs(H.strikes[best]-H.spot)?i:best,0);
+  const rows = H.expiries.map(exp=>{
+    const cells = H.strikes.map((K,i)=>{
+      const c = cellByKey.get(`${exp}|${K}`);
+      const spotClass = i===spotIndex ? ' heatmap-spot-col' : '';
+      if(!c) return `<td class="heatmap-empty${spotClass}">$0</td>`;
+      const cls = c.netPremium>=0 ? 'heatmap-pos' : 'heatmap-neg';
+      const payload = esc(JSON.stringify({
+        symbol:H.symbol, strike:fmtPrice(c.K), exp:c.exp,
+        callPremium:fmtMoney(c.callPremium), putPremium:fmtMoney(c.putPremium), netPremium:fmtMoney(c.netPremium),
+        callVol:fmtNum(c.callVol), putVol:fmtNum(c.putVol), netVol:fmtNum(c.netVolume),
+        callOI:fmtNum(c.callOI), putOI:fmtNum(c.putOI), netOI:fmtNum(c.netOI)
+      }));
+      return `<td class="heatmap-cell ${cls}${spotClass}" style="background:${heatColor(c.netPremium,H.maxAbs)}" data-heatmap="${payload}">${fmtMoney(c.netPremium)}</td>`;
+    }).join('');
+    return `<tr><td class="heatmap-exp">${esc(exp)}</td>${cells}</tr>`;
+  }).join('');
+  host.innerHTML = `
+    <table class="heatmap-table">
+      <thead><tr><th>Expiration Date</th>${H.strikes.map((K,i)=>`<th class="${i===spotIndex?'heatmap-spot-col':''}">${fmtPrice(K)}</th>`).join('')}</tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+    <div class="heatmap-hover-line" data-heatmap-hover-line></div>
+    <div class="heatmap-price-line" data-heatmap-price-line><span class="heatmap-price-label">Price: ${fmtPrice(H.spot)}</span></div>
+    <div class="heatmap-note">
+      <span>Blue = call premium leading · Red = put premium leading</span>
+      <span>Orange line = current price ${fmtPrice(H.spot)}</span>
+    </div>
+  `;
+  requestAnimationFrame(()=>{
+    positionHeatMapPriceLine(host);
+    centerHeatMapOnSpot(host);
+  });
+}
+function positionHeatMapPriceLine(host){
+  const spotCell = host.querySelector('tbody .heatmap-spot-col');
+  const line = host.querySelector('[data-heatmap-price-line]');
+  if(!spotCell || !line) return;
+  const left = spotCell.offsetLeft + 2;
+  line.style.left = `${left}px`;
+  const label = line.querySelector('.heatmap-price-label');
+  if(label){
+    label.style.left = '8px';
+    label.style.right = 'auto';
+    requestAnimationFrame(()=>{
+      if(left + label.offsetWidth + 18 > host.scrollWidth){
+        label.style.left = 'auto';
+        label.style.right = '8px';
+      }
+    });
+  }
+}
+function centerHeatMapOnSpot(host){
+  const spotCell = host.querySelector('tbody .heatmap-spot-col');
+  if(!spotCell) return;
+  const target = spotCell.offsetLeft + spotCell.offsetWidth/2 - host.clientWidth/2;
+  host.scrollLeft = Math.max(0,target);
+}
+function showHeatMapTip(e){
+  const cell = e.target.closest('.heatmap-cell[data-heatmap]');
+  const tip = document.getElementById('heatMapTooltip');
+  document.querySelectorAll('.heatmap-cell-hover').forEach(el=>el.classList.remove('heatmap-cell-hover'));
+  document.querySelectorAll('.heatmap-row-hover').forEach(el=>el.classList.remove('heatmap-row-hover'));
+  if(!cell || !tip){
+    if(tip) tip.style.display='none';
+    const host = document.getElementById('optionsHeatMap');
+    const line = host ? host.querySelector('[data-heatmap-hover-line]') : null;
+    if(line) line.style.display = 'none';
+    return;
+  }
+  cell.classList.add('heatmap-cell-hover');
+  const tr = cell.closest('tr');
+  if(tr) tr.classList.add('heatmap-row-hover');
+  const host = document.getElementById('optionsHeatMap');
+  const line = host ? host.querySelector('[data-heatmap-hover-line]') : null;
+  if(line){
+    line.style.display = 'block';
+    line.style.left = `${cell.offsetLeft + cell.offsetWidth/2}px`;
+  }
+  const d = JSON.parse(cell.dataset.heatmap);
+  const row = (label,value,cls='') => `<div class="heatmap-tip-row"><span>${label}</span><span class="${cls}">${value}</span></div>`;
+  tip.innerHTML = `
+    <div class="heatmap-tip-title">${d.symbol} · Strike ${d.strike}</div>
+    ${row('Expires',d.exp)}
+    ${row('Call Premium',d.callPremium,'heatmap-pos')}
+    ${row('Put Premium',d.putPremium,'heatmap-neg')}
+    ${row('Net Premium',d.netPremium,d.netPremium.startsWith('-')?'heatmap-neg':'heatmap-pos')}
+    ${row('Call Volume',d.callVol,'heatmap-pos')}
+    ${row('Put Volume',d.putVol,'heatmap-neg')}
+    ${row('Net Volume',d.netVol)}
+    ${row('Call Open Interest',d.callOI,'heatmap-pos')}
+    ${row('Put Open Interest',d.putOI,'heatmap-neg')}
+    ${row('Net Open Interest',d.netOI)}
+  `;
+  tip.style.display='block';
+  const tw = tip.offsetWidth, th = tip.offsetHeight;
+  let left = e.clientX + 14, top = e.clientY + 14;
+  if(left + tw > window.innerWidth) left = e.clientX - tw - 14;
+  if(top + th > window.innerHeight) top = e.clientY - th - 14;
+  tip.style.left = Math.max(6,left)+'px';
+  tip.style.top = Math.max(6,top)+'px';
+}
+function hideHeatMapTip(){
+  const tip = document.getElementById('heatMapTooltip');
+  if(tip) tip.style.display='none';
+  const host = document.getElementById('optionsHeatMap');
+  const line = host ? host.querySelector('[data-heatmap-hover-line]') : null;
+  if(line) line.style.display = 'none';
+  document.querySelectorAll('.heatmap-cell-hover').forEach(el=>el.classList.remove('heatmap-cell-hover'));
+  document.querySelectorAll('.heatmap-row-hover').forEach(el=>el.classList.remove('heatmap-row-hover'));
+}
+const NETFLOW_STORE_KEY = 'matrix_netflow_volume_delta_v1';
+function readNetFlowStore(){
+  try{
+    return JSON.parse(localStorage.getItem(NETFLOW_STORE_KEY)) || {lastVolumes:{},history:[]};
+  }catch(e){
+    return {lastVolumes:{},history:[]};
+  }
+}
+function writeNetFlowStore(store){
+  try{ localStorage.setItem(NETFLOW_STORE_KEY, JSON.stringify(store)); }catch(e){}
+}
+function optionFlowKey(chain,q){
+  return `${chain.symbol}|${q.exp}|${q.K}|${q.isCall?'C':'P'}`;
+}
+function updateNetFlowHistoryFromSnapshot(chain){
+  if(!chain.live) return;
+  const r = RISK_FREE[chain.market] || 0.05;
+  const store = readNetFlowStore();
+  const collectedTs = Date.now();
+  const marketTs = chain.fetchTs || collectedTs;
+  let added = 0;
+  for(const q of chain.quotes){
+    const key = optionFlowKey(chain,q);
+    const currentVol = Math.max(0, Number(q.vol)||0);
+    const prevVol = store.lastVolumes[key];
+    if(prevVol !== undefined && currentVol > prevVol){
+      const deltaVol = currentVol - prevVol;
+      const price = calcOptionPrice(chain.spot, q.K, q.T || q.dte/365, q.iv || 0.2, r, q.isCall);
+      const premium = price * deltaVol * chain.mult;
+      if(premium > 0){
+        store.history.push({
+          ts:collectedTs, marketTs, symbol:chain.symbol, exp:q.exp, K:q.K, side:q.isCall?'C':'P',
+          premium, vol:deltaVol, spot:chain.spot
+        });
+        added++;
+      }
+    }
+    store.lastVolumes[key] = currentVol;
+  }
+  const cutoff = Date.now() - 36*60*60*1000;
+  store.history = store.history.filter(e=>e.ts>=cutoff).slice(-6000);
+  writeNetFlowStore(store);
+  return added;
+}
+function buildNetFlow(chain){
+  const buckets = 79; // 9:30 to 16:00, 5-minute style points
+  const points = Array.from({length:buckets},(_,i)=>{
+    const min = 9*60+30+i*5;
+    const hh = Math.floor(min/60), mm = min%60;
+    return {i,time:`${String(hh).padStart(2,'0')}:${String(mm).padStart(2,'0')}`,call:0,put:0,price:chain.spot};
+  });
+  const allowed = new Set(chain.quotes.map(q=>optionFlowKey(chain,q)));
+  const store = readNetFlowStore();
+  const events = store.history.filter(e=>e.symbol===chain.symbol && allowed.has(`${e.symbol}|${e.exp}|${e.K}|${e.side}`));
+  for(const e of events){
+    const d = new Date(e.marketTs || e.ts);
+    const mins = d.getHours()*60 + d.getMinutes();
+    const marketMins = Math.max(9*60+30, Math.min(16*60, mins));
+    const idx = Math.max(0, Math.min(buckets-1, Math.round((marketMins-(9*60+30))/5)));
+    if(e.side==='C') points[idx].call += e.premium;
+    else points[idx].put += e.premium;
+    points[idx].price = e.spot || points[idx].price;
+  }
+  const maxPrem = Math.max(...points.map(p=>Math.max(p.call,p.put)),1);
+  let lastPrice = chain.spot;
+  points.forEach((p,i)=>{
+    if(p.price) lastPrice = p.price;
+    p.price = lastPrice;
+  });
+  return {symbol:chain.symbol,spot:chain.spot,points,maxPrem,events:events.length,collecting:events.length===0};
+}
+function drawNetFlow(R){
+  const cv = document.getElementById('netFlowChart');
+  if(!cv || !R.netFlow) return;
+  const ctx = cv.getContext('2d');
+  const dpr = window.devicePixelRatio||1;
+  const W = cv.clientWidth;
+  const H = Math.max(520, Math.min(760, window.innerHeight-170));
+  cv.width = W*dpr; cv.height = H*dpr; cv.style.height = H+'px';
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  ctx.clearRect(0,0,W,H);
+  const pts = R.netFlow.points;
+  const padL=72,padR=82,padT=46,padB=62, plotW=W-padL-padR, plotH=H-padT-padB;
+  const maxPrem = niceMax(R.netFlow.maxPrem);
+  const minPrice = Math.min(...pts.map(p=>p.price));
+  const maxPrice = Math.max(...pts.map(p=>p.price));
+  const pricePad = Math.max((maxPrice-minPrice)*0.16, R.netFlow.spot*0.002);
+  const pMin = minPrice-pricePad, pMax = maxPrice+pricePad;
+  const x = i => padL + (i/(pts.length-1))*plotW;
+  const yPrem = v => padT + plotH - (v/maxPrem)*plotH;
+  const yPrice = v => padT + plotH - ((v-pMin)/(pMax-pMin))*plotH;
+
+  ctx.fillStyle='#202020'; ctx.fillRect(0,0,W,H);
+  ctx.strokeStyle='rgba(255,255,255,.09)'; ctx.lineWidth=1;
+  ctx.fillStyle='#00b7ff'; ctx.font='12px Segoe UI'; ctx.textAlign='right'; ctx.textBaseline='middle';
+  for(let g=0;g<=4;g++){
+    const yy=padT+plotH*g/4;
+    ctx.beginPath(); ctx.moveTo(padL,yy); ctx.lineTo(W-padR,yy); ctx.stroke();
+    const prem=maxPrem*(1-g/4);
+    ctx.fillText(fmtMoney(prem).replace('.00',''),padL-12,yy);
+  }
+  ctx.textAlign='left';
+  for(let g=0;g<=4;g++){
+    const yy=padT+plotH*g/4;
+    const pr=pMax-(pMax-pMin)*g/4;
+    ctx.fillText('$'+fmtPrice(pr),W-padR+12,yy);
+  }
+  ctx.save(); ctx.translate(24,padT+plotH/2); ctx.rotate(-Math.PI/2); ctx.textAlign='center'; ctx.fillText('Premium',0,0); ctx.restore();
+  ctx.save(); ctx.translate(W-22,padT+plotH/2); ctx.rotate(Math.PI/2); ctx.textAlign='center'; ctx.fillText('Reference Price',0,0); ctx.restore();
+
+  function area(key,color){
+    ctx.beginPath(); ctx.moveTo(x(0),yPrem(0));
+    pts.forEach((p,i)=>ctx.lineTo(x(i),yPrem(p[key])));
+    ctx.lineTo(x(pts.length-1),yPrem(0)); ctx.closePath();
+    ctx.fillStyle=color; ctx.fill();
+    ctx.strokeStyle=color.replace('.42','.95'); ctx.lineWidth=2;
+    ctx.beginPath(); pts.forEach((p,i)=>i?ctx.lineTo(x(i),yPrem(p[key])):ctx.moveTo(x(i),yPrem(p[key]))); ctx.stroke();
+  }
+  area('call','rgba(23,182,95,.42)');
+  area('put','rgba(255,42,23,.42)');
+  ctx.strokeStyle='#22b8ff'; ctx.lineWidth=2.3; ctx.beginPath();
+  pts.forEach((p,i)=>i?ctx.lineTo(x(i),yPrice(p.price)):ctx.moveTo(x(i),yPrice(p.price))); ctx.stroke();
+
+  ctx.fillStyle='#f0f0f0'; ctx.font='800 16px Segoe UI'; ctx.textAlign='center'; ctx.fillText(`Net Flow (Premium) - ${R.netFlow.symbol}`,W/2,24);
+  if(R.netFlow.collecting){
+    ctx.fillStyle='rgba(255,255,255,.78)';
+    ctx.font='800 18px Segoe UI';
+    ctx.fillText('Collecting volume-delta flow...', W/2, padT + plotH/2 - 12);
+    ctx.font='13px Segoe UI';
+    ctx.fillStyle='rgba(255,255,255,.55)';
+    ctx.fillText('Leave auto-refresh running. New call/put volume changes will appear here as real flow spikes.', W/2, padT + plotH/2 + 16);
+  }
+  ctx.font='12px Segoe UI'; ctx.fillStyle='#00b7ff'; ctx.textBaseline='top';
+  for(let i=0;i<pts.length;i+=9){
+    ctx.save(); ctx.translate(x(i),H-padB+16); ctx.rotate(-Math.PI/4); ctx.textAlign='right'; ctx.fillText(pts[i].time,0,0); ctx.restore();
+  }
+  ctx.fillStyle='#00b7ff'; ctx.textAlign='center'; ctx.fillText('Time',padL+plotW/2,H-18);
+  window._netFlowHit = {pts,x,yPrem,yPrice,padL,padR,padT,padB,plotW,plotH,maxPrem,pMin,pMax};
+}
+function niceMax(v){
+  const p=Math.pow(10,Math.floor(Math.log10(v||1)));
+  return Math.ceil(v/p)*p;
+}
+function showNetFlowTooltip(e){
+  const h=window._netFlowHit, tt=document.getElementById('netFlowTooltip');
+  if(!h || !tt) return;
+  const cross = document.getElementById('netFlowCrosshair');
+  const rect=e.currentTarget.getBoundingClientRect();
+  const mx=e.clientX-rect.left, my=e.clientY-rect.top;
+  if(mx<h.padL || mx>h.padL+h.plotW || my<h.padT || my>h.padT+h.plotH){
+    tt.style.display='none';
+    if(cross) cross.style.display='none';
+    return;
+  }
+  const idx=Math.max(0,Math.min(h.pts.length-1,Math.round((mx-h.padL)/h.plotW*(h.pts.length-1))));
+  const p=h.pts[idx];
+  if(cross){
+    cross.style.display='block';
+    cross.style.left = `${h.x(idx)}px`;
+    cross.style.top = `${h.padT}px`;
+    cross.style.bottom = `${h.padB}px`;
+  }
+  tt.innerHTML=`<div class="heatmap-tip-title">${p.time}</div>
+    <div class="heatmap-tip-row"><span>Call Premium</span><span style="color:var(--green);font-weight:800">${fmtMoney(p.call)}</span></div>
+    <div class="heatmap-tip-row"><span>Put Premium</span><span style="color:var(--red);font-weight:800">${fmtMoney(p.put)}</span></div>
+    <div class="heatmap-tip-row"><span>Reference Price</span><span style="color:#22b8ff;font-weight:800">$${fmtPrice(p.price)}</span></div>`;
+  tt.style.display='block';
+  tt.style.left=Math.min(rect.width-tt.offsetWidth-6,mx+14)+'px';
+  tt.style.top=Math.max(6,Math.min(rect.height-tt.offsetHeight-6,my+14))+'px';
+}
+function hideNetFlowTooltip(){
+  const tt=document.getElementById('netFlowTooltip');
+  if(tt) tt.style.display='none';
+  const cross = document.getElementById('netFlowCrosshair');
+  if(cross) cross.style.display='none';
+}
+function hideAllHoverHelpers(){
+  hideChartTooltip();
+  hideHeatMapTip();
+  hideNetFlowTooltip();
+  hideDarkPoolTooltip();
+  hideMaxPainTooltip();
+}
+function buildDarkPoolLevels(chain){
+  const r = RISK_FREE[chain.market] || 0.05;
+  const byStrike = new Map();
+  for(const q of chain.quotes){
+    if(Math.abs(q.K-chain.spot)/chain.spot > 0.12) continue;
+    const price = calcOptionPrice(chain.spot, q.K, q.T || q.dte/365, q.iv || 0.2, r, q.isCall);
+    const premiumNotional = price * ((q.vol || 0) + (q.oi || 0)*0.08) * chain.mult;
+    const size = (q.vol || 0) + (q.oi || 0);
+    if(!byStrike.has(q.K)){
+      byStrike.set(q.K,{level:q.K,size:0,notional:0,callPremium:0,putPremium:0});
+    }
+    const row = byStrike.get(q.K);
+    row.size += size;
+    row.notional += premiumNotional;
+    if(q.isCall) row.callPremium += premiumNotional;
+    else row.putPremium += premiumNotional;
+  }
+  const rows = [...byStrike.values()]
+    .filter(r=>r.notional>0 && r.size>0)
+    .sort((a,b)=>b.notional-a.notional)
+    .slice(0,34)
+    .sort((a,b)=>b.level-a.level);
+  const maxNotional = Math.max(...rows.map(r=>r.notional),1);
+  const nearest = rows.reduce((best,row)=>!best || Math.abs(row.level-chain.spot)<Math.abs(best.level-chain.spot)?row:best,null);
+  return {symbol:chain.symbol,spot:chain.spot,rows,maxNotional,currentLevel:nearest?nearest.level:null};
+}
+function renderDarkPoolLevels(R){
+  const host = document.getElementById('darkPoolLevels');
+  if(!host || !R.darkPoolLevels) return;
+  const D = R.darkPoolLevels;
+  if(!D.rows.length){
+    host.innerHTML = '<div class="darkpool-empty">No estimated levels available for the current selection.</div>';
+    return;
+  }
+  const rows = D.rows.map(row=>{
+    const strength = Math.min(1, row.notional/D.maxNotional);
+    const intensity = Math.pow(strength, 0.58);
+    const pct = Math.max(3, Math.min(100, strength*100));
+    const rowBg = `rgba(34,184,255,${0.10 + intensity*0.30})`;
+    const barBg = `rgba(34,184,255,${0.28 + intensity*0.58})`;
+    const current = row.level===D.currentLevel ? ' current' : '';
+    const payload = esc(JSON.stringify({
+      symbol:D.symbol, level:`$${fmtPrice(row.level)}`, size:Math.round(row.size).toLocaleString(),
+      notional:fmtMoney(row.notional), strength:`${Math.round(strength*100)}%`,
+      spot:`$${fmtPrice(D.spot)}`
+    }));
+    return `<div class="darkpool-row${current}" style="background:${rowBg}" data-darkpool="${payload}">
+      <div class="darkpool-level">$${fmtPrice(row.level)}</div>
+      <div class="darkpool-track"><i class="darkpool-bar" style="width:${pct}%;background:${barBg}"></i></div>
+      <div class="darkpool-size">${Math.round(row.size).toLocaleString()}</div>
+      <div class="darkpool-notional">${fmtMoney(row.notional)}</div>
+    </div>`;
+  });
+  const spotIndex = D.rows.findIndex(row=>row.level < D.spot);
+  const priceLine = `<div class="darkpool-price-line"><span class="darkpool-price-label">Price: $${fmtPrice(D.spot)}</span></div>`;
+  const displayRows = [...rows];
+  if(spotIndex <= 0) displayRows.unshift(priceLine);
+  else if(spotIndex >= rows.length) displayRows.push(priceLine);
+  else displayRows.splice(spotIndex,0,priceLine);
+  host.innerHTML = `
+    <div class="darkpool-head">
+      <div>Level</div>
+      <div></div>
+      <div>Size</div>
+      <div>Notional Value</div>
+    </div>
+    ${displayRows.join('')}
+  `;
+}
+function showDarkPoolTooltip(e){
+  const rowEl = e.target.closest('.darkpool-row[data-darkpool]');
+  const tip = document.getElementById('heatMapTooltip');
+  document.querySelectorAll('.darkpool-row-hover').forEach(el=>el.classList.remove('darkpool-row-hover'));
+  if(!rowEl || !tip){ if(tip) tip.style.display='none'; return; }
+  rowEl.classList.add('darkpool-row-hover');
+  const d = JSON.parse(rowEl.dataset.darkpool);
+  const row = (label,value,cls='') => `<div class="heatmap-tip-row"><span>${label}</span><span class="${cls}">${value}</span></div>`;
+  tip.innerHTML = `
+    <div class="heatmap-tip-title">${d.symbol} · Dark Pool Level ${d.level}</div>
+    ${row('Size',d.size)}
+    ${row('Notional Value',d.notional,'heatmap-pos')}
+    ${row('Relative Strength',d.strength)}
+    ${row('Current Price',d.spot)}
+  `;
+  tip.style.display='block';
+  const tw = tip.offsetWidth, th = tip.offsetHeight;
+  let left = e.clientX + 14, top = e.clientY + 14;
+  if(left + tw > window.innerWidth) left = e.clientX - tw - 14;
+  if(top + th > window.innerHeight) top = e.clientY - th - 14;
+  tip.style.left = Math.max(6,left)+'px';
+  tip.style.top = Math.max(6,top)+'px';
+}
+function hideDarkPoolTooltip(){
+  const tip = document.getElementById('heatMapTooltip');
+  if(tip) tip.style.display='none';
+  document.querySelectorAll('.darkpool-row-hover').forEach(el=>el.classList.remove('darkpool-row-hover'));
+}
+function buildMaxPain(chain, selectedExpirations){
+  const byExp = new Map();
+  for(const q of chain.quotes){
+    if(!q.exp) continue;
+    if(!byExp.has(q.exp)) byExp.set(q.exp,new Map());
+    const expMap = byExp.get(q.exp);
+    if(!expMap.has(q.K)) expMap.set(q.K,{K:q.K,callOI:0,putOI:0});
+    const row = expMap.get(q.K);
+    if(q.isCall) row.callOI += q.oi || 0;
+    else row.putOI += q.oi || 0;
+  }
+  const expiries = [...byExp.keys()].sort();
+  const selected = [...selectedExpirations].filter(exp=>byExp.has(exp)).sort();
+  function calcRows(rows, exp=null, selectedExps=[]){
+    rows.sort((a,b)=>a.K-b.K);
+    const strikes = rows.map(r=>r.K);
+    const painRows = strikes.map(S=>{
+      let callPain = 0, putPain = 0;
+      for(const r of rows){
+        callPain += Math.max(0, S-r.K) * r.callOI * chain.mult;
+        putPain += Math.max(0, r.K-S) * r.putOI * chain.mult;
+      }
+      return {strike:S,callPain,putPain,totalPain:callPain+putPain};
+    });
+    const maxPain = painRows.reduce((best,row)=>!best || row.totalPain<best.totalPain ? row : best, null);
+    return {exp,selectedExps,rows:painRows,maxPain:maxPain?maxPain.strike:null,maxPainValue:maxPain?maxPain.totalPain:0};
+  }
+  function calcForExp(exp){
+    return calcRows([...(byExp.get(exp) || new Map()).values()],exp,[exp]);
+  }
+  function calcCombined(expList){
+    const combined = new Map();
+    for(const exp of expList){
+      for(const source of (byExp.get(exp) || new Map()).values()){
+        if(!combined.has(source.K)) combined.set(source.K,{K:source.K,callOI:0,putOI:0});
+        const row = combined.get(source.K);
+        row.callOI += source.callOI;
+        row.putOI += source.putOI;
+      }
+    }
+    return calcRows([...combined.values()],expList.length===1 ? expList[0] : null,expList);
+  }
+  const activeExpiries = selected.length ? selected : (expiries[0] ? [expiries[0]] : []);
+  const active = activeExpiries.length
+    ? calcCombined(activeExpiries)
+    : {exp:null,selectedExps:[],rows:[],maxPain:null,maxPainValue:0};
+  const time = expiries.map(calcForExp).filter(x=>x.maxPain!=null);
+  return {symbol:chain.symbol,spot:chain.spot,active,time,selectedExpirations:selected,expiries};
+}
+let maxPainView = 'chart';
+function drawMaxPain(R){
+  const cv = document.getElementById('maxPainChart');
+  if(!cv || !R.maxPain) return;
+  if(maxPainView === 'time') return drawMaxPainTime(R);
+  const ctx = cv.getContext('2d');
+  const dpr = window.devicePixelRatio||1;
+  const W = cv.clientWidth;
+  const H = Math.max(520, Math.min(760, window.innerHeight-170));
+  cv.width = W*dpr; cv.height = H*dpr; cv.style.height = H+'px';
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  ctx.clearRect(0,0,W,H);
+  ctx.fillStyle='#202020'; ctx.fillRect(0,0,W,H);
+  const M = R.maxPain.active;
+  const expiryLabel = M.selectedExps?.length > 1
+    ? `, ${M.selectedExps.length} Selected Expirations`
+    : (M.exp ? `, Expires on ${M.exp}` : '');
+  const chartTitle = `Max Pain (${R.maxPain.symbol}${expiryLabel})`;
+  const title = document.getElementById('maxPainTitle');
+  if(title) title.textContent = chartTitle;
+  const legend = document.getElementById('maxPainLegend');
+  if(legend) legend.style.display = 'flex';
+  if(!M.rows.length){
+    ctx.fillStyle='rgba(255,255,255,.75)';
+    ctx.font='800 18px Segoe UI';
+    ctx.textAlign='center';
+    ctx.fillText('No Max Pain data available for the current selection.', W/2, H/2);
+    return;
+  }
+  const rows = M.rows;
+  const maxValue = niceMax(Math.max(...rows.map(r=>r.totalPain),1));
+  const padL=78,padR=36,padT=62,padB=78, plotW=W-padL-padR, plotH=H-padT-padB;
+  const x = i => padL + (i/(rows.length-1 || 1))*plotW;
+  const y = v => padT + plotH - (v/maxValue)*plotH;
+  ctx.strokeStyle='rgba(255,255,255,.09)'; ctx.lineWidth=1;
+  ctx.fillStyle='#22b8ff'; ctx.font='12px Segoe UI'; ctx.textAlign='right'; ctx.textBaseline='middle';
+  for(let g=0;g<=4;g++){
+    const yy=padT+plotH*g/4;
+    ctx.beginPath(); ctx.moveTo(padL,yy); ctx.lineTo(W-padR,yy); ctx.stroke();
+    ctx.fillText(fmtMoney(maxValue*(1-g/4)).replace('.00',''), padL-12, yy);
+  }
+  const barW = Math.max(2, plotW/rows.length*0.72);
+  rows.forEach((row,i)=>{
+    const xx=x(i)-barW/2;
+    const yy=y(row.totalPain);
+    const h=padT+plotH-yy;
+    ctx.fillStyle = row.strike < M.maxPain ? 'rgba(255,42,23,.64)' : 'rgba(23,182,95,.64)';
+    ctx.fillRect(xx,yy,barW,h);
+  });
+  function vLine(price,color,label){
+    if(price == null) return;
+    let idx = rows.reduce((best,row,i)=>Math.abs(row.strike-price)<Math.abs(rows[best].strike-price)?i:best,0);
+    const xx = x(idx);
+    ctx.strokeStyle=color; ctx.lineWidth=3;
+    ctx.beginPath(); ctx.moveTo(xx,padT); ctx.lineTo(xx,padT+plotH); ctx.stroke();
+    ctx.save();
+    ctx.translate(xx+8,padT+10);
+    ctx.rotate(Math.PI/2);
+    ctx.fillStyle=color;
+    ctx.font='900 13px Segoe UI';
+    ctx.textAlign='left';
+    ctx.textBaseline='middle';
+    ctx.fillText(label,0,0);
+    ctx.restore();
+  }
+  vLine(R.maxPain.spot,'#f5f5f5',`Last Price (${fmtPrice(R.maxPain.spot)})`);
+  vLine(M.maxPain,'#ffc107',`Max Pain (${fmtPrice(M.maxPain)})`);
+  ctx.fillStyle='#f0f0f0'; ctx.font='900 18px Segoe UI'; ctx.textAlign='center'; ctx.textBaseline='alphabetic';
+  ctx.fillText(chartTitle, W/2, 30);
+  ctx.fillStyle='#22b8ff'; ctx.font='12px Segoe UI';
+  const step = Math.max(1, Math.ceil(rows.length/24));
+  rows.forEach((row,i)=>{
+    if(i%step && i!==rows.length-1) return;
+    ctx.save(); ctx.translate(x(i),H-padB+22); ctx.rotate(-Math.PI/4); ctx.textAlign='right'; ctx.fillText('$'+fmtPrice(row.strike),0,0); ctx.restore();
+  });
+  ctx.textAlign='center'; ctx.fillText('Strike Price',padL+plotW/2,H-20);
+  ctx.save(); ctx.translate(24,padT+plotH/2); ctx.rotate(-Math.PI/2); ctx.fillText('Intrinsic Value',0,0); ctx.restore();
+  window._maxPainHit = {type:'chart',rows,x,y,padL,padR,padT,padB,plotW,plotH,maxValue,maxPain:M.maxPain,spot:R.maxPain.spot};
+}
+function drawMaxPainTime(R){
+  const cv = document.getElementById('maxPainChart');
+  const ctx = cv.getContext('2d');
+  const dpr = window.devicePixelRatio||1;
+  const W = cv.clientWidth;
+  const H = Math.max(520, Math.min(760, window.innerHeight-170));
+  cv.width = W*dpr; cv.height = H*dpr; cv.style.height = H+'px';
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  ctx.clearRect(0,0,W,H);
+  ctx.fillStyle='#202020'; ctx.fillRect(0,0,W,H);
+  const title = document.getElementById('maxPainTitle');
+  if(title) title.textContent = `Max Pain / Time (${R.maxPain.symbol})`;
+  const legend = document.getElementById('maxPainLegend');
+  if(legend) legend.style.display = 'none';
+  const pts = R.maxPain.time;
+  if(!pts.length){
+    ctx.fillStyle='rgba(255,255,255,.75)';
+    ctx.font='800 18px Segoe UI';
+    ctx.textAlign='center';
+    ctx.fillText('No Max Pain / Time data available.', W/2, H/2);
+    return;
+  }
+  const padL=78,padR=36,padT=58,padB=92, plotW=W-padL-padR, plotH=H-padT-padB;
+  const minP = Math.min(...pts.map(p=>p.maxPain), R.maxPain.spot);
+  const maxP = Math.max(...pts.map(p=>p.maxPain), R.maxPain.spot);
+  const pricePad = Math.max((maxP-minP)*0.18, R.maxPain.spot*0.01);
+  const yMin = minP-pricePad, yMax=maxP+pricePad;
+  const x = i => padL + (i/(pts.length-1 || 1))*plotW;
+  const y = v => padT + plotH - ((v-yMin)/(yMax-yMin))*plotH;
+  ctx.strokeStyle='rgba(255,255,255,.09)'; ctx.lineWidth=1;
+  ctx.fillStyle='#22b8ff'; ctx.font='12px Segoe UI'; ctx.textAlign='right'; ctx.textBaseline='middle';
+  for(let g=0;g<=5;g++){
+    const yy=padT+plotH*g/5;
+    ctx.beginPath(); ctx.moveTo(padL,yy); ctx.lineTo(W-padR,yy); ctx.stroke();
+    ctx.fillText('$'+fmtPrice(yMax-(yMax-yMin)*g/5), padL-12, yy);
+  }
+  const spotY = y(R.maxPain.spot);
+  ctx.strokeStyle='#f5f5f5'; ctx.lineWidth=2;
+  ctx.beginPath(); ctx.moveTo(padL,spotY); ctx.lineTo(W-padR,spotY); ctx.stroke();
+  ctx.fillStyle='#f5f5f5'; ctx.font='900 12px Segoe UI'; ctx.textAlign='left'; ctx.fillText(`Last Price (${fmtPrice(R.maxPain.spot)})`, padL+6, spotY-8);
+  ctx.strokeStyle='#8ecbff'; ctx.lineWidth=2.5; ctx.beginPath();
+  pts.forEach((p,i)=>i?ctx.lineTo(x(i),y(p.maxPain)):ctx.moveTo(x(i),y(p.maxPain))); ctx.stroke();
+  pts.forEach((p,i)=>{
+    ctx.fillStyle='#8ecbff'; ctx.beginPath(); ctx.arc(x(i),y(p.maxPain),4,0,Math.PI*2); ctx.fill();
+    if(i%Math.max(1,Math.ceil(pts.length/14))===0 || i===pts.length-1){
+      ctx.fillStyle='#fff'; ctx.font='900 13px Segoe UI'; ctx.textAlign='center';
+      ctx.fillText('$'+fmtPrice(p.maxPain),x(i),y(p.maxPain)-10);
+    }
+  });
+  ctx.fillStyle='#f0f0f0'; ctx.font='900 18px Segoe UI'; ctx.textAlign='center';
+  ctx.fillText(`Max Pain / Time (${R.maxPain.symbol})`,W/2,30);
+  ctx.fillStyle='#22b8ff'; ctx.font='12px Segoe UI';
+  const step = Math.max(1, Math.ceil(pts.length/18));
+  pts.forEach((p,i)=>{
+    if(i%step && i!==pts.length-1) return;
+    ctx.save(); ctx.translate(x(i),H-padB+28); ctx.rotate(-Math.PI/4); ctx.textAlign='right'; ctx.fillText(p.exp,0,0); ctx.restore();
+  });
+  ctx.textAlign='center'; ctx.fillText('Expiration Date',padL+plotW/2,H-20);
+  ctx.save(); ctx.translate(24,padT+plotH/2); ctx.rotate(-Math.PI/2); ctx.fillText('Strike Price',0,0); ctx.restore();
+  window._maxPainHit = {type:'time',pts,x,y,padL,padR,padT,padB,plotW,plotH,yMin,yMax,spot:R.maxPain.spot};
+}
+function showMaxPainTooltip(e){
+  const h=window._maxPainHit, tt=document.getElementById('maxPainTooltip');
+  if(!h || !tt) return;
+  const cross = document.getElementById('maxPainCrosshair');
+  const rect=e.currentTarget.getBoundingClientRect();
+  const mx=e.clientX-rect.left, my=e.clientY-rect.top;
+  if(mx<h.padL || mx>h.padL+h.plotW || my<h.padT || my>h.padT+h.plotH){
+    tt.style.display='none';
+    if(cross) cross.style.display='none';
+    return;
+  }
+  let crossX = mx;
+  if(h.type==='chart'){
+    const idx=Math.max(0,Math.min(h.rows.length-1,Math.round((mx-h.padL)/h.plotW*(h.rows.length-1))));
+    const p=h.rows[idx];
+    crossX = h.x(idx);
+    tt.innerHTML=`<div class="heatmap-tip-title">Strike $${fmtPrice(p.strike)}</div>
+      <div class="heatmap-tip-row"><span>Total Pain</span><span>${fmtMoney(p.totalPain)}</span></div>
+      <div class="heatmap-tip-row"><span>Call Pain</span><span style="color:#17b65f;font-weight:800">${fmtMoney(p.callPain)}</span></div>
+      <div class="heatmap-tip-row"><span>Put Pain</span><span style="color:#ff2a17;font-weight:800">${fmtMoney(p.putPain)}</span></div>`;
+  }else{
+    const idx=Math.max(0,Math.min(h.pts.length-1,Math.round((mx-h.padL)/h.plotW*(h.pts.length-1))));
+    const p=h.pts[idx];
+    crossX = h.x(idx);
+    tt.innerHTML=`<div class="heatmap-tip-title">${p.exp}</div>
+      <div class="heatmap-tip-row"><span>Max Pain</span><span style="color:#8ecbff;font-weight:800">$${fmtPrice(p.maxPain)}</span></div>
+      <div class="heatmap-tip-row"><span>Last Price</span><span>$${fmtPrice(h.spot)}</span></div>`;
+  }
+  if(cross){
+    cross.style.display='block';
+    cross.style.left = `${crossX}px`;
+    cross.style.top = `${h.padT}px`;
+    cross.style.bottom = `${h.padB}px`;
+  }
+  tt.style.display='block';
+  tt.style.left=Math.min(rect.width-tt.offsetWidth-6,mx+14)+'px';
+  tt.style.top=Math.max(6,Math.min(rect.height-tt.offsetHeight-6,my+14))+'px';
+}
+function hideMaxPainTooltip(){
+  const tt=document.getElementById('maxPainTooltip');
+  if(tt) tt.style.display='none';
+  const cross = document.getElementById('maxPainCrosshair');
+  if(cross) cross.style.display='none';
+}
 function renderImpl(R){
   window._lastR=R;
   const badge=document.getElementById('srcBadge');
@@ -559,7 +1416,11 @@ function renderImpl(R){
       <div class="k" style="margin-top:6px">${R.keptCount}/${R.totalCount} quotes Â· DTE: ${R.expiries.join(', ')}</div></div>
   `;
 
-  drawChart(R);
+  renderOptionsHeatMap(R);
+  renderDarkPoolLevels(R);
+  if(activeView === 'gex') drawChart(R);
+  if(activeView === 'net-flow') drawNetFlow(R);
+  if(activeView === 'max-pain') drawMaxPain(R);
   return;
 
   document.getElementById('levels').innerHTML = `
@@ -851,6 +1712,16 @@ function hideChartTooltip(){
 }
 
 // ---------- Wiring ----------
+let activeView = 'gex';
+const selectedExpirationsByView = {gex:null, 'options-heat-map':null, 'max-pain':null};
+function currentExpirationValues(){
+  return [...document.querySelectorAll('#expirationPicker input:checked')].map(input=>input.value);
+}
+function saveCurrentExpirationSelection(){
+  if(selectedExpirationsByView.hasOwnProperty(activeView)){
+    selectedExpirationsByView[activeView] = currentExpirationValues();
+  }
+}
 function populateSymbols(){
   const sel=document.getElementById('symbol');
   const mkt=document.getElementById('market').value;
@@ -861,19 +1732,40 @@ function populateSymbols(){
 }
 function populateExpirations(chain){
   const picker = document.getElementById('expirationPicker');
-  const selected = new Set([...picker.querySelectorAll('input:checked')].map(input=>input.value));
+  const remembered = selectedExpirationsByView[activeView];
+  const selectedValues = remembered || (selectedExpirationsByView.hasOwnProperty(activeView) ? [] : currentExpirationValues());
+  const selected = new Set(selectedValues);
   const byExp = new Map();
   const todayIso = new Date().toISOString().slice(0,10);
+  const monthIso = new Date(Date.now()+30*86400000).toISOString().slice(0,10);
   chain.quotes.forEach(q=>{
     if(q.exp && q.exp >= todayIso && !byExp.has(q.exp)) byExp.set(q.exp, q.dte);
   });
   const expiries = [...byExp.keys()].sort();
   const validSelected = expiries.filter(exp=>selected.has(exp));
-  const active = new Set(validSelected.length ? validSelected : expiries.slice(0,1));
+  const defaultHeatMap = expiries.filter(exp=>exp<=monthIso);
+  const defaultSelection = activeView === 'options-heat-map' ? (defaultHeatMap.length ? defaultHeatMap : expiries.slice(0,1)) : expiries.slice(0,1);
+  const active = new Set(validSelected.length ? validSelected : defaultSelection);
   picker.innerHTML = expiries.length ? expiries.map(exp=>{
     const dte = byExp.get(exp);
     return `<label class="expiry-option"><input type="checkbox" value="${exp}" ${active.has(exp)?'checked':''}>${exp} (${dte}DTE)</label>`;
   }).join('') : '<span class="expiry-empty">No expirations available</span>';
+  if(selectedExpirationsByView.hasOwnProperty(activeView) && !remembered){
+    selectedExpirationsByView[activeView] = currentExpirationValues();
+  }
+}
+function setView(view){
+  if(view === activeView) return;
+  saveCurrentExpirationSelection();
+  activeView = view;
+  document.querySelectorAll('.side-nav a[data-view]').forEach(a=>a.classList.toggle('active',a.dataset.view===view));
+  document.querySelectorAll('.app-view').forEach(section=>section.classList.toggle('active',section.id===`view-${view}`));
+  hideAllHoverHelpers();
+  run();
+  if(view === 'gex' && window._lastR) requestAnimationFrame(()=>drawChart(window._lastR));
+  if(view === 'net-flow' && window._lastR) requestAnimationFrame(()=>drawNetFlow(window._lastR));
+  if(view === 'max-pain' && window._lastR) requestAnimationFrame(()=>drawMaxPain(window._lastR));
+  window.scrollTo({top:0,left:0});
 }
 function run(){
   const sym=document.getElementById('symbol').value;
@@ -883,42 +1775,92 @@ function run(){
   const useLive = src==="live" && REAL[sym];
   let chain;
   if(useLive){
-    chain = buildChainReal(sym, (!isNaN(ov)&&ov>0)?ov:null);
+    chain = buildChainReal(sym, null);
   } else {
     const spot=!isNaN(ov)&&ov>0?ov:SYMBOLS[sym].spot;
     chain = buildChain(sym,spot);
   }
+  updateNetFlowHistoryFromSnapshot(chain);
   populateExpirations(chain);
   const selectedExpirations = new Set([...document.querySelectorAll('#expirationPicker input:checked')].map(input=>input.value));
+  const fullChain = chain;
   if(selectedExpirations.size){
     chain = {...chain, quotes: chain.quotes.filter(q=>selectedExpirations.has(q.exp))};
   }
   const expectedMove = calcExpectedMove(chain);
+  const optionsHeatMap = buildOptionsHeatMap(chain);
+  const netFlow = buildNetFlow(chain);
+  const darkPoolLevels = buildDarkPoolLevels(chain);
+  const maxPain = buildMaxPain(fullChain, selectedExpirations);
   const R = calcGEX(chain,mode);
   R.expectedMove = expectedMove;
+  R.optionsHeatMap = optionsHeatMap;
+  R.netFlow = netFlow;
+  R.darkPoolLevels = darkPoolLevels;
+  R.maxPain = maxPain;
   R.live = !!chain.live;
   R.asof = useLive ? REAL[sym].asof : null;
   renderImpl(R);
 }
-document.getElementById('market').addEventListener('change',()=>{populateSymbols();run();});
+document.getElementById('market').addEventListener('change',()=>{
+  selectedExpirationsByView.gex=null;
+  selectedExpirationsByView['options-heat-map']=null;
+  selectedExpirationsByView['max-pain']=null;
+  populateSymbols();
+  run();
+});
 document.getElementById('symbol').addEventListener('change',()=>{
   document.getElementById('spotOverride').value='';
   document.getElementById('expirationPicker').innerHTML='';
+  selectedExpirationsByView.gex=null;
+  selectedExpirationsByView['options-heat-map']=null;
+  selectedExpirationsByView['max-pain']=null;
   run();
 });
-document.getElementById('expirationPicker').addEventListener('change',run);
+document.getElementById('expirationPicker').addEventListener('change',()=>{
+  saveCurrentExpirationSelection();
+  run();
+});
 document.getElementById('mode').addEventListener('change',run);
 document.getElementById('source').addEventListener('change',run);
 document.getElementById('autorefresh').addEventListener('change',setupAutoRefresh);
 document.getElementById('strikeCount').addEventListener('change',run);
 document.getElementById('run').textContent = 'Refresh';
 document.getElementById('run').addEventListener('click',()=>loadData(true));
-window.addEventListener('resize',()=>{ if(window._lastR) drawChart(window._lastR); });
+window.addEventListener('resize',()=>{
+  if(!window._lastR) return;
+  if(activeView === 'gex') drawChart(window._lastR);
+  if(activeView === 'net-flow') drawNetFlow(window._lastR);
+  if(activeView === 'max-pain') drawMaxPain(window._lastR);
+});
 document.getElementById('gexChart').addEventListener('mousemove',showChartTooltip);
 document.getElementById('gexChart').addEventListener('mouseleave',hideChartTooltip);
 document.getElementById('gexChart').addEventListener('touchstart',showChartTooltip,{passive:true});
 document.getElementById('gexChart').addEventListener('touchmove',showChartTooltip,{passive:true});
 document.getElementById('gexChart').addEventListener('touchend',()=>setTimeout(hideChartTooltip,1200),{passive:true});
+document.getElementById('optionsHeatMap').addEventListener('mousemove',showHeatMapTip);
+document.getElementById('optionsHeatMap').addEventListener('mouseleave',hideHeatMapTip);
+document.getElementById('darkPoolLevels').addEventListener('mousemove',showDarkPoolTooltip);
+document.getElementById('darkPoolLevels').addEventListener('mouseleave',hideDarkPoolTooltip);
+document.getElementById('netFlowChart').addEventListener('mousemove',showNetFlowTooltip);
+document.getElementById('netFlowChart').addEventListener('mouseleave',hideNetFlowTooltip);
+document.getElementById('maxPainChart').addEventListener('mousemove',showMaxPainTooltip);
+document.getElementById('maxPainChart').addEventListener('mouseleave',hideMaxPainTooltip);
+
+document.querySelectorAll('.side-nav a[data-view]').forEach(link=>{
+  link.addEventListener('click',e=>{
+    e.preventDefault();
+    setView(link.dataset.view);
+  });
+});
+document.querySelectorAll('.maxpain-tab').forEach(btn=>{
+  btn.addEventListener('click',()=>{
+    maxPainView = btn.dataset.maxpainView;
+    document.querySelectorAll('.maxpain-tab').forEach(b=>b.classList.toggle('active',b===btn));
+    hideMaxPainTooltip();
+    if(window._lastR) drawMaxPain(window._lastR);
+  });
+});
 
 // parameter buttons â€” toggle metrics on/off (multi-select overlay)
 document.querySelectorAll('.pbtn').forEach(btn=>{
@@ -926,7 +1868,7 @@ document.querySelectorAll('.pbtn').forEach(btn=>{
     const m=btn.dataset.metric;
     if(ACTIVE.has(m)) ACTIVE.delete(m); else ACTIVE.add(m);
     btn.classList.toggle('active', ACTIVE.has(m));
-    if(window._lastR) drawChart(window._lastR);
+    if(window._lastR && activeView === 'gex') drawChart(window._lastR);
   });
 });
 
@@ -934,7 +1876,7 @@ document.querySelectorAll('.range-btn').forEach(btn=>{
   btn.addEventListener('click',()=>{
     DISPLAY_SIGMA=btn.dataset.sigma==='all' ? Infinity : Number(btn.dataset.sigma);
     document.querySelectorAll('.range-btn').forEach(b=>b.classList.toggle('active',b===btn));
-    if(window._lastR) drawChart(window._lastR);
+    if(window._lastR && activeView === 'gex') drawChart(window._lastR);
   });
 });
 
@@ -977,7 +1919,7 @@ populateSymbols();
 document.getElementById('symbol').value = 'SPX';
 document.getElementById('mode').value = 'full';
 document.getElementById('source').value = 'live';
-document.getElementById('autorefresh').value = '5';
+document.getElementById('autorefresh').value = '30';
 loadData(true).then(setupAutoRefresh);
 </script>
 </body>
