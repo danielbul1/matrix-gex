@@ -170,6 +170,23 @@
   .maxpain-tooltip{position:absolute;z-index:5;display:none;min-width:210px;background:rgba(18,18,18,.96);
                    border:1px solid #555;border-radius:7px;padding:10px 11px;color:#e7e7e7;font-size:12px;line-height:1.55;
                    box-shadow:0 12px 30px rgba(0,0,0,.45);pointer-events:none}
+  .edge-card{min-height:calc(100vh - 122px);padding:24px;background:#202020;border:0;border-radius:8px}
+  .edge-top{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;margin-bottom:12px}
+  .edge-title h2{font-size:21px;margin:0 0 6px;color:#f0f0f0}
+  .edge-title p{font-size:13px;line-height:1.5;margin:0;color:var(--muted);max-width:820px}
+  .edge-range{border-right:0;padding-right:0;margin-right:0;flex:0 0 auto}
+  .edge-summary{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin:10px 0 14px}
+  .edge-stat{background:#191919;border:1px solid #2d2d2d;border-radius:7px;padding:9px 11px}
+  .edge-stat span{display:block;color:#929292;font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.5px}
+  .edge-stat strong{display:block;margin-top:4px;color:#f3f3f3;font-size:15px;font-variant-numeric:tabular-nums}
+  .edge-wrap{position:relative;overflow:hidden;border:1px solid #292929;border-radius:8px;background:#1b1b1b}
+  .edge-tooltip{position:absolute;z-index:5;display:none;min-width:220px;background:rgba(18,18,18,.97);
+                border:1px solid #555;border-radius:7px;padding:10px 11px;color:#e7e7e7;font-size:12px;line-height:1.55;
+                box-shadow:0 12px 30px rgba(0,0,0,.45);pointer-events:none}
+  .edge-tooltip .tt-title{font-weight:900;color:#fff;margin-bottom:6px}
+  .edge-tooltip .tt-row{display:flex;justify-content:space-between;gap:18px}
+  .edge-crosshair{position:absolute;top:0;bottom:0;display:none;border-left:1px dashed rgba(255,255,255,.72);
+                  z-index:4;pointer-events:none;box-shadow:0 0 8px rgba(255,255,255,.2)}
   footer{display:none}
   .interp{font-size:12.5px;line-height:1.7;color:var(--text);background:var(--panel2);
           border-radius:8px;padding:12px 14px;margin-top:12px}
@@ -240,6 +257,10 @@
     .symlabel{margin-left:0;font-size:16px}
     .chartlegend{margin-right:0;font-size:12px}
     .watermark{font-size:44px}
+    .edge-card{padding:14px 8px}
+    .edge-top{display:block}
+    .edge-range{margin-top:12px;width:max-content}
+    .edge-summary{grid-template-columns:repeat(2,minmax(0,1fr))}
   }
   @media(max-width:520px){
     .controls{grid-template-columns:1fr}
@@ -258,6 +279,7 @@
     <a href="#" data-view="net-flow">Net Flow</a>
     <a href="#" data-view="dark-pool-levels">Dark Pool Levels</a>
     <a href="#" data-view="max-pain">Max Pain</a>
+    <a href="#" data-view="edge">Edge</a>
   </nav>
   <div class="side-disclaimer">Disclaimer</div>
   <h1>ðŸ“Š GEX Analytics</h1>
@@ -420,6 +442,30 @@
       </div>
     </article>
   </section>
+
+  <section class="app-view" id="view-edge">
+    <article class="feature-card edge-card">
+      <div class="edge-top">
+        <div class="edge-title">
+          <h2>Edge</h2>
+          <p>GEX, Vanna and Charm aligned by strike. All three panels use the same expirations, strike range and current-price marker.</p>
+        </div>
+        <div class="range-control edge-range" role="group" aria-label="Edge strike display range">
+          <span class="range-label">Range</span>
+          <button type="button" class="range-btn edge-range-btn" data-edge-sigma="1">1&sigma;</button>
+          <button type="button" class="range-btn edge-range-btn active" data-edge-sigma="2">2&sigma;</button>
+          <button type="button" class="range-btn edge-range-btn" data-edge-sigma="3">3&sigma;</button>
+          <button type="button" class="range-btn edge-range-btn" data-edge-sigma="all">All</button>
+        </div>
+      </div>
+      <div class="edge-summary" id="edgeSummary"></div>
+      <div class="edge-wrap">
+        <div class="edge-crosshair" id="edgeCrosshair"></div>
+        <div class="edge-tooltip" id="edgeTooltip"></div>
+        <canvas id="edgeChart" height="760"></canvas>
+      </div>
+    </article>
+  </section>
 </main>
 
 <div class="heatmap-tip" id="heatMapTooltip"></div>
@@ -457,10 +503,12 @@ function calcGreeks(S,K,T,sigma,r,isCall){
   const delta = isCall ? normCDF(d1) : normCDF(d1)-1;
   const gamma = nd1/(S*sigma*sqrtT);       // same for calls/puts
   const vega  = S*sqrtT*nd1/100;           // per 1% vol
+  const vanna = -nd1*d2/sigma;             // dDelta / dVol
+  const charm = -nd1*(2*r*T-d2*sigma*sqrtT)/(2*T*sigma*sqrtT); // call/put dDelta / dt
   let theta;
   if(isCall) theta = -(S*nd1*sigma)/(2*sqrtT) - r*K*Math.exp(-r*T)*normCDF(d2);
   else       theta = -(S*nd1*sigma)/(2*sqrtT) + r*K*Math.exp(-r*T)*normCDF(-d2);
-  return {delta, gamma, theta:theta/365, vega, iv:sigma};
+  return {delta, gamma, theta:theta/365, vega, vanna, charm, iv:sigma};
 }
 function calcOptionPrice(S,K,T,sigma,r,isCall){
   T = Math.max(T, 1/365/24);
@@ -543,9 +591,10 @@ function buildChainReal(symKey, spotOverride){
   const quotes = rec.opts.map(o=>{
     const isCall = o.t==="C";
     // CBOE ×œ× ×ª×ž×™×“ ×ž×¡×¤×§ gamma â†’ ×× ×—×¡×¨, ×ž×—×©×‘×™× ×ž-Black-Scholes ×›×’×™×‘×•×™
-    let g = {gamma:o.g, delta:o.d, theta:0, vega:0, iv:o.iv};
+    const modelGreeks = calcGreeks(spot, o.k, o.dte/365, o.iv>0?o.iv:0.2, r, isCall);
+    let g = {...modelGreeks, gamma:o.g, delta:o.d, iv:o.iv};
     if(!o.g || o.g<=0){
-      g = calcGreeks(spot, o.k, o.dte/365, o.iv>0?o.iv:0.2, r, isCall);
+      g = modelGreeks;
     }
     return {K:o.k, dte:o.dte, T:o.dte/365, exp:o.exp, isCall, iv:o.iv, oi:o.oi, vol:o.vol, ts:now, g};
   });
@@ -604,12 +653,22 @@ function calcGEX(chain, mode){
   for(const q of kept){
     const gex = q.g.gamma * q.oi * mult * spot * spot * 0.01;
     if(!byStrike[q.K]) byStrike[q.K] = {strike:q.K, callGex:0, putGex:0, netGex:0,
+        callVex:0, putVex:0, netVex:0, callCharm:0, putCharm:0, netCharm:0,
         callOI:0, putOI:0, callVol:0, putVol:0, callIV:0, putIV:0, gamma:0, ts:q.ts};
     const s = byStrike[q.K];
-    if(q.isCall){ s.callGex += gex; s.callOI+=q.oi; s.callVol+=q.vol; s.callIV=q.iv; }
-    else        { s.putGex  -= gex; s.putOI +=q.oi; s.putVol +=q.vol; s.putIV =q.iv; }
+    const vex = (q.g.vanna || 0) * q.oi * mult * spot * 0.01;
+    const charm = (q.g.charm || 0) * q.oi * mult * spot / 252;
+    if(q.isCall){
+      s.callGex += gex; s.callVex += vex; s.callCharm += charm;
+      s.callOI+=q.oi; s.callVol+=q.vol; s.callIV=q.iv;
+    } else {
+      s.putGex -= gex; s.putVex -= vex; s.putCharm -= charm;
+      s.putOI +=q.oi; s.putVol +=q.vol; s.putIV =q.iv;
+    }
     s.gamma = Math.max(s.gamma, q.g.gamma);
     s.netGex = s.callGex + s.putGex;
+    s.netVex = s.callVex + s.putVex;
+    s.netCharm = s.callCharm + s.putCharm;
     s.ts = Math.max(s.ts, q.ts);
   }
   const strikes = Object.values(byStrike).sort((a,b)=>a.strike-b.strike);
@@ -1058,6 +1117,7 @@ function hideAllHoverHelpers(){
   hideNetFlowTooltip();
   hideDarkPoolTooltip();
   hideMaxPainTooltip();
+  hideEdgeTooltip();
 }
 function buildDarkPoolLevels(chain){
   const r = RISK_FREE[chain.market] || 0.05;
@@ -1421,6 +1481,7 @@ function renderImpl(R){
   if(activeView === 'gex') drawChart(R);
   if(activeView === 'net-flow') drawNetFlow(R);
   if(activeView === 'max-pain') drawMaxPain(R);
+  if(activeView === 'edge') drawEdge(R);
   return;
 
   document.getElementById('levels').innerHTML = `
@@ -1711,9 +1772,150 @@ function hideChartTooltip(){
   document.getElementById('chartCrosshairX').style.display='none';
 }
 
+// ---------- Edge: synchronized GEX / Vanna / Charm panels ----------
+function edgeVisibleStrikes(R){
+  let data=[...R.strikes];
+  if(Number.isFinite(DISPLAY_SIGMA) && R.expectedMove>0){
+    const radius=DISPLAY_SIGMA*R.expectedMove;
+    data=data.filter(s=>Math.abs(s.strike-R.spot)<=radius);
+  }
+  if(!data.length){
+    data=[...R.strikes].sort((a,b)=>Math.abs(a.strike-R.spot)-Math.abs(b.strike-R.spot)).slice(0,1);
+  }
+  return data.sort((a,b)=>a.strike-b.strike);
+}
+function drawEdge(R){
+  const cv=document.getElementById('edgeChart');
+  if(!cv) return;
+  const data=edgeVisibleStrikes(R);
+  if(!data.length) return;
+  const dpr=window.devicePixelRatio||1;
+  const W=cv.clientWidth;
+  const mobile=W<640;
+  const H=mobile?680:Math.max(690,Math.min(820,window.innerHeight-185));
+  cv.width=W*dpr; cv.height=H*dpr; cv.style.height=H+'px';
+  const ctx=cv.getContext('2d');
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  ctx.clearRect(0,0,W,H);
+  ctx.fillStyle='#1b1b1b'; ctx.fillRect(0,0,W,H);
+
+  const padL=mobile?55:82, padR=mobile?16:34, padT=28, padB=66;
+  const gap=22, plotW=W-padL-padR;
+  const panelH=(H-padT-padB-gap*2)/3;
+  const slot=plotW/data.length;
+  const xCenter=i=>padL+slot*(i+.5);
+  const panels=[
+    {key:'netGex',label:'Net GEX',color:'#22b8ff'},
+    {key:'netVex',label:'Net Vanna',color:'#ab7df6'},
+    {key:'netCharm',label:'Net Charm',color:'#ffc107'}
+  ];
+
+  panels.forEach((panel,panelIndex)=>{
+    const top=padT+panelIndex*(panelH+gap);
+    const bottom=top+panelH;
+    const maxAbs=Math.max(...data.map(s=>Math.abs(s[panel.key]||0)),1)*1.08;
+    const y=v=>top+(maxAbs-v)/(maxAbs*2)*panelH;
+    const zero=y(0);
+    for(let t=0;t<=4;t++){
+      const yy=top+t*panelH/4;
+      const value=maxAbs-(t/4)*maxAbs*2;
+      ctx.strokeStyle=t===2?'rgba(255,255,255,.18)':'rgba(255,255,255,.04)';
+      ctx.lineWidth=t===2?1.2:1;
+      ctx.beginPath(); ctx.moveTo(padL,yy); ctx.lineTo(W-padR,yy); ctx.stroke();
+      ctx.fillStyle='#aeb3b8'; ctx.font=(mobile?'bold 9px':'bold 11px')+' Segoe UI';
+      ctx.textAlign='right'; ctx.textBaseline='middle';
+      ctx.fillText(fmtAxis(value),padL-8,yy);
+    }
+    const bw=Math.max(2,Math.min(slot*.68,26));
+    data.forEach((s,i)=>{
+      const value=s[panel.key]||0;
+      const yy=y(value);
+      ctx.fillStyle=value>=0?'#22aaf2':'#ff2a17';
+      ctx.fillRect(xCenter(i)-bw/2,Math.min(yy,zero),bw,Math.max(1,Math.abs(yy-zero)));
+    });
+    ctx.fillStyle=panel.color; ctx.font=(mobile?'900 11px':'900 13px')+' Segoe UI';
+    ctx.textAlign='left'; ctx.textBaseline='top';
+    ctx.fillText(panel.label,padL+7,top+7);
+  });
+
+  const xAt=price=>{
+    if(price<=data[0].strike) return padL;
+    if(price>=data[data.length-1].strike) return W-padR;
+    for(let i=0;i<data.length-1;i++){
+      if(price>=data[i].strike&&price<=data[i+1].strike){
+        return xCenter(i)+(price-data[i].strike)/(data[i+1].strike-data[i].strike)*slot;
+      }
+    }
+    return padL+plotW/2;
+  };
+  const px=xAt(R.spot);
+  ctx.strokeStyle='#d8921f'; ctx.lineWidth=3;
+  ctx.beginPath(); ctx.moveTo(px,padT-5); ctx.lineTo(px,H-padB+3); ctx.stroke();
+  ctx.fillStyle='#ffd28a'; ctx.font=(mobile?'900 10px':'900 12px')+' Segoe UI';
+  ctx.textAlign=px>W-130?'right':'left'; ctx.textBaseline='bottom';
+  ctx.fillText('Price: '+fmtPrice(R.spot),px+(px>W-130?-7:7),padT-7);
+
+  const labelStep=Math.max(1,Math.ceil(data.length/(mobile?12:26)));
+  ctx.fillStyle='#bfc3c7'; ctx.font=(mobile?'bold 9px':'bold 10px')+' Segoe UI';
+  data.forEach((s,i)=>{
+    if(i%labelStep&&i!==data.length-1) return;
+    ctx.save(); ctx.translate(xCenter(i),H-padB+9); ctx.rotate(-Math.PI/2);
+    ctx.textAlign='right'; ctx.textBaseline='middle'; ctx.fillText(fmtPrice(s.strike),0,0); ctx.restore();
+  });
+  ctx.fillStyle='#d0d0d0'; ctx.font='bold 11px Segoe UI'; ctx.textAlign='center';
+  ctx.fillText('Strike',padL+plotW/2,H-8);
+  cv._edgeColumns=data.map((s,i)=>({x:padL+slot*i,w:slot,s}));
+
+  const totalGex=data.reduce((sum,s)=>sum+s.netGex,0);
+  const totalVanna=data.reduce((sum,s)=>sum+s.netVex,0);
+  const totalCharm=data.reduce((sum,s)=>sum+s.netCharm,0);
+  const signs=[totalGex,totalVanna,totalCharm].map(v=>Math.sign(v)).filter(Boolean);
+  const aligned=signs.length===3&&signs.every(v=>v===signs[0]);
+  const alignment=aligned?(signs[0]>0?'Positive alignment':'Negative alignment'):'Mixed';
+  const summary=document.getElementById('edgeSummary');
+  if(summary) summary.innerHTML=`
+    <div class="edge-stat"><span>Net GEX</span><strong style="color:${totalGex>=0?'#22aaf2':'#ff2a17'}">${fmtNum(totalGex)}</strong></div>
+    <div class="edge-stat"><span>Net Vanna</span><strong style="color:${totalVanna>=0?'#22aaf2':'#ff2a17'}">${fmtNum(totalVanna)}</strong></div>
+    <div class="edge-stat"><span>Net Charm</span><strong style="color:${totalCharm>=0?'#22aaf2':'#ff2a17'}">${fmtNum(totalCharm)}</strong></div>
+    <div class="edge-stat"><span>Alignment</span><strong>${alignment}</strong></div>`;
+}
+function showEdgeTooltip(ev){
+  const cv=document.getElementById('edgeChart');
+  const tt=document.getElementById('edgeTooltip');
+  const cross=document.getElementById('edgeCrosshair');
+  const columns=cv?cv._edgeColumns||[]:[];
+  if(!columns.length) return;
+  const rect=cv.getBoundingClientRect();
+  const point=ev.touches&&ev.touches[0]?ev.touches[0]:ev;
+  const x=point.clientX-rect.left, y=point.clientY-rect.top;
+  const hit=columns.reduce((best,col)=>{
+    const distance=Math.abs(col.x+col.w/2-x);
+    return !best||distance<best.distance?{col,distance}:best;
+  },null);
+  if(!hit||hit.distance>Math.max(22,hit.col.w)){ hideEdgeTooltip(); return; }
+  const s=hit.col.s;
+  const valueRow=(label,value,color)=>`<div class="tt-row"><span>${label}</span><span style="color:${color};font-weight:900">${fmtNum(value)}</span></div>`;
+  tt.innerHTML=`<div class="tt-title">${window._lastR?.symbol||''} Strike ${fmtPrice(s.strike)}</div>
+    ${valueRow('Net GEX',s.netGex,s.netGex>=0?'#22aaf2':'#ff2a17')}
+    ${valueRow('Net Vanna',s.netVex,s.netVex>=0?'#22aaf2':'#ff2a17')}
+    ${valueRow('Net Charm',s.netCharm,s.netCharm>=0?'#22aaf2':'#ff2a17')}`;
+  tt.style.display='block'; cross.style.display='block';
+  cross.style.left=(hit.col.x+hit.col.w/2)+'px';
+  let left=x+14, top=y+14;
+  if(left+tt.offsetWidth>rect.width) left=x-tt.offsetWidth-14;
+  if(top+tt.offsetHeight>rect.height) top=y-tt.offsetHeight-14;
+  tt.style.left=Math.max(6,left)+'px'; tt.style.top=Math.max(6,top)+'px';
+}
+function hideEdgeTooltip(){
+  const tt=document.getElementById('edgeTooltip');
+  const cross=document.getElementById('edgeCrosshair');
+  if(tt) tt.style.display='none';
+  if(cross) cross.style.display='none';
+}
+
 // ---------- Wiring ----------
 let activeView = 'gex';
-const selectedExpirationsByView = {gex:null, 'options-heat-map':null, 'max-pain':null};
+const selectedExpirationsByView = {gex:null, 'options-heat-map':null, 'max-pain':null, edge:null};
 function currentExpirationValues(){
   return [...document.querySelectorAll('#expirationPicker input:checked')].map(input=>input.value);
 }
@@ -1765,6 +1967,7 @@ function setView(view){
   if(view === 'gex' && window._lastR) requestAnimationFrame(()=>drawChart(window._lastR));
   if(view === 'net-flow' && window._lastR) requestAnimationFrame(()=>drawNetFlow(window._lastR));
   if(view === 'max-pain' && window._lastR) requestAnimationFrame(()=>drawMaxPain(window._lastR));
+  if(view === 'edge' && window._lastR) requestAnimationFrame(()=>drawEdge(window._lastR));
   window.scrollTo({top:0,left:0});
 }
 function run(){
@@ -1806,6 +2009,7 @@ document.getElementById('market').addEventListener('change',()=>{
   selectedExpirationsByView.gex=null;
   selectedExpirationsByView['options-heat-map']=null;
   selectedExpirationsByView['max-pain']=null;
+  selectedExpirationsByView.edge=null;
   populateSymbols();
   run();
 });
@@ -1815,6 +2019,7 @@ document.getElementById('symbol').addEventListener('change',()=>{
   selectedExpirationsByView.gex=null;
   selectedExpirationsByView['options-heat-map']=null;
   selectedExpirationsByView['max-pain']=null;
+  selectedExpirationsByView.edge=null;
   run();
 });
 document.getElementById('expirationPicker').addEventListener('change',()=>{
@@ -1832,6 +2037,7 @@ window.addEventListener('resize',()=>{
   if(activeView === 'gex') drawChart(window._lastR);
   if(activeView === 'net-flow') drawNetFlow(window._lastR);
   if(activeView === 'max-pain') drawMaxPain(window._lastR);
+  if(activeView === 'edge') drawEdge(window._lastR);
 });
 document.getElementById('gexChart').addEventListener('mousemove',showChartTooltip);
 document.getElementById('gexChart').addEventListener('mouseleave',hideChartTooltip);
@@ -1846,6 +2052,11 @@ document.getElementById('netFlowChart').addEventListener('mousemove',showNetFlow
 document.getElementById('netFlowChart').addEventListener('mouseleave',hideNetFlowTooltip);
 document.getElementById('maxPainChart').addEventListener('mousemove',showMaxPainTooltip);
 document.getElementById('maxPainChart').addEventListener('mouseleave',hideMaxPainTooltip);
+document.getElementById('edgeChart').addEventListener('mousemove',showEdgeTooltip);
+document.getElementById('edgeChart').addEventListener('mouseleave',hideEdgeTooltip);
+document.getElementById('edgeChart').addEventListener('touchstart',showEdgeTooltip,{passive:true});
+document.getElementById('edgeChart').addEventListener('touchmove',showEdgeTooltip,{passive:true});
+document.getElementById('edgeChart').addEventListener('touchend',()=>setTimeout(hideEdgeTooltip,1200),{passive:true});
 
 document.querySelectorAll('.side-nav a[data-view]').forEach(link=>{
   link.addEventListener('click',e=>{
@@ -1872,11 +2083,23 @@ document.querySelectorAll('.pbtn').forEach(btn=>{
   });
 });
 
-document.querySelectorAll('.range-btn').forEach(btn=>{
+function syncSigmaButtons(){
+  const value=Number.isFinite(DISPLAY_SIGMA)?String(DISPLAY_SIGMA):'all';
+  document.querySelectorAll('[data-sigma]').forEach(btn=>btn.classList.toggle('active',btn.dataset.sigma===value));
+  document.querySelectorAll('[data-edge-sigma]').forEach(btn=>btn.classList.toggle('active',btn.dataset.edgeSigma===value));
+}
+document.querySelectorAll('[data-sigma]').forEach(btn=>{
   btn.addEventListener('click',()=>{
     DISPLAY_SIGMA=btn.dataset.sigma==='all' ? Infinity : Number(btn.dataset.sigma);
-    document.querySelectorAll('.range-btn').forEach(b=>b.classList.toggle('active',b===btn));
+    syncSigmaButtons();
     if(window._lastR && activeView === 'gex') drawChart(window._lastR);
+  });
+});
+document.querySelectorAll('[data-edge-sigma]').forEach(btn=>{
+  btn.addEventListener('click',()=>{
+    DISPLAY_SIGMA=btn.dataset.edgeSigma==='all' ? Infinity : Number(btn.dataset.edgeSigma);
+    syncSigmaButtons();
+    if(window._lastR && activeView === 'edge') drawEdge(window._lastR);
   });
 });
 
