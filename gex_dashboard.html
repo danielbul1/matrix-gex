@@ -31,6 +31,14 @@
   .ctrl{display:flex;flex-direction:column;gap:4px}
   .ctrl:nth-child(n+3){display:none}
   .ctrl label{font-size:14px;color:#d0d0d0;font-weight:700}
+  .data-timer{margin-left:auto;margin-right:42px;min-width:300px;align-self:center;background:#151515;border:1px solid #343434;
+              border-left:4px solid var(--accent);border-radius:7px;padding:9px 12px;box-shadow:0 10px 22px rgba(0,0,0,.28)}
+  .data-timer-top{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:5px}
+  .data-timer-title{font-size:11px;font-weight:900;color:#a8b2bd;text-transform:uppercase;letter-spacing:.5px}
+  .data-timer-count{font-size:20px;font-weight:950;color:#22b8ff;font-variant-numeric:tabular-nums;line-height:1}
+  .data-timer-meta{display:grid;grid-template-columns:1fr 1fr;gap:5px 12px;font-size:11px;color:#cfd4d8}
+  .data-timer-meta span{display:flex;justify-content:space-between;gap:8px;white-space:nowrap}
+  .data-timer-meta b{color:#fff;font-weight:900;font-variant-numeric:tabular-nums}
   .expiry-picker{width:min(720px,calc(100vw - 420px));min-width:360px;max-height:88px;display:flex;gap:7px;flex-wrap:wrap;
                  overflow-y:auto;padding:7px;background:#292929;border:1px solid #3b3b3b;border-radius:6px;scrollbar-width:thin}
   .expiry-option{display:inline-flex;align-items:center;gap:6px;white-space:nowrap;padding:5px 8px;
@@ -244,6 +252,7 @@
     .side-nav{width:100%;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;font-size:13px}
     .side-nav a{background:#202020;border:1px solid #2d2d2d;border-radius:6px;padding:9px 10px;text-align:center}
     .controls{margin-left:0;min-height:0;padding:12px;display:grid;grid-template-columns:1fr 1fr;gap:10px;align-items:end}
+    .data-timer{grid-column:1 / -1;margin:0;min-width:0;width:100%}
     .ctrl{min-width:0}
     .ctrl:first-child{grid-column:1 / -1}
     .ctrl label{font-size:12px}
@@ -267,6 +276,7 @@
   }
   @media(max-width:520px){
     .controls{grid-template-columns:1fr}
+    .data-timer-meta{grid-template-columns:1fr}
     .ctrl:first-child{grid-column:auto}
     .side-nav{grid-template-columns:1fr 1fr}
     .chartcard{padding-left:4px;padding-right:4px}
@@ -340,6 +350,18 @@
     <input id="spotOverride" type="number" placeholder="auto" step="0.01">
   </div>
   <button id="run">×—×©×‘ GEX â†»</button>
+  <div class="data-timer" id="dataTimer" aria-live="polite">
+    <div class="data-timer-top">
+      <span class="data-timer-title">Data Check</span>
+      <span class="data-timer-count" id="dataTimerCountdown">--:--</span>
+    </div>
+    <div class="data-timer-meta">
+      <span>Data as of <b id="dataTimerAsof">--</b></span>
+      <span>Spot <b id="dataTimerSpot">--</b></span>
+      <span>Loaded <b id="dataTimerLoaded">--</b></span>
+      <span>Status <b id="dataTimerStatus">Waiting</b></span>
+    </div>
+  </div>
 </div>
 
 <main>
@@ -2200,7 +2222,8 @@ document.querySelectorAll('[data-edge-sigma]').forEach(btn=>{
 
 // ---------- Data loading + auto-refresh ----------
 // ×ž×•×©×š ×ž×—×“×© ××ª cboe_data.json (×©×ž×ª×¢×“×›×Ÿ ×¢"×™ fetch_cboe.py ×‘×¨×§×¢) ×•×ž×¨×¢× ×Ÿ ××ª ×”×ª×¦×•×’×”
-let _refreshTimer=null, _firstLoad=true, _loadingData=false;
+let _refreshTimer=null, _timerUiTimer=null, _firstLoad=true, _loadingData=false;
+let _nextRefreshAt=null, _lastFileLoadedAt=null;
 function dataUrl(){
   return 'cboe_data.json?t=' + Date.now();
 }
@@ -2209,12 +2232,42 @@ function fetchLiveData(url){
     .then(r=>r.ok?r.json():null)
     .catch(()=>null);
 }
+function getRefreshSeconds(){
+  return Math.max(0,+document.getElementById('autorefresh').value || 0);
+}
+function resetNextRefreshDeadline(){
+  const sec=getRefreshSeconds();
+  _nextRefreshAt = sec>0 ? Date.now()+sec*1000 : null;
+}
+function fmtCountdown(ms){
+  if(ms == null) return 'Paused';
+  const total=Math.max(0,Math.ceil(ms/1000));
+  return `${String(Math.floor(total/60)).padStart(2,'0')}:${String(total%60).padStart(2,'0')}`;
+}
+function fmtAsofShort(value){
+  if(!value) return '--';
+  const text=String(value);
+  const time=(text.match(/T(\d{2}:\d{2}:\d{2})/) || text.match(/(\d{2}:\d{2}:\d{2})/))?.[1];
+  return time ? `${time} ET` : text;
+}
+function updateDataTimer(){
+  const countdown=document.getElementById('dataTimerCountdown');
+  if(!countdown) return;
+  const sym=document.getElementById('symbol')?.value || window._lastR?.symbol || 'SPX';
+  const rec=REAL?.[sym];
+  countdown.textContent = _nextRefreshAt ? fmtCountdown(_nextRefreshAt-Date.now()) : 'Paused';
+  document.getElementById('dataTimerAsof').textContent = fmtAsofShort(rec?.asof || window._lastR?.asof);
+  document.getElementById('dataTimerSpot').textContent = rec?.spot ? fmtPrice(rec.spot) : (window._lastR?.spot ? fmtPrice(window._lastR.spot) : '--');
+  document.getElementById('dataTimerLoaded').textContent = _lastFileLoadedAt ? new Date(_lastFileLoadedAt).toLocaleTimeString('he-IL') : '--';
+  document.getElementById('dataTimerStatus').textContent = _loadingData ? 'Checking' : (getRefreshSeconds()>0 ? 'Auto' : 'Manual');
+}
 function loadData(thenRun){
   if(_loadingData) return Promise.resolve();
   _loadingData = true;
+  updateDataTimer();
   return fetchLiveData(dataUrl())
     .then(d=>d || fetchLiveData('https://raw.githubusercontent.com/danielbul1/matrix-gex/main/cboe_data.json?t='+Date.now()))
-    .then(d=>{ if(d){ REAL=d; } })
+    .then(d=>{ if(d){ REAL=d; _lastFileLoadedAt=Date.now(); } })
     .finally(()=>{
       if(_firstLoad){
         _firstLoad=false;
@@ -2224,13 +2277,17 @@ function loadData(thenRun){
         }
       }
       _loadingData = false;
+      resetNextRefreshDeadline();
       if(thenRun!==false) run();
+      updateDataTimer();
     });
 }
 function setupAutoRefresh(){
   if(_refreshTimer){ clearInterval(_refreshTimer); _refreshTimer=null; }
-  const sec=Math.max(5,+document.getElementById('autorefresh').value || 5);
+  const sec=getRefreshSeconds();
+  resetNextRefreshDeadline();
   if(sec>0){ _refreshTimer=setInterval(()=>loadData(true), sec*1000); }
+  updateDataTimer();
 }
 
 populateSymbols();
@@ -2238,6 +2295,7 @@ document.getElementById('symbol').value = 'SPX';
 document.getElementById('mode').value = 'full';
 document.getElementById('source').value = 'live';
 document.getElementById('autorefresh').value = '30';
+_timerUiTimer=setInterval(updateDataTimer,1000);
 loadData(true).then(setupAutoRefresh);
 </script>
 </body>
