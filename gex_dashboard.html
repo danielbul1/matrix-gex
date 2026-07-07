@@ -352,13 +352,13 @@
   <button id="run">×—×©×‘ GEX â†»</button>
   <div class="data-timer" id="dataTimer" aria-live="polite">
     <div class="data-timer-top">
-      <span class="data-timer-title">Data Check</span>
+      <span class="data-timer-title">Next Data Update</span>
       <span class="data-timer-count" id="dataTimerCountdown">--:--</span>
     </div>
     <div class="data-timer-meta">
       <span>Data as of <b id="dataTimerAsof">--</b></span>
       <span>Spot <b id="dataTimerSpot">--</b></span>
-      <span>Loaded <b id="dataTimerLoaded">--</b></span>
+      <span>Page check <b id="dataTimerLoaded">--</b></span>
       <span>Status <b id="dataTimerStatus">Waiting</b></span>
     </div>
   </div>
@@ -2223,7 +2223,8 @@ document.querySelectorAll('[data-edge-sigma]').forEach(btn=>{
 // ---------- Data loading + auto-refresh ----------
 // ×ž×•×©×š ×ž×—×“×© ××ª cboe_data.json (×©×ž×ª×¢×“×›×Ÿ ×¢"×™ fetch_cboe.py ×‘×¨×§×¢) ×•×ž×¨×¢× ×Ÿ ××ª ×”×ª×¦×•×’×”
 let _refreshTimer=null, _timerUiTimer=null, _firstLoad=true, _loadingData=false;
-let _nextRefreshAt=null, _lastFileLoadedAt=null;
+let _lastFileLoadedAt=null;
+const DATA_UPDATE_INTERVAL_MS = 5*60*1000;
 function dataUrl(){
   return 'cboe_data.json?t=' + Date.now();
 }
@@ -2235,14 +2236,17 @@ function fetchLiveData(url){
 function getRefreshSeconds(){
   return Math.max(0,+document.getElementById('autorefresh').value || 0);
 }
-function resetNextRefreshDeadline(){
-  const sec=getRefreshSeconds();
-  _nextRefreshAt = sec>0 ? Date.now()+sec*1000 : null;
-}
 function fmtCountdown(ms){
   if(ms == null) return 'Paused';
   const total=Math.max(0,Math.ceil(ms/1000));
   return `${String(Math.floor(total/60)).padStart(2,'0')}:${String(total%60).padStart(2,'0')}`;
+}
+function dataAsofToMs(value){
+  if(!value) return null;
+  const text=String(value);
+  const zoned = /Z$|[+-]\d{2}:?\d{2}$/.test(text) ? text : `${text}-04:00`;
+  const parsed=Date.parse(zoned);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 function fmtAsofShort(value){
   if(!value) return '--';
@@ -2255,11 +2259,13 @@ function updateDataTimer(){
   if(!countdown) return;
   const sym=document.getElementById('symbol')?.value || window._lastR?.symbol || 'SPX';
   const rec=REAL?.[sym];
-  countdown.textContent = _nextRefreshAt ? fmtCountdown(_nextRefreshAt-Date.now()) : 'Paused';
+  const asofMs=dataAsofToMs(rec?.asof || window._lastR?.asof);
+  const nextDataAt=asofMs==null ? null : asofMs+DATA_UPDATE_INTERVAL_MS;
+  countdown.textContent = nextDataAt ? fmtCountdown(nextDataAt-Date.now()) : 'Waiting';
   document.getElementById('dataTimerAsof').textContent = fmtAsofShort(rec?.asof || window._lastR?.asof);
   document.getElementById('dataTimerSpot').textContent = rec?.spot ? fmtPrice(rec.spot) : (window._lastR?.spot ? fmtPrice(window._lastR.spot) : '--');
   document.getElementById('dataTimerLoaded').textContent = _lastFileLoadedAt ? new Date(_lastFileLoadedAt).toLocaleTimeString('he-IL') : '--';
-  document.getElementById('dataTimerStatus').textContent = _loadingData ? 'Checking' : (getRefreshSeconds()>0 ? 'Auto' : 'Manual');
+  document.getElementById('dataTimerStatus').textContent = _loadingData ? 'Checking' : (nextDataAt && Date.now()>nextDataAt ? 'Due' : 'Auto');
 }
 function loadData(thenRun){
   if(_loadingData) return Promise.resolve();
@@ -2277,7 +2283,6 @@ function loadData(thenRun){
         }
       }
       _loadingData = false;
-      resetNextRefreshDeadline();
       if(thenRun!==false) run();
       updateDataTimer();
     });
@@ -2285,7 +2290,6 @@ function loadData(thenRun){
 function setupAutoRefresh(){
   if(_refreshTimer){ clearInterval(_refreshTimer); _refreshTimer=null; }
   const sec=getRefreshSeconds();
-  resetNextRefreshDeadline();
   if(sec>0){ _refreshTimer=setInterval(()=>loadData(true), sec*1000); }
   updateDataTimer();
 }
