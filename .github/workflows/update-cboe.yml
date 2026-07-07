@@ -8,8 +8,7 @@ on:
       - "fetch_cboe.py"
       - ".github/workflows/update-cboe.yml"
   schedule:
-    - cron: "1-59/5 13-20 * * 1-5"
-    - cron: "17,47 0-12,21-23 * * 1-5"
+    - cron: "2,17,32,47 13-20 * * 1-5"
 
 permissions:
   contents: write
@@ -21,6 +20,7 @@ concurrency:
 jobs:
   update:
     runs-on: ubuntu-latest
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
         with:
@@ -31,13 +31,21 @@ jobs:
           python-version: "3.12"
 
       - name: Fetch CBOE data
-        run: python fetch_cboe.py
-
-      - name: Commit updated data
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add cboe_data.json
-          git diff --cached --quiet || git commit -m "Update CBOE data"
-          git pull --rebase origin main
-          git push
+          end=$((SECONDS + 2100))
+          while [ "$SECONDS" -lt "$end" ]; do
+            now_utc=$(date -u +%H%M)
+            python fetch_cboe.py || true
+            git add cboe_data.json
+            if ! git diff --cached --quiet; then
+              git commit -m "Update CBOE data"
+              git pull --rebase origin main
+              git push
+            fi
+            if [ "$now_utc" -lt 1325 ] || [ "$now_utc" -gt 2015 ]; then
+              break
+            fi
+            sleep 300
+          done
