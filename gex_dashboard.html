@@ -221,6 +221,7 @@
                  box-shadow:0 12px 30px rgba(0,0,0,.45);pointer-events:none}
   .chart-tooltip .tt-title{font-weight:800;color:#fff;margin-bottom:5px}
   .chart-tooltip .tt-row{display:flex;justify-content:space-between;gap:18px}
+  .chart-tooltip .spy-row{margin-top:5px;padding-top:5px;border-top:1px solid #3b3b3b}
   .chart-tooltip .pos{color:#22aaf2;font-weight:800}
   .chart-tooltip .neg{color:#ff3b2f;font-weight:800}
   .chart-crosshair-x{position:absolute;top:0;bottom:0;display:none;border-left:1px dashed rgba(255,255,255,.55);
@@ -793,6 +794,19 @@ function fmtMoney(n){
   if(a>=1e6) return `${sign}$${(a/1e6).toFixed(2)} M`;
   if(a>=1e3) return `${sign}$${(a/1e3).toFixed(2)} K`;
   return `${sign}$${a.toFixed(0)}`;
+}
+function getReferenceSpot(sym){
+  const liveSpot = Number(REAL?.[sym]?.spot);
+  if(Number.isFinite(liveSpot) && liveSpot > 0) return liveSpot;
+  const configuredSpot = Number(SYMBOLS?.[sym]?.spot);
+  return Number.isFinite(configuredSpot) && configuredSpot > 0 ? configuredSpot : null;
+}
+function spyPriceFromSpxStrike(strike,R){
+  if(R?.symbol !== 'SPX') return null;
+  const spxSpot = Number(R.spot) || getReferenceSpot('SPX');
+  const spySpot = getReferenceSpot('SPY');
+  if(!Number.isFinite(strike) || !spxSpot || !spySpot) return null;
+  return strike * (spySpot / spxSpot);
 }
 function esc(v){
   return String(v).replace(/[&<>"']/g,ch=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[ch]));
@@ -1762,6 +1776,7 @@ function showChartTooltip(ev){
   }
 
   const s=hit.s;
+  const R=window._lastR;
   const active = Object.keys(METRICS).filter(m=>ACTIVE.has(m));
   const row = (label,value,cls='') => `<div class="tt-row"><span>${label}</span><span class="${cls}">${value}</span></div>`;
   const metricRows = active.map(m=>{
@@ -1774,9 +1789,12 @@ function showChartTooltip(ev){
     if(m==='power') return row('Power Zone',fmtNum(s.powerZone || 0));
     return '';
   }).join('');
+  const spyPrice = spyPriceFromSpxStrike(s.strike,R);
+  const spyRow = spyPrice == null ? '' : `<div class="tt-row spy-row"><span>SPY Price</span><span class="pos">${fmtPrice(spyPrice)}</span></div>`;
   tt.innerHTML = `
-    <div class="tt-title">${window._lastR?.symbol || ''} Strike ${fmtPrice(s.strike)}</div>
+    <div class="tt-title">${R?.symbol || ''} Strike ${fmtPrice(s.strike)}</div>
     ${metricRows || row('No metric selected','')}
+    ${spyRow}
   `;
   tt.style.display='block';
   cross.style.display='block';
