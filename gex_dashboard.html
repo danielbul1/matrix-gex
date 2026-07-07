@@ -2231,10 +2231,11 @@ document.querySelectorAll('[data-edge-sigma]').forEach(btn=>{
 // ---------- Data loading + auto-refresh ----------
 // ×ž×•×©×š ×ž×—×“×© ××ª cboe_data.json (×©×ž×ª×¢×“×›×Ÿ ×¢"×™ fetch_cboe.py ×‘×¨×§×¢) ×•×ž×¨×¢× ×Ÿ ××ª ×”×ª×¦×•×’×”
 let _refreshTimer=null, _timerUiTimer=null, _firstLoad=true, _loadingData=false;
-let _lastFileLoadedAt=null, _lastLoadOk=false;
+let _lastFileLoadedAt=null, _lastLoadOk=false, _lastTripityRetryAt=0;
 let _lastDataSource='Waiting';
 const MATRIX_SPX_QUOTE_URL = 'https://api.trytripity.site/api/matrix/spx-quote';
 const MATRIX_CBOE_DATA_URL = 'https://api.trytripity.site/api/matrix/cboe-data';
+const TRIPITY_RETRY_MS = 15000;
 function dataUrl(){
   return 'cboe_data.json?t=' + Date.now();
 }
@@ -2262,6 +2263,10 @@ function validCboeData(d){
 }
 function fetchCboeDataWithSource(url, sourceName){
   return fetchLiveData(url).then(d=>validCboeData(d) ? {data:d, source:sourceName} : null);
+}
+function fetchFallbackCboeData(){
+  return fetchCboeDataWithSource(dataUrl(), 'Local')
+    .then(result=>result || fetchCboeDataWithSource('https://raw.githubusercontent.com/danielbul1/matrix-gex/main/cboe_data.json?t='+Date.now(), 'GitHub'));
 }
 function getRefreshSeconds(){
   return Math.max(0,+document.getElementById('autorefresh').value || 0);
@@ -2316,10 +2321,14 @@ function loadData(thenRun){
   _loadingData = true;
   updateDataTimer();
   return fetchCboeDataWithSource(MATRIX_CBOE_DATA_URL + '?t=' + Date.now(), 'Tripity')
-    .then(result=>result || fetchCboeDataWithSource(dataUrl(), 'Local'))
-    .then(result=>result || fetchCboeDataWithSource('https://raw.githubusercontent.com/danielbul1/matrix-gex/main/cboe_data.json?t='+Date.now(), 'GitHub'))
     .then(result=>{
-      _lastLoadOk=!!result;
+      if(result || !validCboeData(REAL)) return result;
+      _lastDataSource = 'Tripity retry';
+      return null;
+    })
+    .then(result=>result || (validCboeData(REAL) ? null : fetchFallbackCboeData()))
+    .then(result=>{
+      _lastLoadOk=!!result || validCboeData(REAL);
       if(result){ REAL=result.data; _lastDataSource=result.source; _lastFileLoadedAt=Date.now(); }
     })
     .then(()=>fetchMatrixSpXQuote())
@@ -2334,6 +2343,10 @@ function loadData(thenRun){
       _loadingData = false;
       if(thenRun!==false) run();
       updateDataTimer();
+      if(_lastDataSource==='Tripity retry' && Date.now()-_lastTripityRetryAt>=TRIPITY_RETRY_MS){
+        _lastTripityRetryAt=Date.now();
+        setTimeout(()=>loadData(true), TRIPITY_RETRY_MS);
+      }
     });
 }
 function setupAutoRefresh(){
