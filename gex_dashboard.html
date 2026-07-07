@@ -303,7 +303,7 @@
     <a href="#" data-view="net-flow">Net Flow</a>
     <a href="#" data-view="dark-pool-levels">Dark Pool Levels</a>
     <a href="#" data-view="max-pain">Max Pain</a>
-    <a href="#" data-view="edge">Edge</a>
+    <a href="#" data-view="edge">Dealer Pressure</a>
   </nav>
   <div class="side-disclaimer">Disclaimer</div>
   <h1>ðŸ“Š GEX Analytics</h1>
@@ -489,10 +489,10 @@
     <article class="feature-card edge-card">
       <div class="edge-top">
         <div class="edge-title">
-          <h2>Edge</h2>
-          <p>GEX, Vanna and Charm aligned by strike. All three panels use the same expirations, strike range and current-price marker.</p>
+          <h2>Dealer Pressure</h2>
+          <p>Dynamic pressure map from GEX, Vanna and Charm. It highlights pin zones, support/resistance pressure and acceleration pockets around spot.</p>
         </div>
-        <div class="range-control edge-range" role="group" aria-label="Edge strike display range">
+        <div class="range-control edge-range" role="group" aria-label="Dealer pressure strike display range">
           <span class="range-label">Range</span>
           <button type="button" class="range-btn edge-range-btn" data-edge-sigma="1">1&sigma;</button>
           <button type="button" class="range-btn edge-range-btn active" data-edge-sigma="2">2&sigma;</button>
@@ -1874,7 +1874,7 @@ function hideChartTooltip(){
   document.getElementById('chartCrosshairX').style.display='none';
 }
 
-// ---------- Edge: synchronized GEX / Vanna / Charm panels ----------
+// ---------- Dealer Pressure: GEX / Vanna / Charm pressure map ----------
 function edgeVisibleStrikes(R){
   let data=[...R.strikes];
   if(Number.isFinite(DISPLAY_SIGMA) && R.expectedMove>0){
@@ -1886,121 +1886,146 @@ function edgeVisibleStrikes(R){
   }
   return data.sort((a,b)=>a.strike-b.strike);
 }
+function buildDealerPressureData(R){
+  const data=edgeVisibleStrikes(R);
+  const maxG=Math.max(...data.map(s=>Math.abs(s.netGex||0)),1);
+  const maxV=Math.max(...data.map(s=>Math.abs(s.netVex||0)),1);
+  const maxC=Math.max(...data.map(s=>Math.abs(s.netCharm||0)),1);
+  const maxAG=Math.max(...data.map(s=>Math.abs(s.callGex||0)+Math.abs(s.putGex||0)),1);
+  const rows=data.map((s,i)=>{
+    const g=(s.netGex||0)/maxG;
+    const v=(s.netVex||0)/maxV;
+    const c=(s.netCharm||0)/maxC;
+    const pressure=.62*g+.23*v+.15*c;
+    const ag=(Math.abs(s.callGex||0)+Math.abs(s.putGex||0))/maxAG;
+    return {...s,gexN:g,vannaN:v,charmN:c,pressure,ag,idx:i};
+  });
+  rows.forEach((row,i)=>{
+    const prev=rows[Math.max(0,i-1)].pressure;
+    const next=rows[Math.min(rows.length-1,i+1)].pressure;
+    row.slope=(next-prev)/2;
+    const nearSpot=R.expectedMove>0 ? Math.abs(row.strike-R.spot)/R.expectedMove : Math.abs(row.strike-R.spot)/(R.spot*.01);
+    if(Math.abs(row.pressure)<.18 && row.ag>.45 && nearSpot<.9) row.zone='Pin';
+    else if(Math.abs(row.slope)>.28 && Math.abs(row.pressure)>.25) row.zone='Acceleration';
+    else if(row.strike<R.spot && row.pressure>0) row.zone='Support';
+    else if(row.strike>R.spot && row.pressure<0) row.zone='Resistance';
+    else row.zone=row.pressure>=0?'Stabilizing':'Fragile';
+  });
+  return rows;
+}
+function pressureColor(row,alpha=1){
+  if(row.zone==='Pin') return `rgba(255,193,7,${alpha})`;
+  if(row.zone==='Acceleration') return row.pressure>=0 ? `rgba(34,170,242,${alpha})` : `rgba(255,42,23,${alpha})`;
+  if(row.zone==='Support') return `rgba(23,182,95,${alpha})`;
+  if(row.zone==='Resistance') return `rgba(255,126,50,${alpha})`;
+  return row.pressure>=0 ? `rgba(34,170,242,${alpha})` : `rgba(255,42,23,${alpha})`;
+}
 function drawEdge(R){
   const cv=document.getElementById('edgeChart');
   if(!cv) return;
-  const data=edgeVisibleStrikes(R);
+  const data=buildDealerPressureData(R);
   if(!data.length) return;
   const dpr=window.devicePixelRatio||1;
   const W=cv.clientWidth;
   const mobile=W<760;
-  const H=mobile?990:Math.max(470,Math.min(560,window.innerHeight-205));
+  const H=mobile?760:Math.max(520,Math.min(650,window.innerHeight-185));
   cv.width=W*dpr; cv.height=H*dpr; cv.style.height=H+'px';
   const ctx=cv.getContext('2d');
   ctx.setTransform(dpr,0,0,dpr,0,0);
   ctx.clearRect(0,0,W,H);
   ctx.fillStyle='#202020'; ctx.fillRect(0,0,W,H);
 
-  const outer=mobile?4:8;
-  const gap=mobile?12:14;
-  const panelW=mobile?W-outer*2:(W-outer*2-gap*2)/3;
-  const panelH=mobile?(H-outer*2-gap*2)/3:H-outer*2;
-  const panels=[
-    {key:'netGex',label:'Net GEX',color:'#22b8ff'},
-    {key:'netVex',label:'Net Vanna',color:'#ab7df6'},
-    {key:'netCharm',label:'Net Charm',color:'#ffc107'}
+  const padL=mobile?54:66, padR=mobile?18:28, padT=mobile?82:90, padB=mobile?86:92;
+  const plotW=W-padL-padR, plotH=H-padT-padB;
+  const slot=plotW/data.length;
+  const xCenter=i=>padL+slot*(i+.5);
+  const y=v=>padT+(1-v)/2*plotH;
+  const zero=y(0);
+
+  ctx.fillStyle='#f0f0f0';
+  ctx.font=(mobile?'900 16px':'900 19px')+' Segoe UI';
+  ctx.textAlign='left'; ctx.textBaseline='top';
+  ctx.fillText('Dealer Pressure Map',padL,18);
+  ctx.fillStyle='#aeb3b8';
+  ctx.font=(mobile?'700 10px':'700 12px')+' Segoe UI';
+  ctx.fillText('Combined score: GEX 62% + Vanna 23% + Charm 15% | zones are directional pressure, not reversal promises.',padL,44);
+  const legend=[
+    ['Pin','#ffc107'],['Support','#17b65f'],['Resistance','#ff7e32'],['Acceleration +','#22aaf2'],['Acceleration -','#ff2a17']
   ];
-  const hitPanels=[];
-
-  panels.forEach((panel,index)=>{
-    const panelX=mobile?outer:outer+index*(panelW+gap);
-    const panelY=mobile?outer+index*(panelH+gap):outer;
-    ctx.fillStyle='#191919';
-    ctx.fillRect(panelX,panelY,panelW,panelH);
-    ctx.strokeStyle='#303030';
-    ctx.lineWidth=1;
-    ctx.strokeRect(panelX+.5,panelY+.5,panelW-1,panelH-1);
-
-    const total=data.reduce((sum,s)=>sum+(s[panel.key]||0),0);
-    ctx.fillStyle=panel.color;
-    ctx.font=(mobile?'900 14px':'900 15px')+' Segoe UI';
-    ctx.textAlign='left';
-    ctx.textBaseline='top';
-    ctx.fillText(panel.label,panelX+14,panelY+13);
-    ctx.fillStyle=total>=0?'#22aaf2':'#ff2a17';
-    ctx.font=(mobile?'900 17px':'900 18px')+' Segoe UI';
-    ctx.textAlign='right';
-    ctx.fillText(fmtNum(total),panelX+panelW-14,panelY+11);
-
-    const plotLeft=panelX+(mobile?54:58);
-    const plotRight=panelX+panelW-13;
-    const top=panelY+55;
-    const bottom=panelY+panelH-54;
-    const plotW=plotRight-plotLeft;
-    const plotH=bottom-top;
-    const slot=plotW/data.length;
-    const xCenter=i=>plotLeft+slot*(i+.5);
-    const maxAbs=Math.max(...data.map(s=>Math.abs(s[panel.key]||0)),1)*1.08;
-    const y=v=>top+(maxAbs-v)/(maxAbs*2)*plotH;
-    const zero=y(0);
-    for(let t=0;t<=4;t++){
-      const yy=top+t*plotH/4;
-      const value=maxAbs-(t/4)*maxAbs*2;
-      ctx.strokeStyle=t===2?'rgba(255,255,255,.18)':'rgba(255,255,255,.04)';
-      ctx.lineWidth=t===2?1.2:1;
-      ctx.beginPath(); ctx.moveTo(plotLeft,yy); ctx.lineTo(plotRight,yy); ctx.stroke();
-      ctx.fillStyle='#aeb3b8'; ctx.font=(mobile?'bold 9px':'bold 10px')+' Segoe UI';
-      ctx.textAlign='right'; ctx.textBaseline='middle';
-      ctx.fillText(fmtAxis(value),plotLeft-7,yy);
-    }
-    const bw=Math.max(2,Math.min(slot*.68,26));
-    data.forEach((s,i)=>{
-      const value=s[panel.key]||0;
-      const yy=y(value);
-      ctx.fillStyle=value>=0?'#22aaf2':'#ff2a17';
-      ctx.fillRect(xCenter(i)-bw/2,Math.min(yy,zero),bw,Math.max(1,Math.abs(yy-zero)));
-    });
-
-    const xAt=price=>{
-      if(price<=data[0].strike) return plotLeft;
-      if(price>=data[data.length-1].strike) return plotRight;
-      for(let i=0;i<data.length-1;i++){
-        if(price>=data[i].strike&&price<=data[i+1].strike){
-          return xCenter(i)+(price-data[i].strike)/(data[i+1].strike-data[i].strike)*slot;
-        }
-      }
-      return plotLeft+plotW/2;
-    };
-    const px=xAt(R.spot);
-    ctx.strokeStyle='#d8921f';
-    ctx.lineWidth=2.5;
-    ctx.beginPath(); ctx.moveTo(px,top-3); ctx.lineTo(px,bottom); ctx.stroke();
-    ctx.fillStyle='#ffd28a';
-    ctx.font='900 10px Segoe UI';
-    ctx.textAlign=px>panelX+panelW-95?'right':'left';
-    ctx.textBaseline='bottom';
-    ctx.fillText('Price '+fmtPrice(R.spot),px+(px>panelX+panelW-95?-5:5),top-5);
-
-    const labelStep=Math.max(1,Math.ceil(data.length/(mobile?12:8)));
-    ctx.fillStyle='#aeb3b8';
-    ctx.font='bold 9px Segoe UI';
-    data.forEach((s,i)=>{
-      if(i%labelStep&&i!==data.length-1) return;
-      ctx.save();
-      ctx.translate(xCenter(i),bottom+8);
-      ctx.rotate(-Math.PI/2);
-      ctx.textAlign='right';
-      ctx.textBaseline='middle';
-      ctx.fillText(fmtPrice(s.strike),0,0);
-      ctx.restore();
-    });
-    ctx.fillStyle='#aeb3b8';
-    ctx.font='bold 10px Segoe UI';
-    ctx.textAlign='center';
-    ctx.fillText('Strike',plotLeft+plotW/2,panelY+panelH-8);
-    hitPanels.push({x:panelX,y:panelY,w:panelW,h:panelH,plotLeft,plotRight,top,bottom,slot,data});
+  let lx=W-padR-520;
+  if(mobile) lx=padL;
+  legend.forEach(([label,color],i)=>{
+    const x=lx+i*(mobile?92:102), y0=mobile?62:24;
+    ctx.fillStyle=color; ctx.fillRect(x,y0,10,10);
+    ctx.fillStyle='#cfd4d8'; ctx.font='800 10px Segoe UI'; ctx.textAlign='left'; ctx.fillText(label,x+15,y0-2);
   });
-  cv._edgePanels=hitPanels;
+
+  for(let t=0;t<=4;t++){
+    const yy=padT+t*plotH/4;
+    const value=1-(t/4)*2;
+    ctx.strokeStyle=t===2?'rgba(255,255,255,.18)':'rgba(255,255,255,.045)';
+    ctx.lineWidth=t===2?1.3:1;
+    ctx.beginPath(); ctx.moveTo(padL,yy); ctx.lineTo(W-padR,yy); ctx.stroke();
+    ctx.fillStyle='#aeb3b8'; ctx.font='bold 10px Segoe UI'; ctx.textAlign='right'; ctx.textBaseline='middle';
+    ctx.fillText(value.toFixed(1),padL-8,yy);
+  }
+
+  const bw=Math.max(2,Math.min(slot*.72,24));
+  data.forEach((row,i)=>{
+    const yy=y(row.pressure);
+    const alpha=.42+Math.min(.55,Math.abs(row.pressure)*.55+row.ag*.18);
+    if(row.zone==='Pin'){
+      ctx.fillStyle='rgba(255,193,7,.10)';
+      ctx.fillRect(xCenter(i)-slot/2,padT,slot,plotH);
+    }
+    ctx.fillStyle=pressureColor(row,alpha);
+    ctx.fillRect(xCenter(i)-bw/2,Math.min(yy,zero),bw,Math.max(2,Math.abs(yy-zero)));
+    if(row.zone==='Acceleration'){
+      ctx.strokeStyle=pressureColor(row,.95);
+      ctx.lineWidth=2;
+      ctx.beginPath(); ctx.moveTo(xCenter(i),padT+4); ctx.lineTo(xCenter(i),padT+18); ctx.stroke();
+    }
+  });
+
+  const xAt=price=>{
+    if(price<=data[0].strike) return padL;
+    if(price>=data[data.length-1].strike) return W-padR;
+    for(let i=0;i<data.length-1;i++){
+      if(price>=data[i].strike&&price<=data[i+1].strike){
+        return xCenter(i)+(price-data[i].strike)/(data[i+1].strike-data[i].strike)*slot;
+      }
+    }
+    return padL+plotW/2;
+  };
+  const px=xAt(R.spot);
+  ctx.strokeStyle='#d8921f'; ctx.lineWidth=2.5;
+  ctx.beginPath(); ctx.moveTo(px,padT-8); ctx.lineTo(px,padT+plotH); ctx.stroke();
+  ctx.fillStyle='#ffb12b'; ctx.font='900 11px Segoe UI'; ctx.textAlign=px>W-135?'right':'left'; ctx.textBaseline='bottom';
+  ctx.fillText('Price '+fmtPrice(R.spot),px+(px>W-135?-6:6),padT-10);
+
+  const labelStep=Math.max(1,Math.ceil(data.length/(mobile?18:30)));
+  ctx.fillStyle='#aeb3b8'; ctx.font='bold 9px Segoe UI';
+  data.forEach((row,i)=>{
+    if(i%labelStep&&i!==data.length-1) return;
+    ctx.save(); ctx.translate(xCenter(i),padT+plotH+12); ctx.rotate(-Math.PI/2);
+    ctx.textAlign='right'; ctx.textBaseline='middle'; ctx.fillText(fmtPrice(row.strike),0,0); ctx.restore();
+  });
+  ctx.fillStyle='#aeb3b8'; ctx.font='bold 11px Segoe UI'; ctx.textAlign='center';
+  ctx.fillText('Strike',padL+plotW/2,H-12);
+  ctx.save(); ctx.translate(16,padT+plotH/2); ctx.rotate(-Math.PI/2); ctx.fillText('Dealer Pressure Score',0,0); ctx.restore();
+
+  const strongest=[...data].sort((a,b)=>Math.abs(b.pressure)-Math.abs(a.pressure)).slice(0,4);
+  ctx.fillStyle='rgba(20,20,20,.72)';
+  ctx.fillRect(W-padR-260,padT+12,238,92);
+  ctx.strokeStyle='rgba(255,255,255,.12)'; ctx.strokeRect(W-padR-260+.5,padT+12.5,237,91);
+  ctx.fillStyle='#fff'; ctx.font='900 12px Segoe UI'; ctx.textAlign='left'; ctx.fillText('Active Pressure Nodes',W-padR-248,padT+24);
+  strongest.forEach((row,i)=>{
+    ctx.fillStyle=pressureColor(row,.95);
+    ctx.fillText(`${fmtPrice(row.strike)}  ${row.zone}`,W-padR-248,padT+44+i*15);
+    ctx.fillStyle='#aeb3b8'; ctx.textAlign='right'; ctx.fillText(row.pressure.toFixed(2),W-padR-34,padT+44+i*15); ctx.textAlign='left';
+  });
+
+  cv._edgePanels=[{x:padL,y:padT,w:plotW,h:plotH,plotLeft:padL,plotRight:W-padR,top:padT,bottom:padT+plotH,slot,data}];
 }
 function showEdgeTooltip(ev){
   const cv=document.getElementById('edgeChart');
@@ -2015,15 +2040,17 @@ function showEdgeTooltip(ev){
   const index=Math.max(0,Math.min(panel.data.length-1,Math.floor((x-panel.plotLeft)/panel.slot)));
   const s=panel.data[index];
   const valueRow=(label,value,color)=>`<div class="tt-row"><span>${label}</span><span style="color:${color};font-weight:900">${fmtNum(value)}</span></div>`;
-  const metricBlock=(label,callValue,putValue,netValue)=>`
-    <div class="tt-section">${label}</div>
-    ${valueRow('Call',callValue,callValue>=0?'#22aaf2':'#ff2a17')}
-    ${valueRow('Put',putValue,putValue>=0?'#22aaf2':'#ff2a17')}
-    ${valueRow('Net',netValue,netValue>=0?'#22aaf2':'#ff2a17')}`;
-  tt.innerHTML=`<div class="tt-title">${window._lastR?.symbol||''} Strike ${fmtPrice(s.strike)}</div>
-    ${metricBlock('GEX',s.callGex,s.putGex,s.netGex)}
-    ${metricBlock('Vanna',s.callVex,s.putVex,s.netVex)}
-    ${metricBlock('Charm',s.callCharm,s.putCharm,s.netCharm)}`;
+  tt.innerHTML=`<div class="tt-title">${window._lastR?.symbol||''} Strike ${fmtPrice(s.strike)} · ${s.zone}</div>
+    <div class="tt-row"><span>Pressure Score</span><span style="color:${pressureColor(s,.95)};font-weight:900">${s.pressure.toFixed(2)}</span></div>
+    <div class="tt-row"><span>Pressure Slope</span><span>${s.slope.toFixed(2)}</span></div>
+    <div class="tt-section">Drivers</div>
+    <div class="tt-row"><span>GEX weight</span><span>${s.gexN.toFixed(2)}</span></div>
+    <div class="tt-row"><span>Vanna weight</span><span>${s.vannaN.toFixed(2)}</span></div>
+    <div class="tt-row"><span>Charm weight</span><span>${s.charmN.toFixed(2)}</span></div>
+    <div class="tt-section">Raw Exposure</div>
+    ${valueRow('Net GEX',s.netGex,s.netGex>=0?'#22aaf2':'#ff2a17')}
+    ${valueRow('Net Vanna',s.netVex,s.netVex>=0?'#22aaf2':'#ff2a17')}
+    ${valueRow('Net Charm',s.netCharm,s.netCharm>=0?'#22aaf2':'#ff2a17')}`;
   tt.style.display='block';
   panels.forEach((targetPanel,i)=>{
     const cross=document.getElementById(`edgeCrosshair${i}`);
