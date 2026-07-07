@@ -200,6 +200,17 @@
   .edge-title h2{font-size:21px;margin:0 0 6px;color:#f0f0f0}
   .edge-title p{font-size:13px;line-height:1.5;margin:0;color:var(--muted);max-width:820px}
   .edge-range{border-right:0;padding-right:0;margin-right:0;flex:0 0 auto}
+  .scenario-panel{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin:0 0 12px}
+  .scenario-card{background:#191919;border:1px solid #313131;border-left:4px solid #555;border-radius:7px;padding:10px 11px;min-height:82px}
+  .scenario-card.pin{border-left-color:#ffc107}
+  .scenario-card.support{border-left-color:#17b65f}
+  .scenario-card.resistance{border-left-color:#ff7e32}
+  .scenario-card.accel-up{border-left-color:#22aaf2}
+  .scenario-card.accel-down{border-left-color:#ff2a17}
+  .scenario-head{display:flex;justify-content:space-between;gap:8px;align-items:center;font-size:12px;font-weight:900;color:#fff;margin-bottom:7px}
+  .scenario-tag{font-size:10px;text-transform:uppercase;letter-spacing:.4px;color:#cfd4d8}
+  .scenario-meta{display:grid;grid-template-columns:1fr 1fr;gap:4px 9px;font-size:11px;color:#aeb3b8}
+  .scenario-meta b{color:#fff;font-weight:900}
   .edge-wrap{position:relative;overflow:hidden;background:#202020}
   .edge-tooltip{position:absolute;z-index:5;display:none;min-width:220px;background:rgba(18,18,18,.97);
                 border:1px solid #555;border-radius:7px;padding:10px 11px;color:#e7e7e7;font-size:12px;line-height:1.55;
@@ -284,6 +295,7 @@
     .edge-card{padding:14px 8px}
     .edge-top{display:block}
     .edge-range{margin-top:12px;width:max-content}
+    .scenario-panel{grid-template-columns:1fr 1fr}
   }
   @media(max-width:520px){
     .controls{grid-template-columns:1fr}
@@ -291,6 +303,7 @@
     .ctrl:first-child{grid-column:auto}
     .side-nav{grid-template-columns:1fr 1fr}
     .chartcard{padding-left:4px;padding-right:4px}
+    .scenario-panel{grid-template-columns:1fr}
     .watermark{font-size:34px}
   }
 </style>
@@ -500,6 +513,7 @@
           <button type="button" class="range-btn edge-range-btn" data-edge-sigma="all">All</button>
         </div>
       </div>
+      <div class="scenario-panel" id="dealerScenarioPanel" aria-live="polite"></div>
       <div class="edge-wrap">
         <div class="edge-crosshair" id="edgeCrosshair0"></div>
         <div class="edge-crosshair" id="edgeCrosshair1"></div>
@@ -820,6 +834,61 @@ function calcGEX(chain, mode){
 }
 function avg(a){return a.length?a.reduce((x,y)=>x+y,0)/a.length:0;}
 
+function scenarioStepForSymbol(symbol){
+  if(symbol==='SPX') return 10;
+  if(symbol==='NDX') return 50;
+  const step=SYMBOLS[symbol]?.step || 5;
+  return Math.max(step,1);
+}
+function rebuildChainAtSpot(chain, scenarioSpot){
+  const r = RISK_FREE[chain.market || "US"] || 0.05;
+  return {
+    ...chain,
+    spot: scenarioSpot,
+    quotes: chain.quotes.map(q=>{
+      const iv = q.iv>0 ? q.iv : 0.2;
+      return {...q, g: calcGreeks(scenarioSpot,q.K,q.T || q.dte/365,iv,r,q.isCall)};
+    })
+  };
+}
+function classifyScenario(currentSpot, scenarioSpot, gexResult){
+  const delta=scenarioSpot-currentSpot;
+  const isAbove=delta>0;
+  const isBelow=delta<0;
+  const mag=Math.abs(gexResult.totalGex);
+  const gross=Math.abs(gexResult.totalCallGex)+Math.abs(gexResult.totalPutGex)||1;
+  const strength=mag/gross;
+  if(Math.abs(delta)<=scenarioStepForSymbol(gexResult.symbol)/2){
+    return {label:'Pin / Current', cls:'pin', pressure:'Balanced'};
+  }
+  if(gexResult.totalGex<0 && isAbove) return {label:'Acceleration Up', cls:'accel-up', pressure:'Buy pressure'};
+  if(gexResult.totalGex<0 && isBelow) return {label:'Acceleration Down', cls:'accel-down', pressure:'Sell pressure'};
+  if(gexResult.totalGex>0 && isBelow) return {label:'Support', cls:'support', pressure:'Dip-buy hedge'};
+  if(gexResult.totalGex>0 && isAbove) return {label:'Resistance', cls:'resistance', pressure:'Rally-sell hedge'};
+  return {label:strength<.04?'Chop':'Mixed', cls:'pin', pressure:'Mixed'};
+}
+function buildDealerScenarios(chain, mode){
+  const step=scenarioStepForSymbol(chain.symbol);
+  const base=Math.round(chain.spot/step)*step;
+  const offsets=[-5,-3,-1,0,1,3,5].map(x=>x*step);
+  return offsets.map(offset=>base+offset)
+    .filter((spot,i,arr)=>spot>0 && arr.indexOf(spot)===i)
+    .map(spot=>{
+      const scenarioR=calcGEX(rebuildChainAtSpot(chain,spot),mode);
+      const meta=classifyScenario(chain.spot,spot,scenarioR);
+      return {
+        spot,
+        delta:spot-chain.spot,
+        totalGex:scenarioR.totalGex,
+        regime:scenarioR.regime,
+        flip:scenarioR.flip,
+        callWall:scenarioR.callWall,
+        putWall:scenarioR.putWall,
+        ...meta,
+      };
+    });
+}
+
 // ---------- Formatting ----------
 function fmtNum(n){
   const a=Math.abs(n);
@@ -832,6 +901,10 @@ function fmtPrice(n){
   if(n >= 100) return n.toLocaleString(undefined,{maximumFractionDigits:0});
   if(n >= 10) return n.toLocaleString(undefined,{maximumFractionDigits:1});
   return n.toFixed(2);
+}
+function fmtMove(n){
+  const sign=n>=0?'+':'-';
+  return sign+fmtPrice(Math.abs(n));
 }
 function fmtMoney(n){
   const sign = n < 0 ? "-" : "";
@@ -1920,9 +1993,30 @@ function pressureColor(row,alpha=1){
   if(row.zone==='Resistance') return `rgba(255,126,50,${alpha})`;
   return row.pressure>=0 ? `rgba(34,170,242,${alpha})` : `rgba(255,42,23,${alpha})`;
 }
+function renderDealerScenarios(R){
+  const host=document.getElementById('dealerScenarioPanel');
+  if(!host) return;
+  const scenarios=R.dealerScenarios || [];
+  if(!scenarios.length){ host.innerHTML=''; return; }
+  host.innerHTML=scenarios.map(s=>`
+    <div class="scenario-card ${s.cls}">
+      <div class="scenario-head">
+        <span>${fmtPrice(s.spot)}</span>
+        <span class="scenario-tag">${s.label}</span>
+      </div>
+      <div class="scenario-meta">
+        <span>Move <b>${fmtMove(s.delta)}</b></span>
+        <span>Flow <b>${s.pressure}</b></span>
+        <span>GEX <b>${fmtNum(s.totalGex)}</b></span>
+        <span>Regime <b>${s.regime.replace('_',' ')}</b></span>
+      </div>
+    </div>
+  `).join('');
+}
 function drawEdge(R){
   const cv=document.getElementById('edgeChart');
   if(!cv) return;
+  renderDealerScenarios(R);
   const data=buildDealerPressureData(R);
   if(!data.length) return;
   const dpr=window.devicePixelRatio||1;
@@ -2157,6 +2251,7 @@ function run(){
   const maxPain = buildMaxPain(fullChain, selectedExpirations);
   const R = calcGEX(chain,mode);
   R.expectedMove = expectedMove;
+  R.dealerScenarios = buildDealerScenarios(chain,mode);
   R.optionsHeatMap = optionsHeatMap;
   R.netFlow = netFlow;
   R.darkPoolLevels = darkPoolLevels;
