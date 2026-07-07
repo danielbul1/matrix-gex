@@ -163,6 +163,12 @@
   .maxpain-top{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:8px}
   .maxpain-title h2{font-size:18px;margin:0 0 6px;color:#f0f0f0}
   .maxpain-title p{font-size:13px;line-height:1.5;margin:0;color:var(--muted);max-width:900px}
+  .maxpain-values{display:flex;gap:8px;align-items:stretch;flex-wrap:wrap;margin-top:10px}
+  .maxpain-value{min-width:128px;background:#191919;border:1px solid #343434;border-radius:7px;padding:8px 10px;
+                 box-shadow:inset 3px 0 0 var(--c,#ffc107)}
+  .maxpain-value .k{display:block;color:#9da3ad;font-size:10px;font-weight:900;text-transform:uppercase;margin-bottom:3px}
+  .maxpain-value .v{display:block;color:#f5f5f5;font-size:18px;font-weight:900;line-height:1}
+  .maxpain-value.spy .v{color:#22b8ff}
   .maxpain-legend{display:flex;gap:12px;align-items:center;flex-wrap:wrap;color:#d0d0d0;font-size:12px;font-weight:800}
   .maxpain-legend span{display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
   .maxpain-dot{width:11px;height:11px;border-radius:2px;display:inline-block}
@@ -424,6 +430,7 @@
         <div class="maxpain-title">
           <h2 id="maxPainTitle">Max Pain</h2>
           <p>Max Pain estimates the strike where option-holder payout is lowest at expiration. Use it as a reference zone, especially when current price is far from the Max Pain strike.</p>
+          <div class="maxpain-values" id="maxPainValues" aria-live="polite"></div>
         </div>
         <div class="maxpain-legend" id="maxPainLegend">
           <span><i class="maxpain-dot" style="background:#ff2a17"></i>Below Max Pain</span>
@@ -1301,9 +1308,30 @@ function buildMaxPain(chain, selectedExpirations){
   return {symbol:chain.symbol,spot:chain.spot,active,time,selectedExpirations:selected,expiries};
 }
 let maxPainView = 'chart';
+function renderMaxPainValues(R){
+  const host = document.getElementById('maxPainValues');
+  if(!host) return;
+  const maxPain = R?.maxPain?.active?.maxPain;
+  if(R?.maxPain?.symbol !== 'SPX' || maxPain == null){
+    host.innerHTML = '';
+    return;
+  }
+  const spyMaxPain = spyPriceFromSpxStrike(maxPain,R);
+  host.innerHTML = `
+    <div class="maxpain-value" style="--c:#ffc107">
+      <span class="k">Max Pain SPX</span>
+      <span class="v">${fmtPrice(maxPain)}</span>
+    </div>
+    ${spyMaxPain == null ? '' : `<div class="maxpain-value spy" style="--c:#22b8ff">
+      <span class="k">Max Pain SPY</span>
+      <span class="v">${fmtPrice(spyMaxPain)}</span>
+    </div>`}
+  `;
+}
 function drawMaxPain(R){
   const cv = document.getElementById('maxPainChart');
   if(!cv || !R.maxPain) return;
+  renderMaxPainValues(R);
   if(maxPainView === 'time') return drawMaxPainTime(R);
   const ctx = cv.getContext('2d');
   const dpr = window.devicePixelRatio||1;
@@ -1381,6 +1409,7 @@ function drawMaxPain(R){
 }
 function drawMaxPainTime(R){
   const cv = document.getElementById('maxPainChart');
+  renderMaxPainValues(R);
   const ctx = cv.getContext('2d');
   const dpr = window.devicePixelRatio||1;
   const W = cv.clientWidth;
