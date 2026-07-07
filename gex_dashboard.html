@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>GEX Analytics Dashboard</title>
+<script src="https://unpkg.com/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js"></script>
 <style>
   :root{
     --bg:#171717; --panel:#1f1f1f; --panel2:#303030; --border:#252525;
@@ -202,8 +203,11 @@
   .edge-range{border-right:0;padding-right:0;margin-right:0;flex:0 0 auto}
   .dealer-chart-grid{display:grid;grid-template-columns:minmax(0,1.55fr) minmax(300px,.65fr);gap:12px;margin:0 0 12px}
   .tv-card,.market-read-card{background:#191919;border:1px solid #303030;border-radius:8px;overflow:hidden}
-  .tv-card{min-height:430px}
-  .tradingview-widget-container{height:430px;width:100%}
+  .tv-card{min-height:430px;position:relative}
+  .matrix-price-chart{height:430px;width:100%}
+  .matrix-price-note{position:absolute;left:12px;bottom:9px;z-index:2;background:rgba(18,18,18,.78);
+                     border:1px solid #373737;border-radius:5px;padding:5px 8px;color:#aeb3b8;
+                     font-size:11px;font-weight:800;pointer-events:none}
   .market-read-card{padding:14px}
   .market-read-title{display:flex;justify-content:space-between;gap:10px;align-items:flex-start;margin-bottom:12px}
   .market-read-title h3{margin:0;font-size:17px;color:#fff}
@@ -312,7 +316,7 @@
     .edge-top{display:block}
     .edge-range{margin-top:12px;width:max-content}
     .dealer-chart-grid{grid-template-columns:1fr}
-    .tv-card,.tradingview-widget-container{min-height:360px;height:360px}
+    .tv-card,.matrix-price-chart{min-height:360px;height:360px}
     .scenario-panel{grid-template-columns:1fr 1fr}
   }
   @media(max-width:520px){
@@ -533,24 +537,8 @@
       </div>
       <div class="dealer-chart-grid">
         <div class="tv-card">
-          <div class="tradingview-widget-container">
-            <div class="tradingview-widget-container__widget"></div>
-            <script type="text/javascript" src="https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js" async>
-            {
-              "autosize": true,
-              "symbol": "SP:SPX",
-              "interval": "5",
-              "timezone": "America/New_York",
-              "theme": "dark",
-              "style": "1",
-              "locale": "en",
-              "allow_symbol_change": true,
-              "calendar": false,
-              "hide_side_toolbar": false,
-              "support_host": "https://www.tradingview.com"
-            }
-            </script>
-          </div>
+          <div class="matrix-price-chart" id="matrixPriceChart"></div>
+          <div class="matrix-price-note" id="matrixPriceNote">SPY candles with SPX pressure levels converted to SPY</div>
         </div>
         <aside class="market-read-card" id="marketReadCard" aria-live="polite"></aside>
       </div>
@@ -2059,6 +2047,127 @@ function nearestScenario(scenarios,predicate,spot,dir){
   if(!filtered.length) return null;
   return filtered.sort((a,b)=>Math.abs(a.spot-spot)-Math.abs(b.spot-spot))[0];
 }
+function updateMatrixPriceNote(text){
+  const note=document.getElementById('matrixPriceNote');
+  if(note) note.textContent=text;
+}
+function fetchMatrixCandles(){
+  return fetchLiveData(MATRIX_CANDLES_URL + '?symbol=SPY&interval=5m&range=1d&t=' + Date.now())
+    .then(d=>d && d.ok && Array.isArray(d.candles) ? d.candles : []);
+}
+function ensureMatrixPriceChart(){
+  const el=document.getElementById('matrixPriceChart');
+  if(!el) return null;
+  if(!window.LightweightCharts){
+    updateMatrixPriceNote('Loading chart engine...');
+    return null;
+  }
+  if(_matrixChart && _matrixCandleSeries) return {chart:_matrixChart,series:_matrixCandleSeries};
+  _matrixChart=LightweightCharts.createChart(el,{
+    width:el.clientWidth,
+    height:el.clientHeight,
+    layout:{background:{color:'#191919'},textColor:'#cfd4d8',fontFamily:'Segoe UI, Arial, sans-serif'},
+    grid:{vertLines:{color:'rgba(255,255,255,.045)'},horzLines:{color:'rgba(255,255,255,.06)'}},
+    rightPriceScale:{borderColor:'#343434',scaleMargins:{top:.12,bottom:.18}},
+    timeScale:{borderColor:'#343434',timeVisible:true,secondsVisible:false},
+    crosshair:{mode:0},
+  });
+  const candleOptions={
+    upColor:'#22aaf2',
+    downColor:'#ff2a17',
+    borderUpColor:'#22aaf2',
+    borderDownColor:'#ff2a17',
+    wickUpColor:'#72cfff',
+    wickDownColor:'#ff7a70',
+  };
+  _matrixCandleSeries=_matrixChart.addCandlestickSeries
+    ? _matrixChart.addCandlestickSeries(candleOptions)
+    : _matrixChart.addSeries(LightweightCharts.CandlestickSeries,candleOptions);
+  if(window.ResizeObserver){
+    const ro=new ResizeObserver(()=>_matrixChart.applyOptions({width:el.clientWidth,height:el.clientHeight}));
+    ro.observe(el);
+  }
+  return {chart:_matrixChart,series:_matrixCandleSeries};
+}
+function clearMatrixPriceLines(){
+  if(!_matrixCandleSeries) return;
+  _matrixPriceLines.forEach(line=>{
+    try{ _matrixCandleSeries.removePriceLine(line); }catch(e){}
+  });
+  _matrixPriceLines=[];
+}
+function chartLineColor(s){
+  if(!s) return '#ffc107';
+  if(s.cls==='support') return '#17b65f';
+  if(s.cls==='resistance') return '#ff7e32';
+  if(s.cls==='accel-up') return '#22aaf2';
+  if(s.cls==='accel-down') return '#ff2a17';
+  if(s.cls==='pin') return '#ffc107';
+  return '#cfd4d8';
+}
+function selectedChartScenarios(R){
+  const scenarios=R.dealerScenarios || [];
+  const spot=R.spot;
+  const now=nearestScenario(scenarios,s=>Math.abs(s.delta)<=scenarioStepForSymbol(R.symbol)/2,spot) || nearestScenario(scenarios,()=>true,spot);
+  const below=nearestScenario(scenarios,s=>s.spot<spot && (s.cls==='accel-down' || s.cls==='support'),spot);
+  const above=nearestScenario(scenarios,s=>s.spot>spot && (s.cls==='accel-up' || s.cls==='resistance'),spot);
+  const resistance=nearestScenario(scenarios,s=>s.spot>spot && s.cls==='resistance',spot);
+  const seen=new Set();
+  return [below,now,above,resistance].filter(s=>{
+    if(!s || seen.has(s.spot)) return false;
+    seen.add(s.spot);
+    return true;
+  });
+}
+function renderMatrixPriceChart(R){
+  const kit=ensureMatrixPriceChart();
+  if(!kit){
+    if(window.LightweightCharts) return;
+    setTimeout(()=>renderMatrixPriceChart(R),500);
+    return;
+  }
+  const {chart,series}=kit;
+  clearMatrixPriceLines();
+  selectedChartScenarios(R).forEach(s=>{
+    const spy=spyPriceFromSpxStrike(s.spot,R);
+    if(spy==null) return;
+    const line=series.createPriceLine({
+      price:spy,
+      color:chartLineColor(s),
+      lineWidth:s.cls==='pin'?2:1,
+      lineStyle:LightweightCharts.LineStyle.Solid,
+      axisLabelVisible:true,
+      title:`${s.label} SPX ${fmtPrice(s.spot)}`,
+    });
+    _matrixPriceLines.push(line);
+  });
+  const now=Date.now();
+  const needsCandles=!_matrixCandles.length || now-_matrixCandlesLoadedAt>60000;
+  const draw=()=>{
+    if(_matrixCandles.length){
+      series.setData(_matrixCandles);
+      chart.timeScale().fitContent();
+      updateMatrixPriceNote('SPY candles. Colored lines are SPX pressure levels converted to SPY.');
+    } else {
+      updateMatrixPriceNote('Waiting for SPY candles from Tripity...');
+    }
+  };
+  if(!needsCandles){ draw(); return; }
+  updateMatrixPriceNote('Loading SPY candles...');
+  fetchMatrixCandles().then(candles=>{
+    _matrixCandles=candles.map(c=>({
+      time:Number(c.time),
+      open:Number(c.open),
+      high:Number(c.high),
+      low:Number(c.low),
+      close:Number(c.close),
+    })).filter(c=>Number.isFinite(c.time) && Number.isFinite(c.open) && Number.isFinite(c.high) && Number.isFinite(c.low) && Number.isFinite(c.close));
+    _matrixCandlesLoadedAt=Date.now();
+    draw();
+  }).catch(()=>{
+    updateMatrixPriceNote('Could not load SPY candles. Pressure levels below still update.');
+  });
+}
 function renderMarketRead(R){
   const host=document.getElementById('marketReadCard');
   if(!host) return;
@@ -2088,7 +2197,7 @@ function renderMarketRead(R){
     ${line('now','Now',now,'Waiting for scenario data')}
     ${line('above','Watch Above',above,'No nearby upside trigger')}
     ${line('resistance','Next Brake',resistance,'No resistance scenario nearby')}
-    <div class="market-read-note">Use the TradingView chart for price context. The model zones are derived from options pressure and update with your selected expirations.</div>
+    <div class="market-read-note">SPY candles are shown with SPX levels converted to SPY. The model zones are derived from options pressure and update with your selected expirations.</div>
   `;
 }
 function drawEdge(R){
@@ -2096,6 +2205,7 @@ function drawEdge(R){
   if(!cv) return;
   renderDealerScenarios(R);
   renderMarketRead(R);
+  renderMatrixPriceChart(R);
   const data=buildDealerPressureData(R);
   if(!data.length) return;
   const dpr=window.devicePixelRatio||1;
@@ -2442,8 +2552,10 @@ document.querySelectorAll('[data-edge-sigma]').forEach(btn=>{
 let _refreshTimer=null, _timerUiTimer=null, _firstLoad=true, _loadingData=false;
 let _lastFileLoadedAt=null, _lastLoadOk=false, _lastTripityRetryAt=0;
 let _lastDataSource='Waiting';
+let _matrixChart=null, _matrixCandleSeries=null, _matrixPriceLines=[], _matrixCandles=[], _matrixCandlesLoadedAt=0;
 const MATRIX_SPX_QUOTE_URL = 'https://api.trytripity.site/api/matrix/spx-quote';
 const MATRIX_CBOE_DATA_URL = 'https://api.trytripity.site/api/matrix/cboe-data';
+const MATRIX_CANDLES_URL = 'https://api.trytripity.site/api/matrix/candles';
 const TRIPITY_RETRY_MS = 15000;
 function dataUrl(){
   return 'cboe_data.json?t=' + Date.now();
