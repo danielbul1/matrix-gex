@@ -4,7 +4,15 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>GEX Analytics Dashboard</title>
-<script src="https://unpkg.com/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js"></script>
+<script>
+  window.__loadMatrixChartLib=function(){
+    if(window.LightweightCharts) return;
+    const fallback=document.createElement('script');
+    fallback.src='https://cdn.jsdelivr.net/npm/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js';
+    document.head.appendChild(fallback);
+  };
+</script>
+<script src="https://unpkg.com/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js" onerror="window.__loadMatrixChartLib && window.__loadMatrixChartLib()"></script>
 <style>
   :root{
     --bg:#171717; --panel:#1f1f1f; --panel2:#303030; --border:#252525;
@@ -2065,32 +2073,41 @@ function ensureMatrixPriceChart(){
   if(!el) return null;
   if(!window.LightweightCharts){
     updateMatrixPriceNote('Loading chart engine...');
+    if(window.__loadMatrixChartLib) window.__loadMatrixChartLib();
     return null;
   }
   if(_matrixChart && _matrixCandleSeries) return {chart:_matrixChart,series:_matrixCandleSeries};
-  _matrixChart=LightweightCharts.createChart(el,{
-    width:el.clientWidth,
-    height:el.clientHeight,
-    layout:{background:{color:'#191919'},textColor:'#cfd4d8',fontFamily:'Segoe UI, Arial, sans-serif'},
-    grid:{vertLines:{color:'rgba(255,255,255,.045)'},horzLines:{color:'rgba(255,255,255,.06)'}},
-    rightPriceScale:{borderColor:'#343434',scaleMargins:{top:.12,bottom:.18}},
-    timeScale:{borderColor:'#343434',timeVisible:true,secondsVisible:false},
-    crosshair:{mode:0},
-  });
-  const candleOptions={
-    upColor:'#22aaf2',
-    downColor:'#ff2a17',
-    borderUpColor:'#22aaf2',
-    borderDownColor:'#ff2a17',
-    wickUpColor:'#72cfff',
-    wickDownColor:'#ff7a70',
-  };
-  _matrixCandleSeries=_matrixChart.addCandlestickSeries
-    ? _matrixChart.addCandlestickSeries(candleOptions)
-    : _matrixChart.addSeries(LightweightCharts.CandlestickSeries,candleOptions);
-  if(window.ResizeObserver){
-    const ro=new ResizeObserver(()=>_matrixChart.applyOptions({width:el.clientWidth,height:el.clientHeight}));
-    ro.observe(el);
+  try{
+    _matrixChart=LightweightCharts.createChart(el,{
+      width:Math.max(320,el.clientWidth||640),
+      height:Math.max(260,el.clientHeight||430),
+      layout:{background:{color:'#191919'},textColor:'#cfd4d8',fontFamily:'Segoe UI, Arial, sans-serif'},
+      grid:{vertLines:{color:'rgba(255,255,255,.045)'},horzLines:{color:'rgba(255,255,255,.06)'}},
+      rightPriceScale:{borderColor:'#343434',scaleMargins:{top:.12,bottom:.18}},
+      timeScale:{borderColor:'#343434',timeVisible:true,secondsVisible:false},
+      crosshair:{mode:0},
+    });
+    const candleOptions={
+      upColor:'#22aaf2',
+      downColor:'#ff2a17',
+      borderUpColor:'#22aaf2',
+      borderDownColor:'#ff2a17',
+      wickUpColor:'#72cfff',
+      wickDownColor:'#ff7a70',
+    };
+    _matrixCandleSeries=_matrixChart.addCandlestickSeries
+      ? _matrixChart.addCandlestickSeries(candleOptions)
+      : _matrixChart.addSeries(LightweightCharts.CandlestickSeries,candleOptions);
+    if(window.ResizeObserver){
+      const ro=new ResizeObserver(()=>_matrixChart.applyOptions({
+        width:Math.max(320,el.clientWidth||640),
+        height:Math.max(260,el.clientHeight||430),
+      }));
+      ro.observe(el);
+    }
+  } catch(e){
+    updateMatrixPriceNote(`Chart error: ${e.message || 'could not initialize'}`);
+    return null;
   }
   return {chart:_matrixChart,series:_matrixCandleSeries};
 }
@@ -2181,17 +2198,20 @@ function renderMatrixPriceChart(R){
   if(!needsCandles){ draw(); return; }
   updateMatrixPriceNote('Loading SPY candles...');
   fetchMatrixCandles().then(candles=>{
-    _matrixCandles=candles.map(c=>({
+    const byTime=new Map();
+    candles.map(c=>({
       time:Number(c.time),
       open:Number(c.open),
       high:Number(c.high),
       low:Number(c.low),
       close:Number(c.close),
-    })).filter(c=>Number.isFinite(c.time) && Number.isFinite(c.open) && Number.isFinite(c.high) && Number.isFinite(c.low) && Number.isFinite(c.close));
+    })).filter(c=>Number.isFinite(c.time) && Number.isFinite(c.open) && Number.isFinite(c.high) && Number.isFinite(c.low) && Number.isFinite(c.close))
+      .forEach(c=>byTime.set(c.time,c));
+    _matrixCandles=[...byTime.values()].sort((a,b)=>a.time-b.time);
     _matrixCandlesLoadedAt=Date.now();
     draw();
-  }).catch(()=>{
-    updateMatrixPriceNote('Could not load SPY candles. Pressure levels below still update.');
+  }).catch(err=>{
+    updateMatrixPriceNote(`Could not draw SPY candles: ${err?.message || 'data load failed'}. Pressure levels below still update.`);
   });
 }
 function renderMarketRead(R){
