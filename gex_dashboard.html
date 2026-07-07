@@ -2226,6 +2226,7 @@ let _refreshTimer=null, _timerUiTimer=null, _firstLoad=true, _loadingData=false;
 let _lastFileLoadedAt=null, _lastDueRefreshAt=0;
 const DATA_UPDATE_INTERVAL_MS = 5*60*1000;
 const DUE_RETRY_INTERVAL_MS = 15*1000;
+const MATRIX_SPX_QUOTE_URL = 'https://api.trytripity.site/api/matrix/spx-quote';
 function dataUrl(){
   return 'cboe_data.json?t=' + Date.now();
 }
@@ -2233,6 +2234,20 @@ function fetchLiveData(url){
   return fetch(url, {cache:'no-store'})
     .then(r=>r.ok?r.json():null)
     .catch(()=>null);
+}
+function applyMatrixSpXQuote(q){
+  if(!q || q.ok===false || !Number.isFinite(Number(q.spot))) return false;
+  if(!REAL.SPX) return false;
+  REAL.SPX = {
+    ...REAL.SPX,
+    spot: Number(q.spot),
+    asof: q.asof || REAL.SPX.asof,
+    quoteSource: q.source || 'tripity',
+  };
+  return true;
+}
+function fetchMatrixSpXQuote(){
+  return fetchLiveData(MATRIX_SPX_QUOTE_URL + '?t=' + Date.now()).then(applyMatrixSpXQuote);
 }
 function getRefreshSeconds(){
   return Math.max(0,+document.getElementById('autorefresh').value || 0);
@@ -2280,6 +2295,7 @@ function loadData(thenRun){
   return fetchLiveData(dataUrl())
     .then(d=>d || fetchLiveData('https://raw.githubusercontent.com/danielbul1/matrix-gex/main/cboe_data.json?t='+Date.now()))
     .then(d=>{ if(d){ REAL=d; _lastFileLoadedAt=Date.now(); } })
+    .then(()=>fetchMatrixSpXQuote())
     .finally(()=>{
       if(_firstLoad){
         _firstLoad=false;
