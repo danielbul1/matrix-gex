@@ -38,10 +38,15 @@
   .data-health.stale,.data-health.failed{border-left-color:var(--red)}
   .data-health-top{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:6px}
   .data-health-title{font-size:11px;font-weight:900;color:#a8b2bd;text-transform:uppercase;letter-spacing:.5px}
+  .data-health-actions{display:flex;align-items:center;gap:8px;margin-left:auto}
   .data-health-state{font-size:17px;font-weight:950;color:#22b8ff;font-variant-numeric:tabular-nums;line-height:1}
   .data-health.fresh .data-health-state{color:var(--green)}
   .data-health.delayed .data-health-state{color:var(--amber)}
   .data-health.stale .data-health-state,.data-health.failed .data-health-state{color:var(--red)}
+  .data-refresh-btn{align-self:auto;border:1px solid #3d4a52;background:#202a30;color:#d7f3ff;border-radius:5px;
+                    padding:5px 8px;font-size:11px;font-weight:900;line-height:1;min-width:0}
+  .data-refresh-btn:hover{filter:brightness(1.15)}
+  .data-refresh-btn:disabled{opacity:.48;cursor:default;filter:none}
   .data-health-meta{display:grid;grid-template-columns:1fr 1fr 1fr;gap:5px 12px;font-size:11px;color:#cfd4d8}
   .data-health-meta span{display:flex;justify-content:space-between;gap:8px;white-space:nowrap}
   .data-health-meta b{color:#fff;font-weight:900;font-variant-numeric:tabular-nums}
@@ -359,7 +364,10 @@
   <div class="data-health" id="dataHealth" aria-live="polite">
     <div class="data-health-top">
       <span class="data-health-title">Data Health</span>
-      <span class="data-health-state" id="dataHealthState">Waiting</span>
+      <div class="data-health-actions">
+        <button type="button" class="data-refresh-btn" id="forceTripityRefresh" title="Force refresh from Tripity">Refresh</button>
+        <span class="data-health-state" id="dataHealthState">Waiting</span>
+      </div>
     </div>
     <div class="data-health-meta">
       <span>Source <b id="dataHealthSource">--</b></span>
@@ -2315,6 +2323,8 @@ function updateDataTimer(){
   document.getElementById('dataHealthAsof').textContent = fmtAsofShort(rec?.asof);
   document.getElementById('dataHealthSpot').textContent = rec?.spot ? fmtPrice(rec.spot) : '--';
   document.getElementById('dataHealthLoaded').textContent = _lastFileLoadedAt ? new Date(_lastFileLoadedAt).toLocaleTimeString('he-IL') : '--';
+  const forceBtn=document.getElementById('forceTripityRefresh');
+  if(forceBtn) forceBtn.disabled = _loadingData;
 }
 function loadData(thenRun){
   if(_loadingData) return Promise.resolve();
@@ -2361,6 +2371,7 @@ document.getElementById('symbol').value = 'SPX';
 document.getElementById('mode').value = 'full';
 document.getElementById('source').value = 'live';
 document.getElementById('autorefresh').value = '30';
+document.getElementById('forceTripityRefresh').addEventListener('click',()=>loadData(true));
 _timerUiTimer=setInterval(updateDataTimer,1000);
 loadData(true).then(setupAutoRefresh);
 </script>
