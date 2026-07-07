@@ -2223,8 +2223,9 @@ document.querySelectorAll('[data-edge-sigma]').forEach(btn=>{
 // ---------- Data loading + auto-refresh ----------
 // ×ž×•×©×š ×ž×—×“×© ××ª cboe_data.json (×©×ž×ª×¢×“×›×Ÿ ×¢"×™ fetch_cboe.py ×‘×¨×§×¢) ×•×ž×¨×¢× ×Ÿ ××ª ×”×ª×¦×•×’×”
 let _refreshTimer=null, _timerUiTimer=null, _firstLoad=true, _loadingData=false;
-let _lastFileLoadedAt=null;
+let _lastFileLoadedAt=null, _lastDueRefreshAt=0;
 const DATA_UPDATE_INTERVAL_MS = 5*60*1000;
+const DUE_RETRY_INTERVAL_MS = 15*1000;
 function dataUrl(){
   return 'cboe_data.json?t=' + Date.now();
 }
@@ -2261,11 +2262,16 @@ function updateDataTimer(){
   const rec=REAL?.[sym];
   const asofMs=dataAsofToMs(rec?.asof || window._lastR?.asof);
   const nextDataAt=asofMs==null ? null : asofMs+DATA_UPDATE_INTERVAL_MS;
+  const isDue=!!nextDataAt && Date.now()>=nextDataAt;
   countdown.textContent = nextDataAt ? fmtCountdown(nextDataAt-Date.now()) : 'Waiting';
   document.getElementById('dataTimerAsof').textContent = fmtAsofShort(rec?.asof || window._lastR?.asof);
   document.getElementById('dataTimerSpot').textContent = rec?.spot ? fmtPrice(rec.spot) : (window._lastR?.spot ? fmtPrice(window._lastR.spot) : '--');
   document.getElementById('dataTimerLoaded').textContent = _lastFileLoadedAt ? new Date(_lastFileLoadedAt).toLocaleTimeString('he-IL') : '--';
-  document.getElementById('dataTimerStatus').textContent = _loadingData ? 'Checking' : (nextDataAt && Date.now()>nextDataAt ? 'Due' : 'Auto');
+  document.getElementById('dataTimerStatus').textContent = _loadingData ? 'Checking' : (isDue ? 'Due' : 'Auto');
+  if(isDue && !_loadingData && getRefreshSeconds()>0 && Date.now()-_lastDueRefreshAt>=DUE_RETRY_INTERVAL_MS){
+    _lastDueRefreshAt=Date.now();
+    loadData(true);
+  }
 }
 function loadData(thenRun){
   if(_loadingData) return Promise.resolve();
