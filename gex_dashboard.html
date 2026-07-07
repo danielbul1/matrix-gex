@@ -212,6 +212,11 @@
   .market-read-title{display:flex;justify-content:space-between;gap:10px;align-items:flex-start;margin-bottom:12px}
   .market-read-title h3{margin:0;font-size:17px;color:#fff}
   .market-read-bias{font-size:11px;text-transform:uppercase;letter-spacing:.5px;font-weight:950;color:#22b8ff}
+  .market-read-now{background:#202020;border:1px solid #353535;border-radius:7px;padding:11px 12px;margin-bottom:10px;
+                   box-shadow:inset 3px 0 0 #ffc107}
+  .market-read-now .k{display:block;color:#aeb3b8;font-size:10px;font-weight:950;text-transform:uppercase;margin-bottom:5px}
+  .market-read-now .v{display:block;color:#fff;font-size:18px;font-weight:950;line-height:1.15}
+  .market-read-now .s{display:block;color:#aeb3b8;font-size:11px;font-weight:800;margin-top:7px;line-height:1.45}
   .market-read-line{border-left:4px solid #555;background:#202020;border-radius:6px;padding:9px 10px;margin:8px 0}
   .market-read-line.below{border-left-color:#ff2a17}
   .market-read-line.now{border-left-color:#ffc107}
@@ -2105,6 +2110,15 @@ function chartLineColor(s){
   if(s.cls==='pin') return '#ffc107';
   return '#cfd4d8';
 }
+function chartLevelName(s){
+  if(!s) return 'Level';
+  if(s.cls==='support') return 'Support';
+  if(s.cls==='resistance') return 'Resistance';
+  if(s.cls==='accel-up') return 'Accel Up';
+  if(s.cls==='accel-down') return 'Accel Down';
+  if(s.cls==='pin') return 'Pin';
+  return s.label || 'Level';
+}
 function selectedChartScenarios(R){
   const scenarios=R.dealerScenarios || [];
   const spot=R.spot;
@@ -2137,7 +2151,7 @@ function renderMatrixPriceChart(R){
       lineWidth:s.cls==='pin'?2:1,
       lineStyle:LightweightCharts.LineStyle.Solid,
       axisLabelVisible:true,
-      title:`${s.label} SPX ${fmtPrice(s.spot)}`,
+      title:`${chartLevelName(s)} ${fmtSpyConvertedPrice(spy)}`,
     });
     _matrixPriceLines.push(line);
   });
@@ -2146,6 +2160,18 @@ function renderMatrixPriceChart(R){
   const draw=()=>{
     if(_matrixCandles.length){
       series.setData(_matrixCandles);
+      const last=_matrixCandles[_matrixCandles.length-1];
+      if(last && Number.isFinite(last.close)){
+        const currentLine=series.createPriceLine({
+          price:last.close,
+          color:'#3f6fff',
+          lineWidth:1,
+          lineStyle:LightweightCharts.LineStyle.Dotted,
+          axisLabelVisible:true,
+          title:`Current SPY ${fmtSpyConvertedPrice(last.close)}`,
+        });
+        _matrixPriceLines.push(currentLine);
+      }
       chart.timeScale().fitContent();
       updateMatrixPriceNote('SPY candles. Colored lines are SPX pressure levels converted to SPY.');
     } else {
@@ -2183,6 +2209,14 @@ function renderMarketRead(R){
   else if(above?.cls==='accel-up') bias='Upside squeeze risk';
   else if(below?.cls==='accel-down') bias='Downside air pocket';
   else if(now?.cls==='pin') bias='Pin / balance';
+  const spySpot=spyPriceFromSpxStrike(spot,R);
+  const belowSpy=below ? spyPriceFromSpxStrike(below.spot,R) : null;
+  const aboveSpy=above ? spyPriceFromSpxStrike(above.spot,R) : null;
+  const readTitle=now?.cls==='pin' ? 'Price is sitting near the pin zone' : bias;
+  const readSub=[
+    above && aboveSpy!=null ? `Above ${fmtSpyConvertedPrice(aboveSpy)} SPY: ${above.label}` : null,
+    below && belowSpy!=null ? `Below ${fmtSpyConvertedPrice(belowSpy)} SPY: ${below.label}` : null,
+  ].filter(Boolean).join(' | ');
   const line=(cls,label,item,fallback)=>`
     <div class="market-read-line ${cls}">
       <span><em>${label}</em><strong>${item ? fmtPrice(item.spot) : '--'}</strong></span>
@@ -2192,6 +2226,11 @@ function renderMarketRead(R){
     <div class="market-read-title">
       <h3>Market Read</h3>
       <div class="market-read-bias">${bias}</div>
+    </div>
+    <div class="market-read-now">
+      <span class="k">Current Read ${spySpot!=null ? `· SPY ${fmtSpyConvertedPrice(spySpot)}` : ''}</span>
+      <span class="v">${readTitle}</span>
+      <span class="s">${readSub || 'Waiting for the next nearby pressure trigger.'}</span>
     </div>
     ${line('below','Watch Below',below,'No nearby downside trigger')}
     ${line('now','Now',now,'Waiting for scenario data')}
