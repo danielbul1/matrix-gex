@@ -2224,9 +2224,11 @@ document.querySelectorAll('[data-edge-sigma]').forEach(btn=>{
 // ×ž×•×©×š ×ž×—×“×© ××ª cboe_data.json (×©×ž×ª×¢×“×›×Ÿ ×¢"×™ fetch_cboe.py ×‘×¨×§×¢) ×•×ž×¨×¢× ×Ÿ ××ª ×”×ª×¦×•×’×”
 let _refreshTimer=null, _timerUiTimer=null, _firstLoad=true, _loadingData=false;
 let _lastFileLoadedAt=null, _lastDueRefreshAt=0;
+let _lastDataSource='Waiting';
 const DATA_UPDATE_INTERVAL_MS = 5*60*1000;
 const DUE_RETRY_INTERVAL_MS = 15*1000;
 const MATRIX_SPX_QUOTE_URL = 'https://api.trytripity.site/api/matrix/spx-quote';
+const MATRIX_CBOE_DATA_URL = 'https://api.trytripity.site/api/matrix/cboe-data';
 function dataUrl(){
   return 'cboe_data.json?t=' + Date.now();
 }
@@ -2248,6 +2250,12 @@ function applyMatrixSpXQuote(q){
 }
 function fetchMatrixSpXQuote(){
   return fetchLiveData(MATRIX_SPX_QUOTE_URL + '?t=' + Date.now()).then(applyMatrixSpXQuote);
+}
+function validCboeData(d){
+  return d && d.SPX && Array.isArray(d.SPX.opts) && Number.isFinite(Number(d.SPX.spot));
+}
+function fetchCboeDataWithSource(url, sourceName){
+  return fetchLiveData(url).then(d=>validCboeData(d) ? {data:d, source:sourceName} : null);
 }
 function getRefreshSeconds(){
   return Math.max(0,+document.getElementById('autorefresh').value || 0);
@@ -2282,7 +2290,7 @@ function updateDataTimer(){
   document.getElementById('dataTimerAsof').textContent = fmtAsofShort(rec?.asof || window._lastR?.asof);
   document.getElementById('dataTimerSpot').textContent = rec?.spot ? fmtPrice(rec.spot) : (window._lastR?.spot ? fmtPrice(window._lastR.spot) : '--');
   document.getElementById('dataTimerLoaded').textContent = _lastFileLoadedAt ? new Date(_lastFileLoadedAt).toLocaleTimeString('he-IL') : '--';
-  document.getElementById('dataTimerStatus').textContent = _loadingData ? 'Checking' : (isDue ? 'Due' : 'Auto');
+  document.getElementById('dataTimerStatus').textContent = _loadingData ? 'Checking' : (isDue ? 'Due' : _lastDataSource);
   if(isDue && !_loadingData && getRefreshSeconds()>0 && Date.now()-_lastDueRefreshAt>=DUE_RETRY_INTERVAL_MS){
     _lastDueRefreshAt=Date.now();
     loadData(true);
@@ -2292,9 +2300,10 @@ function loadData(thenRun){
   if(_loadingData) return Promise.resolve();
   _loadingData = true;
   updateDataTimer();
-  return fetchLiveData(dataUrl())
-    .then(d=>d || fetchLiveData('https://raw.githubusercontent.com/danielbul1/matrix-gex/main/cboe_data.json?t='+Date.now()))
-    .then(d=>{ if(d){ REAL=d; _lastFileLoadedAt=Date.now(); } })
+  return fetchCboeDataWithSource(MATRIX_CBOE_DATA_URL + '?t=' + Date.now(), 'Tripity')
+    .then(result=>result || fetchCboeDataWithSource(dataUrl(), 'Local'))
+    .then(result=>result || fetchCboeDataWithSource('https://raw.githubusercontent.com/danielbul1/matrix-gex/main/cboe_data.json?t='+Date.now(), 'GitHub'))
+    .then(result=>{ if(result){ REAL=result.data; _lastDataSource=result.source; _lastFileLoadedAt=Date.now(); } })
     .then(()=>fetchMatrixSpXQuote())
     .finally(()=>{
       if(_firstLoad){
