@@ -566,8 +566,7 @@ const SYMBOLS = {
 let REAL = {};
 let REAL_ASOF = {};
 const RISK_FREE = {US:0.05, IN:0.065};
-const SPYCONVERTER_RATIO_FALLBACK = 10.03657299922611;
-let SPX_SPY_RATIO = SPYCONVERTER_RATIO_FALLBACK;
+const SPX_SPY_RATIO = 10.03657299922611;
 
 function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
 
@@ -806,18 +805,6 @@ function fmtMoney(n){
 }
 function fmtSpyConvertedPrice(n){
   return Number(n).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
-}
-function updateSpxSpyRatio(){
-  const controller = new AbortController();
-  const timeout = setTimeout(()=>controller.abort(), 1800);
-  return fetch('https://utility-trees-399601.wl.r.appspot.com/', {cache:'no-store', signal:controller.signal})
-    .then(r=>r.ok?r.json():null)
-    .then(data=>{
-      const next = Number(data?.["SPX/SPY Ratio"]);
-      if(Number.isFinite(next) && next > 0) SPX_SPY_RATIO = next;
-    })
-    .catch(()=>{})
-    .finally(()=>clearTimeout(timeout));
 }
 function spyPriceFromSpxStrike(strike,R){
   if(R?.symbol !== 'SPX') return null;
@@ -2225,11 +2212,9 @@ function fetchLiveData(url){
 function loadData(thenRun){
   if(_loadingData) return Promise.resolve();
   _loadingData = true;
-  const ratioPromise = updateSpxSpyRatio();
   return fetchLiveData(dataUrl())
     .then(d=>d || fetchLiveData('https://raw.githubusercontent.com/danielbul1/matrix-gex/main/cboe_data.json?t='+Date.now()))
     .then(d=>{ if(d){ REAL=d; } })
-    .then(()=>ratioPromise)
     .finally(()=>{
       if(_firstLoad){
         _firstLoad=false;
