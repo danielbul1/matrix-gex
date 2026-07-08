@@ -10,85 +10,85 @@
   "source": "CBOE delayed quotes",
   "state": "fresh",
   "summary": {
-    "latest_asof_et": "2026-07-08T11:04:23-04:00",
+    "latest_asof_et": "2026-07-08T11:09:23-04:00",
     "latest_symbol": "SPX",
-    "oldest_asof_et": "2026-07-08T11:04:06-04:00",
+    "oldest_asof_et": "2026-07-08T11:09:06-04:00",
     "oldest_symbol": "QQQ",
     "symbols": 8,
-    "total_contracts": 43298
+    "total_contracts": 43340
   },
   "symbols": {
     "AAPL": {
-      "asof": "2026-07-08T11:04:09",
-      "asof_et": "2026-07-08T11:04:09-04:00",
+      "asof": "2026-07-08T11:09:09",
+      "asof_et": "2026-07-08T11:09:09-04:00",
       "contracts": 1312,
       "expiries": 25,
       "first_expiry": "2026-07-08",
       "last_expiry": "2028-12-15",
-      "spot": 309.41
+      "spot": 309.7
     },
     "IWM": {
-      "asof": "2026-07-08T11:04:20",
-      "asof_et": "2026-07-08T11:04:20-04:00",
+      "asof": "2026-07-08T11:09:21",
+      "asof_et": "2026-07-08T11:09:21-04:00",
       "contracts": 2629,
       "expiries": 32,
       "first_expiry": "2026-07-08",
       "last_expiry": "2028-12-15",
-      "spot": 292.04
+      "spot": 292.24
     },
     "NDX": {
-      "asof": "2026-07-08T11:04:09",
-      "asof_et": "2026-07-08T11:04:09-04:00",
+      "asof": "2026-07-08T11:09:09",
+      "asof_et": "2026-07-08T11:09:09-04:00",
       "contracts": 4963,
       "expiries": 48,
       "first_expiry": "2026-07-08",
       "last_expiry": "2029-12-21",
-      "spot": 28979.66
+      "spot": 28984.46
     },
     "NVDA": {
-      "asof": "2026-07-08T11:04:15",
-      "asof_et": "2026-07-08T11:04:15-04:00",
+      "asof": "2026-07-08T11:09:16",
+      "asof_et": "2026-07-08T11:09:16-04:00",
       "contracts": 1182,
       "expiries": 25,
       "first_expiry": "2026-07-08",
       "last_expiry": "2028-12-15",
-      "spot": 198.72
+      "spot": 198.19
     },
     "QQQ": {
-      "asof": "2026-07-08T11:04:06",
-      "asof_et": "2026-07-08T11:04:06-04:00",
+      "asof": "2026-07-08T11:09:06",
+      "asof_et": "2026-07-08T11:09:06-04:00",
       "contracts": 5865,
       "expiries": 32,
       "first_expiry": "2026-07-08",
       "last_expiry": "2028-12-15",
-      "spot": 704.88
+      "spot": 705.01
     },
     "SPX": {
-      "asof": "2026-07-08T11:04:23",
-      "asof_et": "2026-07-08T11:04:23-04:00",
+      "asof": "2026-07-08T11:09:23",
+      "asof_et": "2026-07-08T11:09:23-04:00",
       "contracts": 18387,
       "expiries": 55,
       "first_expiry": "2026-07-08",
       "last_expiry": "2031-12-19",
-      "spot": 7441.36
+      "spot": 7442.81
     },
     "SPY": {
-      "asof": "2026-07-08T11:04:09",
-      "asof_et": "2026-07-08T11:04:09-04:00",
+      "asof": "2026-07-08T11:09:10",
+      "asof_et": "2026-07-08T11:09:10-04:00",
       "contracts": 7205,
       "expiries": 34,
       "first_expiry": "2026-07-08",
       "last_expiry": "2028-12-15",
-      "spot": 741.67
+      "spot": 741.65
     },
     "TSLA": {
-      "asof": "2026-07-08T11:04:15",
-      "asof_et": "2026-07-08T11:04:15-04:00",
-      "contracts": 1755,
+      "asof": "2026-07-08T11:09:16",
+      "asof_et": "2026-07-08T11:09:16-04:00",
+      "contracts": 1797,
       "expiries": 23,
       "first_expiry": "2026-07-08",
       "last_expiry": "2028-12-15",
-      "spot": 391.83
+      "spot": 392.03
     }
   }
 }
