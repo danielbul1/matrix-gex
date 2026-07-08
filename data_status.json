@@ -15,7 +15,7 @@
     "oldest_asof_et": "2026-07-07T15:59:59-04:00",
     "oldest_symbol": "QQQ",
     "symbols": 8,
-    "total_contracts": 42622
+    "total_contracts": 42706
   },
   "symbols": {
     "AAPL": {
@@ -25,70 +25,70 @@
       "expiries": 24,
       "first_expiry": "2026-07-08",
       "last_expiry": "2028-12-15",
-      "spot": 311.0
+      "spot": 311.39
     },
     "IWM": {
       "asof": "2026-07-07T15:59:59",
       "asof_et": "2026-07-07T15:59:59-04:00",
-      "contracts": 2590,
-      "expiries": 32,
-      "first_expiry": "2026-07-07",
+      "contracts": 2486,
+      "expiries": 31,
+      "first_expiry": "2026-07-08",
       "last_expiry": "2028-12-15",
-      "spot": 296.0
+      "spot": 296.19
     },
     "NDX": {
       "asof": "2026-07-07T16:14:59",
       "asof_et": "2026-07-07T16:14:59-04:00",
-      "contracts": 4708,
+      "contracts": 4954,
       "expiries": 48,
-      "first_expiry": "2026-07-07",
+      "first_expiry": "2026-07-08",
       "last_expiry": "2029-12-21",
       "spot": 29173.02
     },
     "NVDA": {
       "asof": "2026-07-07T15:59:59",
       "asof_et": "2026-07-07T15:59:59-04:00",
-      "contracts": 1130,
+      "contracts": 1092,
       "expiries": 24,
       "first_expiry": "2026-07-08",
       "last_expiry": "2028-12-15",
-      "spot": 196.48
+      "spot": 195.88
     },
     "QQQ": {
       "asof": "2026-07-07T15:59:59",
       "asof_et": "2026-07-07T15:59:59-04:00",
-      "contracts": 5848,
+      "contracts": 5817,
       "expiries": 32,
-      "first_expiry": "2026-07-07",
+      "first_expiry": "2026-07-08",
       "last_expiry": "2028-12-15",
-      "spot": 710.0
+      "spot": 707.08
     },
     "SPX": {
       "asof": "2026-07-07T16:14:59",
       "asof_et": "2026-07-07T16:14:59-04:00",
-      "contracts": 18158,
+      "contracts": 18254,
       "expiries": 55,
-      "first_expiry": "2026-07-07",
+      "first_expiry": "2026-07-08",
       "last_expiry": "2031-12-19",
       "spot": 7503.85
     },
     "SPY": {
       "asof": "2026-07-07T16:00:00",
       "asof_et": "2026-07-07T16:00:00-04:00",
-      "contracts": 7239,
+      "contracts": 7173,
       "expiries": 34,
-      "first_expiry": "2026-07-07",
+      "first_expiry": "2026-07-08",
       "last_expiry": "2028-12-15",
-      "spot": 747.5
+      "spot": 747.71
     },
     "TSLA": {
       "asof": "2026-07-07T15:59:59",
       "asof_et": "2026-07-07T15:59:59-04:00",
-      "contracts": 1712,
+      "contracts": 1693,
       "expiries": 23,
       "first_expiry": "2026-07-08",
       "last_expiry": "2028-12-15",
-      "spot": 404.17
+      "spot": 403.76
     }
   }
 }
