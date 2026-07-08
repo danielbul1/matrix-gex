@@ -6,6 +6,8 @@ on:
     branches: [main]
     paths:
       - "fetch_cboe.py"
+      - "tools/build_data_status.py"
+      - "tools/smoke_check.py"
       - ".github/workflows/update-cboe.yml"
   schedule:
     - cron: "2,17,32,47 13-20 * * 1-5"
@@ -30,6 +32,9 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Compile validation scripts
+        run: python -m py_compile fetch_cboe.py tools/build_data_status.py tools/smoke_check.py
+
       - name: Fetch CBOE data
         run: |
           git config user.name "github-actions[bot]"
@@ -37,12 +42,16 @@ jobs:
           end=$((SECONDS + 2100))
           while [ "$SECONDS" -lt "$end" ]; do
             now_utc=$(date -u +%H%M)
-            python fetch_cboe.py || true
-            git add cboe_data.json
-            if ! git diff --cached --quiet; then
-              git commit -m "Update CBOE data"
-              git pull --rebase origin main
-              git push
+            if python fetch_cboe.py && python tools/build_data_status.py && MATRIX_REQUIRE_FRESH_DATA=1 python tools/smoke_check.py; then
+              git add cboe_data.json data_status.json
+              if ! git diff --cached --quiet; then
+                git commit -m "Update CBOE data"
+                git pull --rebase origin main
+                git push
+              fi
+            else
+              echo "Fetch or validation failed; skipping commit for this interval"
+              git restore -- cboe_data.json data_status.json
             fi
             if [ "$now_utc" -lt 1325 ] || [ "$now_utc" -gt 2015 ]; then
               break

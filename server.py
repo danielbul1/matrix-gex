@@ -7,6 +7,8 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 import time
 import re
+import json
+from pathlib import Path
 
 app = Flask(__name__)
 CORS(app)
@@ -14,6 +16,7 @@ CORS(app)
 TICKER  = 'SPY'
 URL     = f'https://cdn.cboe.com/api/global/delayed_quotes/options/{TICKER}.json'
 CACHE_S = 5
+STATUS_PATH = Path(__file__).resolve().with_name('data_status.json')
 
 _cache = {'data': None, 'ts': 0}
 
@@ -64,7 +67,7 @@ def minutes_to_market_close():
         return 0
     return int((close_et - now_et).total_seconds() // 60)
 
-# ── Black-Scholes greeks ──────────────────────────────────────────────────────
+# Black-Scholes greeks
 def bs_d1d2(S, K, vol, T):
     sq = np.sqrt(T)
     d1 = (np.log(S / K) + 0.5 * vol**2 * T) / (vol * sq)
@@ -89,7 +92,7 @@ def bs_charm_call(S, K, vol, T, r=0):
     d1, d2 = bs_d1d2(S, K, vol, T)
     return -norm.pdf(d1) * (2*r*T - d2*vol*sq) / (2*T*vol*sq)
 
-# ── vectorized GEX at a spot level ───────────────────────────────────────────
+# Vectorized GEX at a spot level
 def gex_at(S, Kc, vc, Tc, OIc, Kp, vp, Tp, OIp):
     def side(K, vol, T, OI):
         if len(K) == 0: return 0.0
@@ -117,7 +120,7 @@ def make_np(opts, exclude_exp=None):
         return a[:,0],a[:,1],a[:,2],a[:,3]
     return to_np(c_rows), to_np(p_rows)
 
-# ── main computation ──────────────────────────────────────────────────────────
+# Main computation
 def compute():
     now = time.time()
     if _cache['data'] and now - _cache['ts'] < CACHE_S:
@@ -132,7 +135,7 @@ def compute():
     today  = datetime.now().replace(hour=0,minute=0,second=0,microsecond=0)
     lo, hi = 0.8*spot, 1.2*spot
 
-    # ── parse ─────────────────────────────────────────────────────────────────
+    # Parse
     pairs = {}
     for o in raw['data']['options']:
         parsed = parse_sym(o.get('option',''))
@@ -161,7 +164,7 @@ def compute():
 
     opts = list(pairs.values())
 
-    # ── spot GEX, DEX, Vanna, Charm by strike ────────────────────────────────
+    # Spot GEX, DEX, Vanna, Charm by strike
     by_k     = {}
     by_exp   = {}
     by_k_0dte = {}
@@ -188,7 +191,7 @@ def compute():
 
         # Charm exposure per 1 day
         c_charm_unit = bs_charm_call(spot, k, c.get('iv',0), T) if c.get('iv',0)>0 else 0
-        p_charm_unit = -bs_charm_call(spot, k, p.get('iv',0), T) if p.get('iv',0)>0 else 0  # put charm ≈ -call charm
+        p_charm_unit = -bs_charm_call(spot, k, p.get('iv',0), T) if p.get('iv',0)>0 else 0  # put charm ~ -call charm
         c_charm =  c_charm_unit * c.get('oi',0) * 100 * spot / 252
         p_charm = -p_charm_unit * p.get('oi',0) * 100 * spot / 252
 
@@ -213,12 +216,12 @@ def compute():
 
     total_gex = sum(v['cgex']-v['pgex'] for v in by_k.values()) / 1e9
 
-    # ── key levels ────────────────────────────────────────────────────────────
+    # Key levels
     call_wall = max(by_k, key=lambda k: by_k[k]['cgex'])
     put_wall  = max(by_k, key=lambda k: by_k[k]['pgex'])
     peak_gex  = max(by_k, key=lambda k: abs(by_k[k]['cgex']-by_k[k]['pgex']))
 
-    # ── formatted outputs ─────────────────────────────────────────────────────
+    # Formatted outputs
     def make_by_strike(d):
         return sorted([{
             'strike':  k,
@@ -318,7 +321,7 @@ def compute():
         'expiry': k, 'callGEX': v['c']/1e9, 'putGEX': -v['p']/1e9, 'netGEX': (v['c']-v['p'])/1e9
     } for k,v in by_exp.items()], key=lambda x: by_exp[x['expiry']]['date'])
 
-    # ── gamma profile ─────────────────────────────────────────────────────────
+    # Gamma profile
     levels   = np.linspace(lo, hi, 60)
     all_dates = sorted({o['exp'] for o in opts})
     next_exp  = all_dates[0] if all_dates else None
@@ -341,7 +344,7 @@ def compute():
         ns,ps  = levels[i],levels[i+1]
         zero_gamma = float(ps-(ps-ns)*pg_/(pg_-ng))
 
-    # ── GEX heatmap (strikes × expiries within 60 days) ──────────────────────
+    # GEX heatmap (strikes x expiries within 60 days)
     hm_lo, hm_hi = 0.9*spot, 1.1*spot    # tighter range for readability
     cutoff = today.replace(hour=0,minute=0,second=0,microsecond=0)
     from datetime import timedelta
@@ -365,7 +368,7 @@ def compute():
         net = (c.get('gamma',0)*c.get('oi',0) - p.get('gamma',0)*p.get('oi',0)) * 100*spot**2*0.01/1e6
         z[si][ei] = round(net, 3)
 
-    # ── raw options table (includes all greeks for client-side filtering) ──────
+    # Raw options table includes all greeks for client-side filtering
     raw_opts = []
     for o in opts:
         ks  = o['strike']
@@ -431,7 +434,7 @@ def compute():
     _cache['ts']   = now
     return result
 
-# ── routes ────────────────────────────────────────────────────────────────────
+# Routes
 @app.route('/gex')
 def gex():
     try:
@@ -462,9 +465,20 @@ def raw_view():
 def health():
     return jsonify({'ok': True, 'time': datetime.now().isoformat()})
 
+@app.route('/status')
+def status():
+    try:
+        with STATUS_PATH.open(encoding='utf-8') as f:
+            data = json.load(f)
+    except Exception as e:
+        return jsonify({'ok': False, 'state': 'missing', 'error': str(e)}), 503
+
+    state = data.get('state')
+    ok = state in {'fresh', 'off_hours'}
+    data['ok'] = ok
+    return jsonify(data), 200 if ok else 503
+
 if __name__ == '__main__':
-    print('╔════════════════════════════════════╗')
-    print('║   GEX Live Server  ·  SPY  v2      ║')
-    print('║   http://localhost:5000/gex        ║')
-    print('╚════════════════════════════════════╝')
+    print('GEX Live Server - SPY v2')
+    print('http://localhost:5000/gex')
     app.run(host='127.0.0.1', port=5000, debug=False)
