@@ -83,6 +83,7 @@ let REAL = {};
 let REAL_ASOF = {};
 const RISK_FREE = {US:0.05, IN:0.065};
 const SPX_SPY_RATIO = 10.03657299922611;
+const DEFAULT_SYMBOL = 'SPY';
 
 function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
 
@@ -436,10 +437,331 @@ function spyPriceFromSpxStrike(strike,R){
   if(!Number.isFinite(strike) || !Number.isFinite(SPX_SPY_RATIO) || SPX_SPY_RATIO <= 0) return null;
   return strike / SPX_SPY_RATIO;
 }
+function spxPriceFromSpyPrice(price,R){
+  if(R?.symbol !== 'SPY') return null;
+  if(!Number.isFinite(price) || !Number.isFinite(SPX_SPY_RATIO) || SPX_SPY_RATIO <= 0) return null;
+  return price * SPX_SPY_RATIO;
+}
 function esc(v){
   return String(v).replace(/[&<>"']/g,ch=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[ch]));
 }
 function ts(t){return new Date(t).toISOString().substring(11,19)+"Z";}
+function byId(id){ return document.getElementById(id); }
+function bind(id,event,handler,opts){
+  const el=byId(id);
+  if(el) el.addEventListener(event,handler,opts);
+}
+function safeText(value,fallback='--'){
+  return value == null || value === '' ? fallback : value;
+}
+
+// ---------- Market read layer ----------
+function levelDisplayPrice(value,R){
+  if(value == null || !Number.isFinite(Number(value))) return '--';
+  const base = fmtPrice(Number(value));
+  const converted = R?.symbol === 'SPY' ? spxPriceFromSpyPrice(Number(value),R) : spyPriceFromSpxStrike(Number(value),R);
+  if(converted == null) return base;
+  return R.symbol === 'SPY' ? `${base} / SPX ${fmtPrice(converted)}` : `${base} / SPY ${fmtSpyConvertedPrice(converted)}`;
+}
+function nearestStrikeLevel(R,side){
+  if(!R?.strikes?.length) return null;
+  const rows = R.strikes
+    .filter(s=>side === 'above' ? s.strike > R.spot : s.strike < R.spot)
+    .sort((a,b)=>side === 'above' ? a.strike-b.strike : b.strike-a.strike);
+  return rows[0] || null;
+}
+function dataQualityForMarketRead(R){
+  const asofMs = dataAsofToMs(R?.asof);
+  const ageMs = asofMs == null ? null : Date.now()-asofMs;
+  const health = dataHealthFromAge(ageMs);
+  return {
+    state: R?.live ? health.label : 'Synthetic',
+    cls: R?.live ? health.key : 'delayed',
+    age: fmtDataAge(ageMs),
+    asof: fmtAsofShort(R?.asof),
+    source: _lastDataSource || (R?.live ? 'CBOE' : 'Synthetic'),
+  };
+}
+function buildMarketRead(R){
+  const gross = Math.abs(R.totalCallGex)+Math.abs(R.totalPutGex)||1;
+  const gexRatio = R.totalGex/gross;
+  const above = nearestStrikeLevel(R,'above');
+  const below = nearestStrikeLevel(R,'below');
+  const maxPain = R.maxPain?.active?.maxPain ?? null;
+  let bias = 'Neutral';
+  let biasClass = 'neutral';
+  if(R.regime === 'positive_gamma'){
+    bias = 'Range / Mean Reversion';
+    biasClass = 'range';
+  } else if(R.regime === 'negative_gamma'){
+    bias = 'Trend Risk / Momentum';
+    biasClass = 'trend';
+  }
+  if(Math.abs(gexRatio) < 0.04){
+    bias = 'Chop / Low Signal';
+    biasClass = 'neutral';
+  }
+  const confidence = Math.min(100,Math.round(Math.abs(gexRatio)*260 + Math.min(35,Math.abs(R.distPct)*7)));
+  const summary = biasClass === 'range'
+    ? 'Dealers are more likely to dampen moves near current levels. Favor level-to-level reads until a wall breaks.'
+    : biasClass === 'trend'
+      ? 'Dealer hedging can amplify direction. Watch breaks above resistance or below support for acceleration.'
+      : 'Current gamma signal is weak. Treat levels as reference zones and wait for confirmation.';
+  return {
+    bias,biasClass,confidence,summary,
+    dataQuality:dataQualityForMarketRead(R),
+    quality:[
+      {label:'Data', value:dataQualityForMarketRead(R).state, tone:dataQualityForMarketRead(R).cls},
+      {label:'Quotes', value:`${R.keptCount}/${R.totalCount}`, tone:R.keptCount>=500?'good':R.keptCount>=100?'warn':'bad'},
+      {label:'Gamma Strength', value:`${Math.round(Math.abs(gexRatio)*100)}%`, tone:Math.abs(gexRatio)>=0.08?'good':'warn'},
+      {label:'Expiry', value:(R.expiries || []).join(', ') || '--', tone:(R.expiries || []).length?'good':'warn'},
+    ],
+    keyLevels:[
+      {label:'Spot', value:R.spot, note:'Current reference price'},
+      {label:'Zero Gamma', value:R.flip, note:'Regime flip zone'},
+      {label:'Max Gamma', value:R.maxGammaStrike, note:'Pin / pivot area'},
+      {label:'Call Wall', value:R.callWall, note:'Upside resistance'},
+      {label:'Put Wall', value:R.putWall, note:'Downside support'},
+      {label:'Max Pain', value:maxPain, note:'Expiration pain point'},
+    ],
+    scenarios:[
+      {label:'Below', level:below?.strike, tone:'down', text:below ? `Below ${levelDisplayPrice(below.strike,R)}: ${R.regime === 'negative_gamma' ? 'sell pressure can accelerate' : 'support hedge may appear'}.` : 'No lower strike in filtered range.'},
+      {label:'Now', level:R.spot, tone:'now', text:`At ${levelDisplayPrice(R.spot,R)}: ${bias}. Confidence ${confidence}%.`},
+      {label:'Above', level:above?.strike, tone:'up', text:above ? `Above ${levelDisplayPrice(above.strike,R)}: ${R.regime === 'negative_gamma' ? 'buy pressure can chase' : 'resistance hedge may cap'}.` : 'No upper strike in filtered range.'},
+    ],
+  };
+}
+function renderCommandCenter(R){
+  const read = R.marketRead;
+  const readHost = byId('marketReadPanel');
+  if(readHost){
+    readHost.innerHTML = `
+      <div class="read-main ${read.biasClass}">
+        <span class="read-kicker">Market Read</span>
+        <strong>${esc(read.bias)}</strong>
+        <p>${esc(read.summary)}</p>
+      </div>
+      <div class="read-stats">
+        <div><span>Confidence</span><b>${read.confidence}%</b></div>
+        <div><span>Regime</span><b>${esc(R.regime.replace('_',' '))}</b></div>
+        <div><span>Net GEX</span><b class="${R.totalGex>=0?'pos':'neg'}">${fmtNum(R.totalGex)}</b></div>
+        <div><span>PCR</span><b>${R.pcr.toFixed(2)}</b></div>
+        <div class="data-state ${read.dataQuality.cls}"><span>Data</span><b>${esc(read.dataQuality.state)}</b><small>${esc(read.dataQuality.age)} / ${esc(read.dataQuality.source)}</small></div>
+      </div>
+    `;
+  }
+  const levelsHost = byId('keyLevelsPanel');
+  if(levelsHost){
+    levelsHost.innerHTML = read.keyLevels.map(item=>`
+      <div class="level-tile">
+        <span>${esc(item.label)}</span>
+        <b>${levelDisplayPrice(item.value,R)}</b>
+        <small>${esc(item.note)}</small>
+      </div>
+    `).join('');
+  }
+  const scenarioHost = byId('scenarioLadderPanel');
+  if(scenarioHost){
+    scenarioHost.innerHTML = read.scenarios.map(item=>`
+      <div class="scenario-tile ${item.tone}">
+        <span>${esc(item.label)}</span>
+        <b>${levelDisplayPrice(item.level,R)}</b>
+        <p>${esc(item.text)}</p>
+      </div>
+    `).join('');
+  }
+  const qualityHost = byId('signalQualityPanel');
+  if(qualityHost){
+    qualityHost.innerHTML = read.quality.map(item=>`
+      <div class="quality-tile ${esc(item.tone || '')}">
+        <span>${esc(item.label)}</span>
+        <b>${esc(item.value)}</b>
+      </div>
+    `).join('');
+  }
+}
+
+const SNAPSHOT_STORAGE_KEY = 'matrix.marketSnapshots.v1';
+const SNAPSHOT_OUTCOMES = ['Worked','Failed','Early','Late','No Trade','Noise'];
+function loadMarketSnapshots(){
+  try{
+    const raw = localStorage.getItem(SNAPSHOT_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+function writeMarketSnapshots(rows){
+  localStorage.setItem(SNAPSHOT_STORAGE_KEY,JSON.stringify(rows));
+}
+function snapshotFromResult(R,note=''){
+  const read = R.marketRead || buildMarketRead(R);
+  const spxCalc = spxPriceFromSpyPrice(R.spot,R);
+  return {
+    id:`snap-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    createdAt:new Date().toISOString(),
+    symbol:R.symbol,
+    spot:R.spot,
+    spxCalc,
+    selectedExpirations:R.maxPain?.active?.selectedExps || [],
+    dataState:read.dataQuality?.state || '',
+    dataAge:read.dataQuality?.age || '',
+    regime:R.regime,
+    bias:read.bias,
+    confidence:read.confidence,
+    totalGex:R.totalGex,
+    pcr:R.pcr,
+    flip:R.flip,
+    maxGammaStrike:R.maxGammaStrike,
+    callWall:R.callWall,
+    putWall:R.putWall,
+    maxPain:R.maxPain?.active?.maxPain ?? null,
+    expectedMove:R.expectedMove,
+    scenarios:read.scenarios,
+    userNote:note,
+    outcome:'',
+  };
+}
+function saveMarketSnapshot(){
+  if(!window._lastR) return;
+  const note = byId('snapshotNote')?.value || '';
+  const rows = loadMarketSnapshots();
+  rows.unshift(snapshotFromResult(window._lastR,note.trim()));
+  writeMarketSnapshots(rows.slice(0,250));
+  if(byId('snapshotNote')) byId('snapshotNote').value='';
+  renderReviewPage();
+  const btn=byId('saveSnapshot');
+  if(btn){
+    const old=btn.textContent;
+    btn.textContent='Saved';
+    setTimeout(()=>btn.textContent=old,900);
+  }
+}
+function setSnapshotOutcome(id,outcome){
+  const rows = loadMarketSnapshots().map(row=>row.id===id ? {...row,outcome} : row);
+  writeMarketSnapshots(rows);
+  renderReviewPage();
+}
+function deleteSnapshot(id){
+  writeMarketSnapshots(loadMarketSnapshots().filter(row=>row.id!==id));
+  renderReviewPage();
+}
+function fmtSnapshotDate(value){
+  const d = new Date(value);
+  if(Number.isNaN(d.getTime())) return '--';
+  return d.toLocaleString('en-US',{month:'short',day:'2-digit',hour:'2-digit',minute:'2-digit'});
+}
+function percent(n,d){
+  return d ? `${Math.round((n/d)*100)}%` : '--';
+}
+function countBy(rows,keyFn){
+  const out = new Map();
+  rows.forEach(row=>{
+    const key = keyFn(row) || 'Unknown';
+    out.set(key,(out.get(key)||0)+1);
+  });
+  return [...out.entries()].sort((a,b)=>b[1]-a[1]);
+}
+function renderReviewBars(items,total,limit=6){
+  if(!items.length) return '<div class="review-empty">No reviewed data yet.</div>';
+  return `<div class="review-bars">${items.slice(0,limit).map(([label,count])=>`
+    <div class="review-bar">
+      <b>${esc(label)}</b>
+      <div class="review-bar-track"><div class="review-bar-fill" style="width:${total ? Math.max(4,Math.round((count/total)*100)) : 0}%"></div></div>
+      <em>${count}</em>
+    </div>
+  `).join('')}</div>`;
+}
+function renderReviewStats(allRows,filteredRows){
+  const host=byId('reviewStatsPanel');
+  if(!host) return;
+  if(!allRows.length){
+    host.innerHTML=`
+      <div class="review-stat"><span>Total Reads</span><strong>0</strong><small>Save Matrix GEX reads to build history.</small></div>
+      <div class="review-stat"><span>Reviewed</span><strong>--</strong><small>No outcomes marked yet.</small></div>
+      <div class="review-stat"><span>Win Rate</span><strong>--</strong><small>Marks counted as Worked.</small></div>
+      <div class="review-stat"><span>Avg Confidence</span><strong>--</strong><small>From saved market reads.</small></div>
+    `;
+    return;
+  }
+  const reviewed = allRows.filter(row=>row.outcome);
+  const worked = reviewed.filter(row=>row.outcome === 'Worked').length;
+  const failed = reviewed.filter(row=>row.outcome === 'Failed' || row.outcome === 'Noise').length;
+  const avgConfidence = Math.round(allRows.reduce((sum,row)=>sum+(Number(row.confidence)||0),0)/allRows.length);
+  const winRateValue = reviewed.length ? Math.round((worked/reviewed.length)*100) : null;
+  const tone = winRateValue == null ? 'warn' : winRateValue >= 55 ? 'good' : winRateValue >= 40 ? 'warn' : 'bad';
+  const outcomeItems = countBy(reviewed,row=>row.outcome);
+  const biasItems = countBy(allRows,row=>row.bias);
+  host.innerHTML=`
+    <div class="review-stat">
+      <span>Total Reads</span>
+      <strong>${allRows.length}</strong>
+      <small>${filteredRows.length} shown with current filter.</small>
+    </div>
+    <div class="review-stat ${reviewed.length ? 'good' : 'warn'}">
+      <span>Reviewed</span>
+      <strong>${percent(reviewed.length,allRows.length)}</strong>
+      <small>${reviewed.length}/${allRows.length} snapshots have outcomes.</small>
+    </div>
+    <div class="review-stat ${tone}">
+      <span>Win Rate</span>
+      <strong>${winRateValue == null ? '--' : `${winRateValue}%`}</strong>
+      <small>${worked} worked / ${failed} failed or noise.</small>
+    </div>
+    <div class="review-stat">
+      <span>Avg Confidence</span>
+      <strong>${avgConfidence}%</strong>
+      <small>Use this against actual outcomes, not as truth.</small>
+    </div>
+    <div class="review-breakdown">
+      <span>Outcome Breakdown</span>
+      ${renderReviewBars(outcomeItems,reviewed.length)}
+    </div>
+    <div class="review-breakdown">
+      <span>Bias Mix</span>
+      ${renderReviewBars(biasItems,allRows.length)}
+    </div>
+  `;
+}
+function renderReviewPage(){
+  const host=byId('reviewSnapshotList');
+  if(!host) return;
+  const filter=byId('reviewOutcomeFilter')?.value || '';
+  const allRows=loadMarketSnapshots();
+  const rows=allRows.filter(row=>!filter || row.outcome===filter);
+  renderReviewStats(allRows,rows);
+  if(!rows.length){
+    host.innerHTML='<div class="review-empty">No saved Matrix GEX snapshots yet. Open Matrix GEX and save a read during the session.</div>';
+    return;
+  }
+  host.innerHTML=rows.map(row=>`
+    <article class="snapshot-card" data-snapshot-id="${esc(row.id)}">
+      <div class="snapshot-head">
+        <div>
+          <span>${esc(fmtSnapshotDate(row.createdAt))}</span>
+          <strong>${esc(row.symbol)} ${fmtPrice(row.spot)}${row.spxCalc==null?'':` / SPX ${fmtPrice(row.spxCalc)}`}</strong>
+        </div>
+        <div class="snapshot-bias ${esc((row.bias||'').toLowerCase().replace(/[^a-z]+/g,'-'))}">${esc(row.bias || '--')} · ${Number(row.confidence||0)}%</div>
+      </div>
+      <div class="snapshot-grid">
+        <span><b>Regime</b>${esc(row.regime || '--')}</span>
+        <span><b>Net GEX</b>${fmtNum(Number(row.totalGex)||0)}</span>
+        <span><b>PCR</b>${Number(row.pcr||0).toFixed(2)}</span>
+        <span><b>Data</b>${esc(row.dataState || '--')} ${esc(row.dataAge || '')}</span>
+        <span><b>Call Wall</b>${levelDisplayPrice(row.callWall,{symbol:row.symbol})}</span>
+        <span><b>Put Wall</b>${levelDisplayPrice(row.putWall,{symbol:row.symbol})}</span>
+        <span><b>Max Pain</b>${levelDisplayPrice(row.maxPain,{symbol:row.symbol})}</span>
+        <span><b>Expected Move</b>${row.expectedMove?fmtPrice(row.expectedMove):'--'}</span>
+      </div>
+      ${row.userNote ? `<p class="snapshot-note">${esc(row.userNote)}</p>` : ''}
+      <div class="snapshot-outcomes">
+        ${SNAPSHOT_OUTCOMES.map(outcome=>`<button type="button" class="${row.outcome===outcome?'active':''}" data-outcome="${esc(outcome)}">${esc(outcome)}</button>`).join('')}
+        <button type="button" class="delete" data-delete-snapshot="1">Delete</button>
+      </div>
+    </article>
+  `).join('');
+}
 
 // ---------- Rendering ----------
 function buildOptionsHeatMap(chain){
@@ -933,19 +1255,24 @@ function renderMaxPainValues(R){
   const host = document.getElementById('maxPainValues');
   if(!host) return;
   const maxPain = R?.maxPain?.active?.maxPain;
-  if(R?.maxPain?.symbol !== 'SPX' || maxPain == null){
+  if(maxPain == null){
     host.innerHTML = '';
     return;
   }
-  const spyMaxPain = spyPriceFromSpxStrike(maxPain,R);
+  const spyMaxPain = R?.maxPain?.symbol === 'SPX' ? spyPriceFromSpxStrike(maxPain,R) : null;
+  const spxMaxPain = R?.maxPain?.symbol === 'SPY' ? spxPriceFromSpyPrice(maxPain,R) : null;
   host.innerHTML = `
     <div class="maxpain-value" style="--c:#ffc107">
-      <span class="k">Max Pain SPX</span>
+      <span class="k">Max Pain ${esc(R.maxPain.symbol)}</span>
       <span class="v">${fmtPrice(maxPain)}</span>
     </div>
     ${spyMaxPain == null ? '' : `<div class="maxpain-value spy" style="--c:#22b8ff">
       <span class="k">Max Pain SPY</span>
       <span class="v">${fmtSpyConvertedPrice(spyMaxPain)}</span>
+    </div>`}
+    ${spxMaxPain == null ? '' : `<div class="maxpain-value spy" style="--c:#22b8ff">
+      <span class="k">Max Pain SPX calc</span>
+      <span class="v">${fmtPrice(spxMaxPain)}</span>
     </div>`}
   `;
 }
@@ -1144,9 +1471,12 @@ function renderImpl(R){
               badge.textContent="DEMO - synthetic data · refreshed "+nowClient; }
   const regClass = R.regime==="positive_gamma"?"reg-pos":R.regime==="negative_gamma"?"reg-neg":"reg-neu";
   const regHeb = {positive_gamma:"Positive Gamma",negative_gamma:"Negative Gamma",neutral:"Neutral"}[R.regime];
+  const spxSpot = spxPriceFromSpyPrice(R.spot,R);
+  const spxSpotLine = spxSpot == null ? '' : `<div class="k" style="margin-top:6px">SPX calc: ${fmtPrice(spxSpot)}</div>`;
   document.getElementById('topCards').innerHTML = `
     <div class="card"><div class="k">Symbol / Spot</div>
-      <div class="v">${R.symbol} <small>${fmtPrice(R.spot)}</small></div></div>
+      <div class="v">${R.symbol} <small>${fmtPrice(R.spot)}</small></div>
+      ${spxSpotLine}</div>
     <div class="card"><div class="k">Regime</div>
       <div class="v"><span class="regime-badge ${regClass}">${regHeb}</span></div>
       <div class="k" style="margin-top:8px">strength: ${R.strength}</div></div>
@@ -1161,12 +1491,15 @@ function renderImpl(R){
       <div class="k" style="margin-top:6px">${R.keptCount}/${R.totalCount} quotes · DTE: ${R.expiries.join(', ')}</div></div>
   `;
 
+  renderCommandCenter(R);
   renderOptionsHeatMap(R);
   renderDarkPoolLevels(R);
   if(activeView === 'gex') drawChart(R);
+  if(activeView === 'matrix-gex') drawChart(R,'matrixGexChart');
   if(activeView === 'net-flow') drawNetFlow(R);
   if(activeView === 'max-pain') drawMaxPain(R);
   if(activeView === 'edge') drawEdge(R);
+  if(activeView === 'review') renderReviewPage();
   return;
 
   document.getElementById('levels').innerHTML = `
@@ -1252,8 +1585,20 @@ const METRICS = {
 function hexA(hex,a){const n=parseInt(hex.slice(1),16);return `rgba(${n>>16&255},${n>>8&255},${n&255},${a})`;}
 
 // ---------- Canvas chart: vertical bars by strike + area overlays ----------
-function drawChart(R){
-  const cv = document.getElementById('gexChart');
+function chartTargets(chartId){
+  const isMatrix = chartId === 'matrixGexChart';
+  return {
+    canvasId: chartId,
+    symbolId: isMatrix ? 'matrixSymLabel' : 'symLabel',
+    legendId: isMatrix ? 'matrixChartLegend' : 'chartLegend',
+    tooltipId: isMatrix ? 'matrixGexTooltip' : 'chartTooltip',
+    crosshairId: isMatrix ? 'matrixGexCrosshairX' : 'chartCrosshairX',
+  };
+}
+function drawChart(R,chartId='gexChart'){
+  const targets=chartTargets(chartId);
+  const cv = document.getElementById(targets.canvasId);
+  if(!cv) return;
   const dpr = window.devicePixelRatio||1;
   const W = cv.clientWidth;
   const mobile = W < 640;
@@ -1279,8 +1624,10 @@ function drawChart(R){
   const areas = active.filter(m=>METRICS[m].kind==="area");
 
   // header symbol + legend
-  document.getElementById('symLabel').textContent = R.symbol;
-  document.getElementById('chartLegend').innerHTML = active.map(m=>{
+  const symLabel=byId(targets.symbolId);
+  const legend=byId(targets.legendId);
+  if(symLabel) symLabel.textContent = R.symbol;
+  if(legend) legend.innerHTML = active.map(m=>{
     const M=METRICS[m];
     const sw = M.kind==="bar"
       ? `<span class="sq" style="background:${M.color}"></span>`
@@ -1384,8 +1731,12 @@ function drawChart(R){
   ctx.strokeStyle="#d58b16"; ctx.lineWidth=2;
   ctx.beginPath(); ctx.moveTo(px,padT-6); ctx.lineTo(px,bottom); ctx.stroke();
   ctx.fillStyle="#d58b16"; ctx.font=(mobile ? "bold 10px Segoe UI" : "bold 12px Segoe UI"); ctx.textBaseline="alphabetic";
-  ctx.textAlign = px>W-120?"right":"left";
-  ctx.fillText("Price: "+fmtPrice(R.spot), px+(px>W-120?-6:6), padT-9);
+  const spxSpot = spxPriceFromSpyPrice(R.spot,R);
+  const priceLabel = spxSpot == null ? "Price: "+fmtPrice(R.spot) : "SPY: "+fmtPrice(R.spot)+" / SPX: "+fmtPrice(spxSpot);
+  const labelWidth = ctx.measureText(priceLabel).width;
+  const alignRight = px>W-labelWidth-12;
+  ctx.textAlign = alignRight?"right":"left";
+  ctx.fillText(priceLabel, px+(alignRight?-6:6), padT-9);
 
   // ----- axis titles -----
   if(hasBar){ ctx.save(); ctx.translate(14,padT+plotH/2); ctx.rotate(-Math.PI/2);
@@ -1405,9 +1756,11 @@ function fmtAxis(v){
   return v.toFixed(0);
 }
 function showChartTooltip(ev){
-  const cv=document.getElementById('gexChart');
-  const tt=document.getElementById('chartTooltip');
-  const cross=document.getElementById('chartCrosshairX');
+  const cv=ev.currentTarget || document.getElementById('gexChart');
+  const targets=chartTargets(cv?.id || 'gexChart');
+  const tt=document.getElementById(targets.tooltipId);
+  const cross=document.getElementById(targets.crosshairId);
+  if(!cv || !tt || !cross) return;
   const bars=cv._matrixBars||[];
   if(!bars.length) return;
 
@@ -1441,10 +1794,13 @@ function showChartTooltip(ev){
   }).join('');
   const spyPrice = spyPriceFromSpxStrike(s.strike,R);
   const spyRow = spyPrice == null ? '' : `<div class="tt-row spy-row"><span>SPY Price</span><span class="pos">${fmtSpyConvertedPrice(spyPrice)}</span></div>`;
+  const spxPrice = spxPriceFromSpyPrice(s.strike,R);
+  const spxRow = spxPrice == null ? '' : `<div class="tt-row spy-row"><span>SPX Price</span><span class="pos">${fmtPrice(spxPrice)}</span></div>`;
   tt.innerHTML = `
     <div class="tt-title">${R?.symbol || ''} Strike ${fmtPrice(s.strike)}</div>
     ${metricRows || row('No metric selected','')}
     ${spyRow}
+    ${spxRow}
   `;
   tt.style.display='block';
   cross.style.display='block';
@@ -1457,8 +1813,8 @@ function showChartTooltip(ev){
   tt.style.top=Math.max(6,top)+'px';
 }
 function hideChartTooltip(){
-  document.getElementById('chartTooltip').style.display='none';
-  document.getElementById('chartCrosshairX').style.display='none';
+  ['chartTooltip','matrixGexTooltip'].forEach(id=>{const el=byId(id); if(el) el.style.display='none';});
+  ['chartCrosshairX','matrixGexCrosshairX'].forEach(id=>{const el=byId(id); if(el) el.style.display='none';});
 }
 
 // ---------- Dealer Pressure: GEX / Vanna / Charm pressure map ----------
@@ -1933,7 +2289,7 @@ function hideEdgeTooltip(){
 
 // ---------- Wiring ----------
 let activeView = 'gex';
-const selectedExpirationsByView = {gex:null, 'options-heat-map':null, 'max-pain':null, edge:null};
+const selectedExpirationsByView = {gex:null, 'matrix-gex':null, 'max-pain':null};
 function currentExpirationValues(){
   return [...document.querySelectorAll('#expirationPicker input:checked')].map(input=>input.value);
 }
@@ -1963,8 +2319,7 @@ function populateExpirations(chain){
   });
   const expiries = [...byExp.keys()].sort();
   const validSelected = expiries.filter(exp=>selected.has(exp));
-  const defaultHeatMap = expiries.filter(exp=>exp<=monthIso);
-  const defaultSelection = activeView === 'options-heat-map' ? (defaultHeatMap.length ? defaultHeatMap : expiries.slice(0,1)) : expiries.slice(0,1);
+  const defaultSelection = expiries.slice(0,1);
   const active = new Set(validSelected.length ? validSelected : defaultSelection);
   picker.innerHTML = expiries.length ? expiries.map(exp=>{
     const dte = byExp.get(exp);
@@ -1983,9 +2338,9 @@ function setView(view){
   hideAllHoverHelpers();
   run();
   if(view === 'gex' && window._lastR) requestAnimationFrame(()=>drawChart(window._lastR));
-  if(view === 'net-flow' && window._lastR) requestAnimationFrame(()=>drawNetFlow(window._lastR));
+  if(view === 'matrix-gex' && window._lastR) requestAnimationFrame(()=>drawChart(window._lastR,'matrixGexChart'));
   if(view === 'max-pain' && window._lastR) requestAnimationFrame(()=>drawMaxPain(window._lastR));
-  if(view === 'edge' && window._lastR) requestAnimationFrame(()=>drawEdge(window._lastR));
+  if(view === 'review') renderReviewPage();
   window.scrollTo({top:0,left:0});
 }
 function run(){
@@ -2009,75 +2364,84 @@ function run(){
     chain = {...chain, quotes: chain.quotes.filter(q=>selectedExpirations.has(q.exp))};
   }
   const expectedMove = calcExpectedMove(chain);
-  const optionsHeatMap = buildOptionsHeatMap(chain);
-  const netFlow = buildNetFlow(chain);
-  const darkPoolLevels = buildDarkPoolLevels(chain);
   const maxPain = buildMaxPain(fullChain, selectedExpirations);
-  const dealerFlowMap = buildDealerFlowMap(chain);
   const R = calcGEX(chain,mode);
   R.expectedMove = expectedMove;
-  R.dealerScenarios = buildDealerScenarios(chain,mode);
-  R.dealerFlowMap = dealerFlowMap;
-  R.optionsHeatMap = optionsHeatMap;
-  R.netFlow = netFlow;
-  R.darkPoolLevels = darkPoolLevels;
   R.maxPain = maxPain;
   R.live = !!chain.live;
   R.asof = useLive ? REAL[sym].asof : null;
+  R.marketRead = buildMarketRead(R);
   renderImpl(R);
 }
-document.getElementById('market').addEventListener('change',()=>{
+bind('market','change',()=>{
   selectedExpirationsByView.gex=null;
-  selectedExpirationsByView['options-heat-map']=null;
+  selectedExpirationsByView['matrix-gex']=null;
   selectedExpirationsByView['max-pain']=null;
-  selectedExpirationsByView.edge=null;
   populateSymbols();
   run();
 });
-document.getElementById('symbol').addEventListener('change',()=>{
+bind('symbol','change',()=>{
   document.getElementById('spotOverride').value='';
   document.getElementById('expirationPicker').innerHTML='';
   selectedExpirationsByView.gex=null;
-  selectedExpirationsByView['options-heat-map']=null;
+  selectedExpirationsByView['matrix-gex']=null;
   selectedExpirationsByView['max-pain']=null;
-  selectedExpirationsByView.edge=null;
   run();
 });
-document.getElementById('expirationPicker').addEventListener('change',()=>{
+bind('expirationPicker','change',()=>{
   saveCurrentExpirationSelection();
   run();
 });
-document.getElementById('mode').addEventListener('change',run);
-document.getElementById('source').addEventListener('change',run);
-document.getElementById('autorefresh').addEventListener('change',setupAutoRefresh);
-document.getElementById('strikeCount').addEventListener('change',run);
-document.getElementById('run').textContent = 'Refresh';
-document.getElementById('run').addEventListener('click',()=>loadData(true));
+bind('mode','change',run);
+bind('source','change',run);
+bind('autorefresh','change',setupAutoRefresh);
+bind('strikeCount','change',run);
+if(byId('run')) byId('run').textContent = 'Refresh';
+bind('run','click',()=>loadData(true));
 window.addEventListener('resize',()=>{
   if(!window._lastR) return;
   if(activeView === 'gex') drawChart(window._lastR);
-  if(activeView === 'net-flow') drawNetFlow(window._lastR);
+  if(activeView === 'matrix-gex') drawChart(window._lastR,'matrixGexChart');
   if(activeView === 'max-pain') drawMaxPain(window._lastR);
-  if(activeView === 'edge') drawEdge(window._lastR);
 });
-document.getElementById('gexChart').addEventListener('mousemove',showChartTooltip);
-document.getElementById('gexChart').addEventListener('mouseleave',hideChartTooltip);
-document.getElementById('gexChart').addEventListener('touchstart',showChartTooltip,{passive:true});
-document.getElementById('gexChart').addEventListener('touchmove',showChartTooltip,{passive:true});
-document.getElementById('gexChart').addEventListener('touchend',()=>setTimeout(hideChartTooltip,1200),{passive:true});
-document.getElementById('optionsHeatMap').addEventListener('mousemove',showHeatMapTip);
-document.getElementById('optionsHeatMap').addEventListener('mouseleave',hideHeatMapTip);
-document.getElementById('darkPoolLevels').addEventListener('mousemove',showDarkPoolTooltip);
-document.getElementById('darkPoolLevels').addEventListener('mouseleave',hideDarkPoolTooltip);
-document.getElementById('netFlowChart').addEventListener('mousemove',showNetFlowTooltip);
-document.getElementById('netFlowChart').addEventListener('mouseleave',hideNetFlowTooltip);
-document.getElementById('maxPainChart').addEventListener('mousemove',showMaxPainTooltip);
-document.getElementById('maxPainChart').addEventListener('mouseleave',hideMaxPainTooltip);
-document.getElementById('edgeChart').addEventListener('mousemove',showEdgeTooltip);
-document.getElementById('edgeChart').addEventListener('mouseleave',hideEdgeTooltip);
-document.getElementById('edgeChart').addEventListener('touchstart',showEdgeTooltip,{passive:true});
-document.getElementById('edgeChart').addEventListener('touchmove',showEdgeTooltip,{passive:true});
-document.getElementById('edgeChart').addEventListener('touchend',()=>setTimeout(hideEdgeTooltip,1200),{passive:true});
+bind('gexChart','mousemove',showChartTooltip);
+bind('gexChart','mouseleave',hideChartTooltip);
+bind('gexChart','touchstart',showChartTooltip,{passive:true});
+bind('gexChart','touchmove',showChartTooltip,{passive:true});
+bind('gexChart','touchend',()=>setTimeout(hideChartTooltip,1200),{passive:true});
+bind('matrixGexChart','mousemove',showChartTooltip);
+bind('matrixGexChart','mouseleave',hideChartTooltip);
+bind('matrixGexChart','touchstart',showChartTooltip,{passive:true});
+bind('matrixGexChart','touchmove',showChartTooltip,{passive:true});
+bind('matrixGexChart','touchend',()=>setTimeout(hideChartTooltip,1200),{passive:true});
+bind('optionsHeatMap','mousemove',showHeatMapTip);
+bind('optionsHeatMap','mouseleave',hideHeatMapTip);
+bind('darkPoolLevels','mousemove',showDarkPoolTooltip);
+bind('darkPoolLevels','mouseleave',hideDarkPoolTooltip);
+bind('netFlowChart','mousemove',showNetFlowTooltip);
+bind('netFlowChart','mouseleave',hideNetFlowTooltip);
+bind('maxPainChart','mousemove',showMaxPainTooltip);
+bind('maxPainChart','mouseleave',hideMaxPainTooltip);
+bind('edgeChart','mousemove',showEdgeTooltip);
+bind('edgeChart','mouseleave',hideEdgeTooltip);
+bind('edgeChart','touchstart',showEdgeTooltip,{passive:true});
+bind('edgeChart','touchmove',showEdgeTooltip,{passive:true});
+bind('edgeChart','touchend',()=>setTimeout(hideEdgeTooltip,1200),{passive:true});
+bind('saveSnapshot','click',saveMarketSnapshot);
+bind('reviewOutcomeFilter','change',renderReviewPage);
+bind('clearSnapshots','click',()=>{
+  if(!window.confirm('Clear all saved Matrix GEX snapshots?')) return;
+  writeMarketSnapshots([]);
+  renderReviewPage();
+});
+bind('reviewSnapshotList','click',ev=>{
+  const card=ev.target.closest?.('[data-snapshot-id]');
+  if(!card) return;
+  const id=card.dataset.snapshotId;
+  const outcome=ev.target.dataset?.outcome;
+  if(outcome){ setSnapshotOutcome(id,outcome); return; }
+  if(ev.target.dataset?.deleteSnapshot){ deleteSnapshot(id); }
+});
 
 document.querySelectorAll('.side-nav a[data-view]').forEach(link=>{
   link.addEventListener('click',e=>{
@@ -2305,7 +2669,7 @@ function setupAutoRefresh(){
 }
 
 populateSymbols();
-document.getElementById('symbol').value = 'SPX';
+document.getElementById('symbol').value = DEFAULT_SYMBOL;
 document.getElementById('mode').value = 'full';
 document.getElementById('source').value = 'live';
 document.getElementById('autorefresh').value = '30';

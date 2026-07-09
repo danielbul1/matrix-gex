@@ -13,17 +13,15 @@
   };
 </script>
 <script src="https://unpkg.com/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js" onerror="window.__loadMatrixChartLib && window.__loadMatrixChartLib()"></script>
-<link rel="stylesheet" href="assets/dashboard.css?v=20260708">
+<link rel="stylesheet" href="assets/dashboard.css?v=20260710">
 </head>
 <body>
 <header>
   <nav class="side-nav">
     <a href="#" class="active" data-view="gex">GEX</a>
-    <a href="#" data-view="options-heat-map">Options Heat Map</a>
-    <a href="#" data-view="net-flow">Net Flow</a>
-    <a href="#" data-view="dark-pool-levels">Dark Pool Levels</a>
+    <a href="#" data-view="matrix-gex">Matrix GEX</a>
     <a href="#" data-view="max-pain">Max Pain</a>
-    <a href="#" data-view="edge">Dealer Pressure</a>
+    <a href="#" data-view="review">Review</a>
   </nav>
   <div class="side-disclaimer">Disclaimer</div>
   <h1>GEX Analytics</h1>
@@ -138,6 +136,64 @@
     <div class="grid row-top" id="topCards"></div>
   </section>
 
+  <section class="app-view" id="view-matrix-gex">
+    <div class="matrix-header">
+      <div>
+        <span class="command-panel-tag">Experimental</span>
+        <h2>Matrix GEX Command Center</h2>
+        <p>Same SPY GEX baseline, with a decision layer, key levels, scenario ladder, and saved review snapshots.</p>
+      </div>
+      <div class="snapshot-controls" id="snapshotControls">
+        <input id="snapshotNote" type="text" placeholder="Optional note before saving">
+        <button type="button" id="saveSnapshot">Save Snapshot</button>
+      </div>
+    </div>
+
+    <div class="command-center" aria-label="Command Center">
+      <section class="command-panel market-read-panel" id="marketReadPanel" aria-live="polite">
+        <div class="command-panel-head">
+          <h2>Market Read</h2>
+          <span class="command-panel-tag">Pending</span>
+        </div>
+        <div class="command-panel-body"></div>
+      </section>
+      <section class="command-panel key-levels-panel" id="keyLevelsPanel" aria-live="polite">
+        <div class="command-panel-head">
+          <h2>Key Levels</h2>
+          <span class="command-panel-tag">Pending</span>
+        </div>
+        <div class="command-panel-body"></div>
+      </section>
+      <section class="command-panel scenario-ladder-panel" id="scenarioLadderPanel" aria-live="polite">
+        <div class="command-panel-head">
+          <h2>Scenario Ladder</h2>
+          <span class="command-panel-tag">Pending</span>
+        </div>
+        <div class="command-panel-body"></div>
+      </section>
+      <section class="command-panel signal-quality-panel" id="signalQualityPanel" aria-live="polite">
+        <div class="command-panel-head">
+          <h2>Signal Quality</h2>
+          <span class="command-panel-tag">Pending</span>
+        </div>
+        <div class="command-panel-body"></div>
+      </section>
+    </div>
+
+    <div class="card chartcard">
+      <div class="charttop">
+        <span class="symlabel" id="matrixSymLabel"></span>
+        <span class="chartlegend" id="matrixChartLegend"></span>
+      </div>
+      <div class="chartwrap">
+        <div class="watermark">Matrix</div>
+        <div class="chart-crosshair-x" id="matrixGexCrosshairX"></div>
+        <div class="chart-tooltip" id="matrixGexTooltip"></div>
+        <canvas id="matrixGexChart" height="540"></canvas>
+      </div>
+    </div>
+  </section>
+
   <section class="app-view" id="view-options-heat-map">
     <article class="feature-card heatmap-card">
       <h2>What is the Options Heat Map?</h2>
@@ -207,6 +263,31 @@
     </article>
   </section>
 
+  <section class="app-view" id="view-review">
+    <article class="feature-card review-card">
+      <div class="review-top">
+        <div>
+          <h2>Market Review</h2>
+          <p>Saved Matrix GEX reads. Mark outcomes after the session to learn when the model helped, failed, or was just noise.</p>
+        </div>
+        <button type="button" class="review-danger" id="clearSnapshots">Clear Snapshots</button>
+      </div>
+      <div class="review-filters">
+        <select id="reviewOutcomeFilter" aria-label="Filter by outcome">
+          <option value="">All outcomes</option>
+          <option value="Worked">Worked</option>
+          <option value="Failed">Failed</option>
+          <option value="Early">Early</option>
+          <option value="Late">Late</option>
+          <option value="No Trade">No Trade</option>
+          <option value="Noise">Noise</option>
+        </select>
+      </div>
+      <div class="review-stats" id="reviewStatsPanel" aria-live="polite"></div>
+      <div class="review-list" id="reviewSnapshotList" aria-live="polite"></div>
+    </article>
+  </section>
+
   <section class="app-view" id="view-edge">
     <article class="feature-card edge-card">
       <div class="edge-top">
@@ -250,6 +331,6 @@
   Synthetic data is generated in-browser when live CBOE data is unavailable. Original demo: gex.kctradings.com
 </footer>
 
-<script src="assets/dashboard.js?v=20260708"></script>
+<script src="assets/dashboard.js?v=20260710"></script>
 </body>
 </html>
