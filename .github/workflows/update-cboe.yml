@@ -43,12 +43,22 @@ jobs:
           while [ "$SECONDS" -lt "$end" ]; do
             now_utc=$(date -u +%H%M)
             if python fetch_cboe.py && python tools/build_data_status.py && MATRIX_REQUIRE_FRESH_DATA=1 python tools/smoke_check.py; then
+              mkdir -p /tmp/matrix-gex-data
+              cp cboe_data.json data_status.json /tmp/matrix-gex-data/
+              git fetch origin data || true
+              if git show-ref --verify --quiet refs/remotes/origin/data; then
+                git switch --force-create data origin/data
+              else
+                git switch --orphan data
+                git rm -rf .
+              fi
+              cp /tmp/matrix-gex-data/cboe_data.json /tmp/matrix-gex-data/data_status.json .
               git add cboe_data.json data_status.json
               if ! git diff --cached --quiet; then
                 git commit -m "Update CBOE data"
-                git pull --rebase origin main
-                git push
+                git push origin data
               fi
+              git switch main
             else
               echo "Fetch or validation failed; skipping commit for this interval"
               git restore -- cboe_data.json data_status.json

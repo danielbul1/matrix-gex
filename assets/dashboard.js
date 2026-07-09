@@ -2497,12 +2497,19 @@ let _matrixChart=null, _matrixCandleSeries=null, _matrixPriceLines=[], _matrixCa
 const MATRIX_SPX_QUOTE_URL = 'https://api.trytripity.site/api/matrix/spx-quote';
 const MATRIX_CBOE_DATA_URL = 'https://api.trytripity.site/api/matrix/cboe-data';
 const MATRIX_CANDLES_URL = 'https://api.trytripity.site/api/matrix/candles';
+const MATRIX_REPO_RAW_BASE = 'https://raw.githubusercontent.com/danielbul1/matrix-gex';
 const TRIPITY_RETRY_MS = 15000;
 const MARKET_FRESHNESS_MAX_MS = 75 * 60 * 1000;
 const MARKET_FRESHNESS_START_MIN = 9 * 60 + 45;
 const MARKET_FRESHNESS_END_MIN = 16 * 60 + 30;
 function dataUrl(){
   return 'cboe_data.json?t=' + Date.now();
+}
+function repoDataUrl(branch){
+  return `${MATRIX_REPO_RAW_BASE}/${branch}/cboe_data.json?t=${Date.now()}`;
+}
+function isGithubPagesHost(){
+  return location.hostname.endsWith('github.io');
 }
 function fetchLiveData(url){
   return fetch(url, {cache:'no-store'})
@@ -2530,8 +2537,21 @@ function fetchCboeDataWithSource(url, sourceName){
   return fetchLiveData(url).then(d=>validCboeData(d) ? {data:d, source:sourceName} : null);
 }
 function fetchFallbackCboeData(){
-  return fetchCboeDataWithSource(dataUrl(), 'Local')
-    .then(result=>result || fetchCboeDataWithSource('https://raw.githubusercontent.com/danielbul1/matrix-gex/main/cboe_data.json?t='+Date.now(), 'GitHub'));
+  const sources = isGithubPagesHost()
+    ? [
+        [repoDataUrl('data'), 'GitHub data'],
+        [dataUrl(), 'Local'],
+        [repoDataUrl('main'), 'GitHub main'],
+      ]
+    : [
+        [dataUrl(), 'Local'],
+        [repoDataUrl('data'), 'GitHub data'],
+        [repoDataUrl('main'), 'GitHub main'],
+      ];
+  return sources.reduce(
+    (chain,[url,source])=>chain.then(result=>result || fetchCboeDataWithSource(url, source)),
+    Promise.resolve(null)
+  );
 }
 function getRefreshSeconds(){
   return Math.max(0,+document.getElementById('autorefresh').value || 0);
