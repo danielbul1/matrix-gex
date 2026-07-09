@@ -45,6 +45,7 @@ jobs:
             if python fetch_cboe.py && python tools/build_data_status.py && MATRIX_REQUIRE_FRESH_DATA=1 python tools/smoke_check.py; then
               mkdir -p /tmp/matrix-gex-data
               cp cboe_data.json data_status.json /tmp/matrix-gex-data/
+              git restore -- cboe_data.json data_status.json
               git fetch origin data || true
               if git show-ref --verify --quiet refs/remotes/origin/data; then
                 git switch --force-create data origin/data
