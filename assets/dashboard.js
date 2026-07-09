@@ -581,6 +581,224 @@ function renderCommandCenter(R){
   }
 }
 
+// ---------- Shock engine ----------
+function shockPriceRange(R){
+  const em = Number(R.expectedMove) || R.spot * 0.01;
+  const candidates = [R.spot, R.callWall, R.putWall, R.flip, R.maxGammaStrike]
+    .filter(v=>Number.isFinite(Number(v))).map(Number);
+  const low = Math.min(...candidates, R.spot - em * 1.8);
+  const high = Math.max(...candidates, R.spot + em * 1.8);
+  const pad = Math.max((high-low)*0.18, R.spot*0.003);
+  return {low:low-pad, high:high+pad, em};
+}
+function interpolateStrikeMetric(strikes, price, key){
+  if(!strikes?.length) return 0;
+  if(price <= strikes[0].strike) return Number(strikes[0][key]) || 0;
+  const last = strikes[strikes.length-1];
+  if(price >= last.strike) return Number(last[key]) || 0;
+  for(let i=1;i<strikes.length;i++){
+    const a=strikes[i-1], b=strikes[i];
+    if(price <= b.strike){
+      const span = b.strike-a.strike || 1;
+      const t = (price-a.strike)/span;
+      return (Number(a[key])||0) + ((Number(b[key])||0)-(Number(a[key])||0))*t;
+    }
+  }
+  return 0;
+}
+function buildShockEngine(R){
+  const {low,high,em}=shockPriceRange(R);
+  const steps=90;
+  const maxAbsStrikeGex=Math.max(...R.strikes.map(s=>Math.abs(s.netGex)),1);
+  const gross=Math.abs(R.totalCallGex)+Math.abs(R.totalPutGex)||1;
+  const points=[];
+  for(let i=0;i<=steps;i++){
+    const price=low+(high-low)*i/steps;
+    const localGex=interpolateStrikeMetric(R.strikes,price,'netGex');
+    const localVex=interpolateStrikeMetric(R.strikes,price,'netVex');
+    const localCharm=interpolateStrikeMetric(R.strikes,price,'netCharm');
+    const dist=(price-R.spot)/Math.max(em,R.spot*0.002);
+    const direction = price>=R.spot ? 1 : -1;
+    const normalizedGex=localGex/maxAbsStrikeGex;
+    const flow=-normalizedGex*direction*100;
+    const volShock=(localVex/maxAbsStrikeGex)*35;
+    const timeDrift=(localCharm/maxAbsStrikeGex)*25;
+    const force=Math.max(-100,Math.min(100,flow+volShock+timeDrift));
+    const vacuum=1-Math.min(1,Math.abs(localGex)/maxAbsStrikeGex);
+    const distanceScore=Math.min(18,Math.abs(dist)*4);
+    const acceleration=Math.max(0,Math.min(100,Math.abs(force)*0.62+vacuum*20+distanceScore));
+    const behavior = Math.abs(force)<18 ? 'compression' : force>0 ? 'upside chase' : 'downside sell pressure';
+    points.push({price,localGex,localVex,localCharm,force,acceleration,vacuum,behavior});
+  }
+  function nearestPoint(price){
+    return points.reduce((best,p)=>Math.abs(p.price-price)<Math.abs(best.price-price)?p:best,points[0]);
+  }
+  function sideSummary(side){
+    const isUp=side==='up';
+    const rows=points.filter(p=>isUp ? p.price>=R.spot : p.price<=R.spot);
+    const ranked=[...rows].sort((a,b)=>b.acceleration-a.acceleration);
+    const pocket=ranked[0] || nearestPoint(R.spot);
+    const wall=isUp ? R.callWall : R.putWall;
+    const wallPoint=Number.isFinite(Number(wall)) ? nearestPoint(Number(wall)) : pocket;
+    const target1=wall || pocket.price;
+    const target2=isUp ? Math.min(high,R.spot+em) : Math.max(low,R.spot-em);
+    const score=Math.round(Math.min(100,pocket.acceleration));
+    const action=score>=70 ? 'Breakout risk' : score>=42 ? 'Conditional move' : 'Likely fade/chop';
+    return {side,score,action,pocket,wallPoint,target1,target2};
+  }
+  const up=sideSummary('up');
+  const down=sideSummary('down');
+  const stateScore=Math.max(up.score,down.score);
+  const state=stateScore<42 ? 'Compression' : up.score>down.score ? 'Upside Shock Risk' : 'Downside Shock Risk';
+  const stateClass=stateScore<42 ? 'compression' : up.score>down.score ? 'trend' : 'breakout';
+  return {points,low,high,em,up,down,state,stateClass,stateScore,gross};
+}
+function renderShockPanels(R,shock){
+  const stateHost=byId('shockStatePanel');
+  if(stateHost){
+    stateHost.className=`shock-panel shock-state ${shock.stateClass}`;
+    stateHost.innerHTML=`
+      <span>Current State</span>
+      <strong>${esc(shock.state)}</strong>
+      <p>${shock.stateScore<42 ? 'The structure is compressed. Wait for price to leave the active pocket before trusting direction.' : 'One side has stronger mechanical pressure. Use the chart to see where force expands or fades.'}</p>
+      <div class="shock-metrics">
+        <b>Spot ${levelDisplayPrice(R.spot,R)}</b>
+        <b>Expected Move ${fmtPrice(shock.em)}</b>
+      </div>
+    `;
+  }
+  const upHost=byId('shockUpsidePanel');
+  if(upHost){
+    upHost.innerHTML=`
+      <span>Upside Path</span>
+      <strong>${shock.up.score}/100</strong>
+      <p>${esc(shock.up.action)} above ${levelDisplayPrice(shock.up.target1,R)}. Target pocket ${levelDisplayPrice(shock.up.target2,R)}.</p>
+      <div class="shock-metrics">
+        <b>Force ${Math.round(shock.up.pocket.force)}</b>
+        <b>Accel ${Math.round(shock.up.pocket.acceleration)}%</b>
+      </div>
+    `;
+  }
+  const downHost=byId('shockDownsidePanel');
+  if(downHost){
+    downHost.innerHTML=`
+      <span>Downside Path</span>
+      <strong>${shock.down.score}/100</strong>
+      <p>${esc(shock.down.action)} below ${levelDisplayPrice(shock.down.target1,R)}. Target pocket ${levelDisplayPrice(shock.down.target2,R)}.</p>
+      <div class="shock-metrics">
+        <b>Force ${Math.round(shock.down.pocket.force)}</b>
+        <b>Accel ${Math.round(shock.down.pocket.acceleration)}%</b>
+      </div>
+    `;
+  }
+}
+function drawShockEngine(R){
+  const cv=byId('shockEngineChart');
+  if(!cv) return;
+  const shock=buildShockEngine(R);
+  R.shock=shock;
+  renderShockPanels(R,shock);
+  const ctx=cv.getContext('2d');
+  const dpr=window.devicePixelRatio||1;
+  const W=cv.clientWidth;
+  const H=Math.max(560,Math.min(760,window.innerHeight-170));
+  cv.width=W*dpr; cv.height=H*dpr; cv.style.height=H+'px';
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  ctx.clearRect(0,0,W,H);
+  ctx.fillStyle='#181818'; ctx.fillRect(0,0,W,H);
+  const padL=70,padR=28,padT=52,padB=72,plotW=W-padL-padR,plotH=H-padT-padB;
+  const x=p=>padL+((p-shock.low)/(shock.high-shock.low))*plotW;
+  const yForce=f=>padT+plotH/2-(f/100)*(plotH*.42);
+  const yAccel=a=>padT+plotH-(a/100)*(plotH*.36);
+  ctx.strokeStyle='rgba(255,255,255,.08)'; ctx.lineWidth=1;
+  ctx.fillStyle='#8d989f'; ctx.font='12px Segoe UI'; ctx.textAlign='right'; ctx.textBaseline='middle';
+  [-100,-50,0,50,100].forEach(v=>{
+    const yy=yForce(v);
+    ctx.beginPath(); ctx.moveTo(padL,yy); ctx.lineTo(W-padR,yy); ctx.stroke();
+    ctx.fillText(String(v),padL-10,yy);
+  });
+  function band(from,to,color,label){
+    const l=Math.max(padL,x(from)), r=Math.min(W-padR,x(to));
+    if(r<=l) return;
+    ctx.fillStyle=color; ctx.fillRect(l,padT,r-l,plotH);
+    ctx.fillStyle='rgba(255,255,255,.62)'; ctx.font='900 11px Segoe UI'; ctx.textAlign='center';
+    ctx.fillText(label,l+(r-l)/2,padT+18);
+  }
+  band(shock.low,R.putWall || shock.low,'rgba(255,69,58,.11)','Downside pocket');
+  band(R.callWall || shock.high,shock.high,'rgba(34,184,255,.10)','Upside pocket');
+  if(R.putWall && R.callWall) band(R.putWall,R.callWall,'rgba(255,193,7,.06)','Compression');
+  function path(key,yFn,color,width=2.5){
+    ctx.strokeStyle=color; ctx.lineWidth=width; ctx.beginPath();
+    shock.points.forEach((p,i)=>i?ctx.lineTo(x(p.price),yFn(p[key])):ctx.moveTo(x(p.price),yFn(p[key])));
+    ctx.stroke();
+  }
+  path('force',yForce,'#d5dde3',2);
+  ctx.beginPath();
+  shock.points.forEach((p,i)=>{
+    const yy=yForce(p.force), xx=x(p.price);
+    if(i) ctx.lineTo(xx,yy); else ctx.moveTo(xx,yy);
+  });
+  ctx.lineTo(x(shock.high),yForce(0)); ctx.lineTo(x(shock.low),yForce(0)); ctx.closePath();
+  const grad=ctx.createLinearGradient(0,padT,0,padT+plotH);
+  grad.addColorStop(0,'rgba(34,184,255,.20)');
+  grad.addColorStop(.5,'rgba(255,255,255,.02)');
+  grad.addColorStop(1,'rgba(255,69,58,.22)');
+  ctx.fillStyle=grad; ctx.fill();
+  path('acceleration',yAccel,'#ffc107',2);
+  function vLine(price,color,label,dashed=false){
+    if(!Number.isFinite(Number(price))) return;
+    const xx=x(Number(price));
+    ctx.save();
+    if(dashed) ctx.setLineDash([6,5]);
+    ctx.strokeStyle=color; ctx.lineWidth=2;
+    ctx.beginPath(); ctx.moveTo(xx,padT); ctx.lineTo(xx,padT+plotH); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.translate(xx+7,padT+8); ctx.rotate(Math.PI/2);
+    ctx.fillStyle=color; ctx.font='900 12px Segoe UI'; ctx.textAlign='left'; ctx.textBaseline='middle';
+    ctx.fillText(label,0,0);
+    ctx.restore();
+  }
+  vLine(R.spot,'#ffc107',`Spot ${fmtPrice(R.spot)}`);
+  vLine(R.callWall,'#22b8ff',`Call Wall ${fmtPrice(R.callWall)}`,true);
+  vLine(R.putWall,'#ff453a',`Put Wall ${fmtPrice(R.putWall)}`,true);
+  vLine(R.flip,'#f5f5f5',`Zero Gamma ${R.flip?fmtPrice(R.flip):'--'}`,true);
+  vLine(R.maxGammaStrike,'#8b5fe8',`Max Gamma ${fmtPrice(R.maxGammaStrike)}`,true);
+  ctx.fillStyle='#fff'; ctx.font='900 18px Segoe UI'; ctx.textAlign='center';
+  ctx.fillText(`Matrix Shock Map - ${R.symbol}`,W/2,30);
+  ctx.fillStyle='#9fa8ae'; ctx.font='12px Segoe UI';
+  const ticks=8;
+  for(let i=0;i<=ticks;i++){
+    const price=shock.low+(shock.high-shock.low)*i/ticks;
+    ctx.fillText(fmtPrice(price),x(price),H-28);
+  }
+  ctx.textAlign='center'; ctx.fillText('Price path',padL+plotW/2,H-10);
+  ctx.save(); ctx.translate(24,padT+plotH/2); ctx.rotate(-Math.PI/2); ctx.fillText('Mechanical force / acceleration',0,0); ctx.restore();
+  window._shockHit={R,shock,x,yForce,yAccel,padL,padR,padT,padB,plotW,plotH};
+}
+function showShockTooltip(ev){
+  const h=window._shockHit, tt=byId('shockTooltip');
+  if(!h || !tt) return;
+  const rect=ev.currentTarget.getBoundingClientRect();
+  const mx=ev.clientX-rect.left, my=ev.clientY-rect.top;
+  if(mx<h.padL || mx>h.padL+h.plotW || my<h.padT || my>h.padT+h.plotH){ tt.style.display='none'; return; }
+  const price=h.shock.low+(mx-h.padL)/h.plotW*(h.shock.high-h.shock.low);
+  const p=h.shock.points.reduce((best,row)=>Math.abs(row.price-price)<Math.abs(best.price-price)?row:best,h.shock.points[0]);
+  tt.innerHTML=`
+    <div class="tt-title">${levelDisplayPrice(p.price,h.R)}</div>
+    <div class="tt-row"><span>Behavior</span><span>${esc(p.behavior)}</span></div>
+    <div class="tt-row"><span>Force</span><span>${Math.round(p.force)}</span></div>
+    <div class="tt-row"><span>Acceleration</span><span>${Math.round(p.acceleration)}%</span></div>
+    <div class="tt-row"><span>Local GEX</span><span>${fmtNum(p.localGex)}</span></div>
+  `;
+  tt.style.display='block';
+  tt.style.left=Math.min(rect.width-tt.offsetWidth-6,mx+14)+'px';
+  tt.style.top=Math.max(6,Math.min(rect.height-tt.offsetHeight-6,my+14))+'px';
+}
+function hideShockTooltip(){
+  const tt=byId('shockTooltip');
+  if(tt) tt.style.display='none';
+}
+
 const SNAPSHOT_STORAGE_KEY = 'matrix.marketSnapshots.v1';
 const SNAPSHOT_OUTCOMES = ['Worked','Failed','Early','Late','No Trade','Noise'];
 function loadMarketSnapshots(){
@@ -1496,6 +1714,7 @@ function renderImpl(R){
   renderDarkPoolLevels(R);
   if(activeView === 'gex') drawChart(R);
   if(activeView === 'matrix-gex') drawChart(R,'matrixGexChart');
+  if(activeView === 'shock-engine') drawShockEngine(R);
   if(activeView === 'net-flow') drawNetFlow(R);
   if(activeView === 'max-pain') drawMaxPain(R);
   if(activeView === 'edge') drawEdge(R);
@@ -2289,7 +2508,7 @@ function hideEdgeTooltip(){
 
 // ---------- Wiring ----------
 let activeView = 'gex';
-const selectedExpirationsByView = {gex:null, 'matrix-gex':null, 'max-pain':null};
+const selectedExpirationsByView = {gex:null, 'matrix-gex':null, 'shock-engine':null, 'max-pain':null};
 function currentExpirationValues(){
   return [...document.querySelectorAll('#expirationPicker input:checked')].map(input=>input.value);
 }
@@ -2339,6 +2558,7 @@ function setView(view){
   run();
   if(view === 'gex' && window._lastR) requestAnimationFrame(()=>drawChart(window._lastR));
   if(view === 'matrix-gex' && window._lastR) requestAnimationFrame(()=>drawChart(window._lastR,'matrixGexChart'));
+  if(view === 'shock-engine' && window._lastR) requestAnimationFrame(()=>drawShockEngine(window._lastR));
   if(view === 'max-pain' && window._lastR) requestAnimationFrame(()=>drawMaxPain(window._lastR));
   if(view === 'review') renderReviewPage();
   window.scrollTo({top:0,left:0});
@@ -2376,6 +2596,7 @@ function run(){
 bind('market','change',()=>{
   selectedExpirationsByView.gex=null;
   selectedExpirationsByView['matrix-gex']=null;
+  selectedExpirationsByView['shock-engine']=null;
   selectedExpirationsByView['max-pain']=null;
   populateSymbols();
   run();
@@ -2385,6 +2606,7 @@ bind('symbol','change',()=>{
   document.getElementById('expirationPicker').innerHTML='';
   selectedExpirationsByView.gex=null;
   selectedExpirationsByView['matrix-gex']=null;
+  selectedExpirationsByView['shock-engine']=null;
   selectedExpirationsByView['max-pain']=null;
   run();
 });
@@ -2402,6 +2624,7 @@ window.addEventListener('resize',()=>{
   if(!window._lastR) return;
   if(activeView === 'gex') drawChart(window._lastR);
   if(activeView === 'matrix-gex') drawChart(window._lastR,'matrixGexChart');
+  if(activeView === 'shock-engine') drawShockEngine(window._lastR);
   if(activeView === 'max-pain') drawMaxPain(window._lastR);
 });
 bind('gexChart','mousemove',showChartTooltip);
@@ -2414,6 +2637,11 @@ bind('matrixGexChart','mouseleave',hideChartTooltip);
 bind('matrixGexChart','touchstart',showChartTooltip,{passive:true});
 bind('matrixGexChart','touchmove',showChartTooltip,{passive:true});
 bind('matrixGexChart','touchend',()=>setTimeout(hideChartTooltip,1200),{passive:true});
+bind('shockEngineChart','mousemove',showShockTooltip);
+bind('shockEngineChart','mouseleave',hideShockTooltip);
+bind('shockEngineChart','touchstart',showShockTooltip,{passive:true});
+bind('shockEngineChart','touchmove',showShockTooltip,{passive:true});
+bind('shockEngineChart','touchend',()=>setTimeout(hideShockTooltip,1200),{passive:true});
 bind('optionsHeatMap','mousemove',showHeatMapTip);
 bind('optionsHeatMap','mouseleave',hideHeatMapTip);
 bind('darkPoolLevels','mousemove',showDarkPoolTooltip);

@@ -47,6 +47,11 @@ REQUIRED_IDS = (
     "matrixGexCrosshairX",
     "matrixSymLabel",
     "matrixChartLegend",
+    "shockStatePanel",
+    "shockUpsidePanel",
+    "shockDownsidePanel",
+    "shockEngineChart",
+    "shockTooltip",
     "reviewSnapshotList",
     "reviewOutcomeFilter",
     "reviewStatsPanel",
@@ -239,7 +244,7 @@ def validate_dashboard():
     if "debugStaleBanner" not in js:
         return fail("dashboard stale banner debug hook missing")
 
-    for function_name in ("loadData", "run", "drawChart", "renderDealerFlowMap", "updateStaleDataBanner", "shouldShowStaleDataBanner"):
+    for function_name in ("loadData", "run", "drawChart", "drawShockEngine", "renderDealerFlowMap", "updateStaleDataBanner", "shouldShowStaleDataBanner"):
         if not re.search(rf"function\s+{re.escape(function_name)}\s*\(", js):
             return fail(f"dashboard missing function {function_name}()")
 

@@ -20,6 +20,7 @@
   <nav class="side-nav">
     <a href="#" class="active" data-view="gex">GEX</a>
     <a href="#" data-view="matrix-gex">Matrix GEX</a>
+    <a href="#" data-view="shock-engine">Shock Engine</a>
     <a href="#" data-view="max-pain">Max Pain</a>
     <a href="#" data-view="review">Review</a>
   </nav>
@@ -190,6 +191,32 @@
         <div class="chart-crosshair-x" id="matrixGexCrosshairX"></div>
         <div class="chart-tooltip" id="matrixGexTooltip"></div>
         <canvas id="matrixGexChart" height="540"></canvas>
+      </div>
+    </div>
+  </section>
+
+  <section class="app-view" id="view-shock-engine">
+    <div class="shock-grid">
+      <section class="shock-panel shock-state" id="shockStatePanel" aria-live="polite"></section>
+      <section class="shock-panel shock-up" id="shockUpsidePanel" aria-live="polite"></section>
+      <section class="shock-panel shock-down" id="shockDownsidePanel" aria-live="polite"></section>
+    </div>
+    <div class="card shock-card">
+      <div class="shock-head">
+        <div>
+          <span class="command-panel-tag">Live Structure</span>
+          <h2>Matrix Shock Engine</h2>
+          <p>Price-path simulation from current options positioning. It maps compression, acceleration pockets, fade zones, and force balance around spot.</p>
+        </div>
+        <div class="shock-legend">
+          <span><i style="background:#22b8ff"></i>Upside force</span>
+          <span><i style="background:#ff453a"></i>Downside force</span>
+          <span><i style="background:#ffc107"></i>Spot / levels</span>
+        </div>
+      </div>
+      <div class="shock-wrap">
+        <div class="shock-tooltip" id="shockTooltip"></div>
+        <canvas id="shockEngineChart" height="700"></canvas>
       </div>
     </div>
   </section>
