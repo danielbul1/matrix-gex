@@ -25,7 +25,7 @@
       "expiries": 24,
       "first_expiry": "2026-07-10",
       "last_expiry": "2028-12-15",
-      "spot": 312.3
+      "spot": 312.49
     },
     "IWM": {
       "asof": "2026-07-08T15:59:59",
@@ -52,7 +52,7 @@
       "expiries": 24,
       "first_expiry": "2026-07-10",
       "last_expiry": "2028-12-15",
-      "spot": 204.6
+      "spot": 204.89
     },
     "QQQ": {
       "asof": "2026-07-08T15:59:59",
@@ -61,7 +61,7 @@
       "expiries": 32,
       "first_expiry": "2026-07-09",
       "last_expiry": "2028-12-15",
-      "spot": 715.71
+      "spot": 714.99
     },
     "SPX": {
       "asof": "2026-07-08T16:14:59",
@@ -79,7 +79,7 @@
       "expiries": 34,
       "first_expiry": "2026-07-09",
       "last_expiry": "2028-12-15",
-      "spot": 746.58
+      "spot": 746.45
     },
     "TSLA": {
       "asof": "2026-07-08T15:59:59",
