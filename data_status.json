@@ -25,7 +25,7 @@
       "expiries": 24,
       "first_expiry": "2026-07-10",
       "last_expiry": "2028-12-15",
-      "spot": 312.49
+      "spot": 312.52
     },
     "IWM": {
       "asof": "2026-07-08T15:59:59",
@@ -34,7 +34,7 @@
       "expiries": 32,
       "first_expiry": "2026-07-09",
       "last_expiry": "2028-12-15",
-      "spot": 294.01
+      "spot": 293.53
     },
     "NDX": {
       "asof": "2026-07-08T16:14:59",
@@ -52,7 +52,7 @@
       "expiries": 24,
       "first_expiry": "2026-07-10",
       "last_expiry": "2028-12-15",
-      "spot": 204.89
+      "spot": 204.63
     },
     "QQQ": {
       "asof": "2026-07-08T15:59:59",
@@ -61,7 +61,7 @@
       "expiries": 32,
       "first_expiry": "2026-07-09",
       "last_expiry": "2028-12-15",
-      "spot": 714.99
+      "spot": 714.82
     },
     "SPX": {
       "asof": "2026-07-08T16:14:59",
@@ -79,7 +79,7 @@
       "expiries": 34,
       "first_expiry": "2026-07-09",
       "last_expiry": "2028-12-15",
-      "spot": 746.45
+      "spot": 746.19
     },
     "TSLA": {
       "asof": "2026-07-08T15:59:59",
@@ -88,7 +88,7 @@
       "expiries": 22,
       "first_expiry": "2026-07-10",
       "last_expiry": "2028-12-15",
-      "spot": 395.34
+      "spot": 394.8
     }
   }
 }
