@@ -307,6 +307,40 @@ function etDateKeyFromMs(ms){
   const get=type=>parts.find(part=>part.type===type)?.value;
   return `${get('year')}-${get('month')}-${get('day')}`;
 }
+function etPartsFromMs(ms){
+  const parts=new Intl.DateTimeFormat('en-US',{
+    timeZone:'America/New_York',year:'numeric',month:'2-digit',day:'2-digit',
+    weekday:'short',hour:'2-digit',minute:'2-digit',hourCycle:'h23'
+  }).formatToParts(new Date(ms || Date.now()));
+  const get=type=>parts.find(part=>part.type===type)?.value;
+  return {
+    year:Number(get('year')),
+    month:Number(get('month')),
+    day:Number(get('day')),
+    weekday:get('weekday'),
+    hour:Number(get('hour')),
+    minute:Number(get('minute')),
+  };
+}
+function prevTradingDateKey(year,month,day){
+  const d=new Date(Date.UTC(year,month-1,day,12));
+  do{ d.setUTCDate(d.getUTCDate()-1); }
+  while(d.getUTCDay()===0 || d.getUTCDay()===6);
+  return d.toISOString().slice(0,10);
+}
+function marketSessionDateKey(ms){
+  const et=etPartsFromMs(ms);
+  const dayKey=etDateKeyFromMs(ms);
+  if(et.weekday==='Sat' || et.weekday==='Sun') return prevTradingDateKey(et.year,et.month,et.day);
+  const minutes=et.hour*60+et.minute;
+  if(minutes < 9*60+30) return prevTradingDateKey(et.year,et.month,et.day);
+  return dayKey;
+}
+function netGexSessionDateKey(R){
+  const asofMs=R.asof ? dataAsofToMs(R.asof) : null;
+  const sourceMs=asofMs || R.fetchTs || Date.now();
+  return marketSessionDateKey(sourceMs);
+}
 function readNetGexBaselines(){
   try{return JSON.parse(localStorage.getItem(NET_GEX_CHANGE_STORE_KEY) || '{}') || {};}
   catch{return {};}
@@ -317,7 +351,7 @@ function writeNetGexBaselines(store){
 }
 function netGexBaselineKey(R,{mode,expirations}){
   const expKey=(expirations || []).slice().sort().join('|') || 'default';
-  const dayKey=etDateKeyFromMs(R.asof ? dataAsofToMs(R.asof) : R.fetchTs);
+  const dayKey=netGexSessionDateKey(R);
   return [dayKey,R.symbol,mode,expKey].join('::');
 }
 function buildNetGexChange(R,opts){
@@ -328,6 +362,7 @@ function buildNetGexChange(R,opts){
     base={
       symbol:R.symbol,
       mode:opts.mode,
+      sessionDate:netGexSessionDateKey(R),
       expirations:(opts.expirations || []).slice().sort(),
       createdAt:Date.now(),
       asof:R.asof || null,
@@ -345,7 +380,7 @@ function buildNetGexChange(R,opts){
     return {...s, baselineNetGex:baseline, netGexChange:(s.netGex || 0)-baseline};
   });
   const totalChange=rows.reduce((sum,s)=>sum+s.netGexChange,0);
-  return {key,createdAt:base.createdAt,asof:base.asof,totalChange,rows};
+  return {key,sessionDate:base.sessionDate || netGexSessionDateKey(R),createdAt:base.createdAt,asof:base.asof,totalChange,rows};
 }
 
 function scenarioStepForSymbol(symbol){
@@ -2041,7 +2076,7 @@ function drawNetGexChangeChart(R){
   const legend=byId('gexChangeLegend');
   const baselineTime=R.netGexChange.createdAt ? new Date(R.netGexChange.createdAt).toLocaleTimeString('he-IL',{hour:'2-digit',minute:'2-digit'}) : '--';
   if(legend){
-    legend.innerHTML=`<span class="sq" style="background:#22aaf2"></span>Increase&nbsp;&nbsp;<span class="sq" style="background:#ff2417"></span>Decrease&nbsp;&nbsp;<span>Total ${fmtNum(R.netGexChange.totalChange)} from ${baselineTime}</span>`;
+    legend.innerHTML=`<span class="sq" style="background:#22aaf2"></span>Increase&nbsp;&nbsp;<span class="sq" style="background:#ff2417"></span>Decrease&nbsp;&nbsp;<span>${R.netGexChange.sessionDate || ''} total ${fmtNum(R.netGexChange.totalChange)} from ${baselineTime}</span>`;
   }
 
   const padL=mobile ? 48 : 70;
