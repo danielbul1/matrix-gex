@@ -1833,7 +1833,7 @@ function renderImpl(R){
   renderDarkPoolLevels(R);
   if(activeView === 'gex'){
     drawChart(R);
-    drawNetGexChangeChart(R);
+    drawNetGexChangeChart(gexChangeChartResult(R));
   }
   if(activeView === 'matrix-gex') drawChart(R,'matrixGexChart');
   if(activeView === 'shock-engine') drawShockEngine(R);
@@ -1935,6 +1935,9 @@ function chartTargets(chartId){
     tooltipId: isMatrix ? 'matrixGexTooltip' : 'chartTooltip',
     crosshairId: isMatrix ? 'matrixGexCrosshairX' : 'chartCrosshairX',
   };
+}
+function gexChangeChartResult(R){
+  return R?.netGexChangeR || R;
 }
 function visibleStrikeData(R){
   let visibleStrikes=[...R.strikes];
@@ -2278,7 +2281,7 @@ function showGexChangeTooltip(ev){
     if(!hit || Math.abs((hit.x+hit.w/2)-x)>18){ tt.style.display='none'; cross.style.display='none'; return; }
   }
   const s=hit.s;
-  const R=window._lastR;
+  const R=gexChangeChartResult(window._lastR);
   const cls=s.netGexChange>=0?'pos':'neg';
   const row=(label,value,rowCls='')=>`<div class="tt-row"><span>${label}</span><span class="${rowCls}">${value}</span></div>`;
   tt.innerHTML=`
@@ -2771,8 +2774,13 @@ function hideEdgeTooltip(){
 // ---------- Wiring ----------
 let activeView = 'gex';
 const selectedExpirationsByView = {gex:null, 'matrix-gex':null, 'shock-engine':null, 'max-pain':null};
+let gexChangeExpirationsSynced = true;
+let selectedGexChangeExpirations = null;
 function currentExpirationValues(){
   return [...document.querySelectorAll('#expirationPicker input:checked')].map(input=>input.value);
+}
+function currentGexChangeExpirationValues(){
+  return [...document.querySelectorAll('#gexChangeExpirationPicker input:checked')].map(input=>input.value);
 }
 function saveCurrentExpirationSelection(){
   if(selectedExpirationsByView.hasOwnProperty(activeView)){
@@ -2787,8 +2795,24 @@ function populateSymbols(){
     const o=document.createElement('option');o.value=k;o.textContent=k;sel.appendChild(o);
   });
 }
+function renderExpirationPicker(picker, expiries, byExp, selectedValues){
+  const selected = new Set(selectedValues || []);
+  const validSelected = expiries.filter(exp=>selected.has(exp));
+  const defaultSelection = expiries.slice(0,1);
+  const active = new Set(validSelected.length ? validSelected : defaultSelection);
+  picker.innerHTML = expiries.length ? expiries.map(exp=>{
+    const dte = byExp.get(exp);
+    return `<label class="expiry-option"><input type="checkbox" value="${exp}" ${active.has(exp)?'checked':''}>${exp} (${dte}DTE)</label>`;
+  }).join('') : '<span class="expiry-empty">No expirations available</span>';
+  return [...active];
+}
+function syncGexChangeButtonState(){
+  const btn=byId('syncGexChangeExpirations');
+  if(btn) btn.classList.toggle('active',gexChangeExpirationsSynced);
+}
 function populateExpirations(chain){
   const picker = document.getElementById('expirationPicker');
+  const changePicker = document.getElementById('gexChangeExpirationPicker');
   const remembered = selectedExpirationsByView[activeView];
   const selectedValues = remembered || (selectedExpirationsByView.hasOwnProperty(activeView) ? [] : currentExpirationValues());
   const selected = new Set(selectedValues);
@@ -2799,15 +2823,16 @@ function populateExpirations(chain){
     if(q.exp && q.exp >= todayIso && !byExp.has(q.exp)) byExp.set(q.exp, q.dte);
   });
   const expiries = [...byExp.keys()].sort();
-  const validSelected = expiries.filter(exp=>selected.has(exp));
-  const defaultSelection = expiries.slice(0,1);
-  const active = new Set(validSelected.length ? validSelected : defaultSelection);
-  picker.innerHTML = expiries.length ? expiries.map(exp=>{
-    const dte = byExp.get(exp);
-    return `<label class="expiry-option"><input type="checkbox" value="${exp}" ${active.has(exp)?'checked':''}>${exp} (${dte}DTE)</label>`;
-  }).join('') : '<span class="expiry-empty">No expirations available</span>';
+  const activeValues = renderExpirationPicker(picker, expiries, byExp, selectedValues);
   if(selectedExpirationsByView.hasOwnProperty(activeView) && !remembered){
     selectedExpirationsByView[activeView] = currentExpirationValues();
+  }
+  if(changePicker){
+    if(gexChangeExpirationsSynced || !selectedGexChangeExpirations){
+      selectedGexChangeExpirations = activeValues;
+    }
+    selectedGexChangeExpirations = renderExpirationPicker(changePicker, expiries, byExp, selectedGexChangeExpirations);
+    syncGexChangeButtonState();
   }
 }
 function setView(view){
@@ -2820,7 +2845,7 @@ function setView(view){
   run();
   if(view === 'gex' && window._lastR) requestAnimationFrame(()=>{
     drawChart(window._lastR);
-    drawNetGexChangeChart(window._lastR);
+    drawNetGexChangeChart(gexChangeChartResult(window._lastR));
   });
   if(view === 'matrix-gex' && window._lastR) requestAnimationFrame(()=>drawChart(window._lastR,'matrixGexChart'));
   if(view === 'shock-engine' && window._lastR) requestAnimationFrame(()=>drawShockEngine(window._lastR));
@@ -2845,32 +2870,44 @@ function run(){
   populateExpirations(chain);
   const selectedExpirationValues = [...document.querySelectorAll('#expirationPicker input:checked')].map(input=>input.value);
   const selectedExpirations = new Set(selectedExpirationValues);
+  const changeExpirationValues = currentGexChangeExpirationValues();
+  const changeExpirations = new Set(changeExpirationValues);
   const fullChain = chain;
   if(selectedExpirations.size){
     chain = {...chain, quotes: chain.quotes.filter(q=>selectedExpirations.has(q.exp))};
   }
+  let changeChain = fullChain;
+  if(changeExpirations.size){
+    changeChain = {...fullChain, quotes: fullChain.quotes.filter(q=>changeExpirations.has(q.exp))};
+  }
   const expectedMove = calcExpectedMove(chain);
+  const changeExpectedMove = calcExpectedMove(changeChain);
   const maxPain = buildMaxPain(fullChain, selectedExpirations);
   const R = calcGEX(chain,mode);
+  const changeR = calcGEX(changeChain,mode);
   R.expectedMove = expectedMove;
   R.maxPain = maxPain;
   R.live = !!chain.live;
   R.asof = useLive ? REAL[sym].asof : null;
+  changeR.expectedMove = changeExpectedMove;
+  changeR.live = R.live;
+  changeR.asof = R.asof;
   let openR=null;
   const openRec=OPEN_REAL?.data?.[sym];
   if(openRec && OPEN_REAL.session_date === netGexSessionDateKey(R)){
     let openChain=buildChainRealFromRecord(sym,openRec,null);
-    if(selectedExpirations.size){
-      openChain={...openChain, quotes:openChain.quotes.filter(q=>selectedExpirations.has(q.exp))};
+    if(changeExpirations.size){
+      openChain={...openChain, quotes:openChain.quotes.filter(q=>changeExpirations.has(q.exp))};
     }
     openR=calcGEX(openChain,mode);
   }
-  R.netGexChange = buildNetGexChange(R,{
+  changeR.netGexChange = buildNetGexChange(changeR,{
     mode,
-    expirations:selectedExpirationValues,
+    expirations:changeExpirationValues,
     baselineResult:openR,
     requireOpenData:useLive,
   });
+  R.netGexChangeR = changeR;
   R.marketRead = buildMarketRead(R);
   renderImpl(R);
 }
@@ -2879,20 +2916,41 @@ bind('market','change',()=>{
   selectedExpirationsByView['matrix-gex']=null;
   selectedExpirationsByView['shock-engine']=null;
   selectedExpirationsByView['max-pain']=null;
+  gexChangeExpirationsSynced=true;
+  selectedGexChangeExpirations=null;
   populateSymbols();
   run();
 });
 bind('symbol','change',()=>{
   document.getElementById('spotOverride').value='';
   document.getElementById('expirationPicker').innerHTML='';
+  const changePicker=byId('gexChangeExpirationPicker');
+  if(changePicker) changePicker.innerHTML='';
   selectedExpirationsByView.gex=null;
   selectedExpirationsByView['matrix-gex']=null;
   selectedExpirationsByView['shock-engine']=null;
   selectedExpirationsByView['max-pain']=null;
+  gexChangeExpirationsSynced=true;
+  selectedGexChangeExpirations=null;
   run();
 });
 bind('expirationPicker','change',()=>{
   saveCurrentExpirationSelection();
+  if(gexChangeExpirationsSynced){
+    selectedGexChangeExpirations=currentExpirationValues();
+  }
+  run();
+});
+bind('gexChangeExpirationPicker','change',()=>{
+  gexChangeExpirationsSynced=false;
+  selectedGexChangeExpirations=currentGexChangeExpirationValues();
+  syncGexChangeButtonState();
+  run();
+});
+bind('syncGexChangeExpirations','click',()=>{
+  gexChangeExpirationsSynced=true;
+  selectedGexChangeExpirations=currentExpirationValues();
+  syncGexChangeButtonState();
   run();
 });
 bind('mode','change',run);
@@ -2905,7 +2963,7 @@ window.addEventListener('resize',()=>{
   if(!window._lastR) return;
   if(activeView === 'gex'){
     drawChart(window._lastR);
-    drawNetGexChangeChart(window._lastR);
+    drawNetGexChangeChart(gexChangeChartResult(window._lastR));
   }
   if(activeView === 'matrix-gex') drawChart(window._lastR,'matrixGexChart');
   if(activeView === 'shock-engine') drawShockEngine(window._lastR);
@@ -2983,7 +3041,7 @@ document.querySelectorAll('.pbtn').forEach(btn=>{
     btn.classList.toggle('active', ACTIVE.has(m));
     if(window._lastR && activeView === 'gex'){
       drawChart(window._lastR);
-      drawNetGexChangeChart(window._lastR);
+      drawNetGexChangeChart(gexChangeChartResult(window._lastR));
     }
   });
 });
@@ -2999,7 +3057,7 @@ document.querySelectorAll('[data-sigma]').forEach(btn=>{
     syncSigmaButtons();
     if(window._lastR && activeView === 'gex'){
       drawChart(window._lastR);
-      drawNetGexChangeChart(window._lastR);
+      drawNetGexChangeChart(gexChangeChartResult(window._lastR));
     }
   });
 });

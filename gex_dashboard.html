@@ -13,7 +13,7 @@
   };
 </script>
 <script src="https://unpkg.com/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js" onerror="window.__loadMatrixChartLib && window.__loadMatrixChartLib()"></script>
-<link rel="stylesheet" href="assets/dashboard.css?v=20260713-4">
+<link rel="stylesheet" href="assets/dashboard.css?v=20260713-5">
 </head>
 <body>
 <header>
@@ -133,6 +133,13 @@
         <canvas id="gexChart" height="540"></canvas>
       </div>
       <div class="gex-change-panel">
+        <div class="gex-change-controls">
+          <div>
+            <span class="range-label">Change Expirations</span>
+            <div id="gexChangeExpirationPicker" class="expiry-picker gex-change-expiry-picker" aria-label="Choose Net GEX change expiration dates"></div>
+          </div>
+          <button type="button" class="range-btn active" id="syncGexChangeExpirations">Sync</button>
+        </div>
         <div class="charttop">
           <span class="symlabel">Net GEX Change</span>
           <span class="chartlegend" id="gexChangeLegend"></span>
@@ -370,6 +377,6 @@
   Synthetic data is generated in-browser when live CBOE data is unavailable. Original demo: gex.kctradings.com
 </footer>
 
-<script src="assets/dashboard.js?v=20260713-4"></script>
+<script src="assets/dashboard.js?v=20260713-5"></script>
 </body>
 </html>

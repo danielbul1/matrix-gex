@@ -61,6 +61,8 @@ REQUIRED_IDS = (
     "gexChangeTooltip",
     "gexChangeCrosshairX",
     "gexChangeLegend",
+    "gexChangeExpirationPicker",
+    "syncGexChangeExpirations",
     "optionsHeatMap",
     "netFlowChart",
     "darkPoolLevels",
