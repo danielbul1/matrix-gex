@@ -377,6 +377,19 @@ function buildNetGexChange(R,opts){
       rows,
     };
   }
+  if(opts.requireOpenData){
+    const rows=R.strikes.map(s=>({...s, baselineNetGex:null, netGexChange:0}));
+    return {
+      key:'missing-open-data',
+      source:'missing_open_data',
+      missingOpenData:true,
+      sessionDate:netGexSessionDateKey(R),
+      createdAt:null,
+      asof:null,
+      totalChange:0,
+      rows,
+    };
+  }
   const key=netGexBaselineKey(R,opts);
   const store=readNetGexBaselines();
   let base=store[key];
@@ -2098,7 +2111,9 @@ function drawNetGexChangeChart(R){
   const legend=byId('gexChangeLegend');
   const baselineTime=R.netGexChange.createdAt ? new Date(R.netGexChange.createdAt).toLocaleTimeString('he-IL',{hour:'2-digit',minute:'2-digit'}) : '--';
   if(legend){
-    legend.innerHTML=`<span class="sq" style="background:#22aaf2"></span>Increase&nbsp;&nbsp;<span class="sq" style="background:#ff2417"></span>Decrease&nbsp;&nbsp;<span>${R.netGexChange.sessionDate || ''} total ${fmtNum(R.netGexChange.totalChange)} from ${baselineTime}</span>`;
+    legend.innerHTML=R.netGexChange.missingOpenData
+      ? `<span style="color:#ffc107">Waiting for open baseline file</span>`
+      : `<span class="sq" style="background:#22aaf2"></span>Increase&nbsp;&nbsp;<span class="sq" style="background:#ff2417"></span>Decrease&nbsp;&nbsp;<span>${R.netGexChange.sessionDate || ''} total ${fmtNum(R.netGexChange.totalChange)} from ${baselineTime}</span>`;
   }
 
   const padL=mobile ? 48 : 70;
@@ -2850,7 +2865,12 @@ function run(){
     }
     openR=calcGEX(openChain,mode);
   }
-  R.netGexChange = buildNetGexChange(R,{mode,expirations:selectedExpirationValues,baselineResult:openR});
+  R.netGexChange = buildNetGexChange(R,{
+    mode,
+    expirations:selectedExpirationValues,
+    baselineResult:openR,
+    requireOpenData:useLive,
+  });
   R.marketRead = buildMarketRead(R);
   renderImpl(R);
 }
