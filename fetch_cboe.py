@@ -28,6 +28,8 @@ OCC = re.compile(r"([A-Z]+)(\d{6})([CP])(\d{8})")
 RANGE = 0.25  # keep strikes within +/-25% of spot
 OPEN_DATA_PATH = Path("cboe_open_data.json")
 ET = ZoneInfo("America/New_York")
+OPEN_CAPTURE_START = datetime.time(9, 30)
+OPEN_CAPTURE_END = datetime.time(9, 45)
 
 
 def fetch(sym):
@@ -95,7 +97,7 @@ def main():
     print(f"wrote cboe_data.json  ({len(out)} symbols)")
 
     now_et = datetime.datetime.now(ET)
-    if now_et.weekday() < 5 and now_et.time() >= datetime.time(9, 30):
+    if now_et.weekday() < 5 and OPEN_CAPTURE_START <= now_et.time() <= OPEN_CAPTURE_END:
         session_date = now_et.date().isoformat()
         existing_session = None
         if OPEN_DATA_PATH.exists():
@@ -110,6 +112,8 @@ def main():
             print(f"wrote {OPEN_DATA_PATH} for session {session_date}")
         else:
             print(f"kept existing {OPEN_DATA_PATH} for session {session_date}")
+    else:
+        print(f"did not write {OPEN_DATA_PATH}; outside opening capture window")
 
 
 if __name__ == "__main__":
