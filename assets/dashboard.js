@@ -81,6 +81,7 @@ const SYMBOLS = {
 // Real delayed CBOE data is loaded from cboe_data.json. Empty data falls back to synthetic chains.
 let REAL = {};
 let REAL_ASOF = {};
+let OPEN_REAL = null;
 const RISK_FREE = {US:0.05, IN:0.065};
 const SPX_SPY_RATIO = 10.03657299922611;
 const DEFAULT_SYMBOL = 'SPY';
@@ -131,6 +132,9 @@ function buildChain(symKey, spot){
 // Uses gamma/delta/IV/OI/volume from CBOE when present.
 function buildChainReal(symKey, spotOverride){
   const rec = REAL[symKey];
+  return buildChainRealFromRecord(symKey,rec,spotOverride);
+}
+function buildChainRealFromRecord(symKey, rec, spotOverride){
   const spot = rec.spot || spotOverride;
   const r = RISK_FREE[SYMBOLS[symKey] ? SYMBOLS[symKey].market : "US"] || 0.05;
   const now = parseSourceTimestamp(rec.asof);
@@ -355,6 +359,24 @@ function netGexBaselineKey(R,{mode,expirations}){
   return [dayKey,R.symbol,mode,expKey].join('::');
 }
 function buildNetGexChange(R,opts){
+  if(opts.baselineResult && Array.isArray(opts.baselineResult.strikes)){
+    const byStrike=Object.fromEntries(opts.baselineResult.strikes.map(s=>[String(s.strike),s.netGex || 0]));
+    const rows=R.strikes.map(s=>{
+      const start=Number(byStrike[String(s.strike)]);
+      const baseline=Number.isFinite(start) ? start : 0;
+      return {...s, baselineNetGex:baseline, netGexChange:(s.netGex || 0)-baseline};
+    });
+    const totalChange=rows.reduce((sum,s)=>sum+s.netGexChange,0);
+    return {
+      key:'open-data',
+      source:'open_data',
+      sessionDate:OPEN_REAL?.session_date || netGexSessionDateKey(R),
+      createdAt:Date.parse(OPEN_REAL?.captured_at || '') || Date.now(),
+      asof:OPEN_REAL?.captured_at || null,
+      totalChange,
+      rows,
+    };
+  }
   const key=netGexBaselineKey(R,opts);
   const store=readNetGexBaselines();
   let base=store[key];
@@ -2819,7 +2841,16 @@ function run(){
   R.maxPain = maxPain;
   R.live = !!chain.live;
   R.asof = useLive ? REAL[sym].asof : null;
-  R.netGexChange = buildNetGexChange(R,{mode,expirations:selectedExpirationValues});
+  let openR=null;
+  const openRec=OPEN_REAL?.data?.[sym];
+  if(openRec && OPEN_REAL.session_date === netGexSessionDateKey(R)){
+    let openChain=buildChainRealFromRecord(sym,openRec,null);
+    if(selectedExpirations.size){
+      openChain={...openChain, quotes:openChain.quotes.filter(q=>selectedExpirations.has(q.exp))};
+    }
+    openR=calcGEX(openChain,mode);
+  }
+  R.netGexChange = buildNetGexChange(R,{mode,expirations:selectedExpirationValues,baselineResult:openR});
   R.marketRead = buildMarketRead(R);
   renderImpl(R);
 }
@@ -2977,8 +3008,14 @@ const MARKET_FRESHNESS_END_MIN = 16 * 60 + 30;
 function dataUrl(){
   return 'cboe_data.json?t=' + Date.now();
 }
+function openDataUrl(){
+  return 'cboe_open_data.json?t=' + Date.now();
+}
 function repoDataUrl(branch){
   return `${MATRIX_REPO_RAW_BASE}/${branch}/cboe_data.json?t=${Date.now()}`;
+}
+function repoOpenDataUrl(branch){
+  return `${MATRIX_REPO_RAW_BASE}/${branch}/cboe_open_data.json?t=${Date.now()}`;
 }
 function isGithubPagesHost(){
   return location.hostname.endsWith('github.io');
@@ -3005,6 +3042,9 @@ function fetchMatrixSpXQuote(){
 function validCboeData(d){
   return d && d.SPX && Array.isArray(d.SPX.opts) && Number.isFinite(Number(d.SPX.spot));
 }
+function validOpenCboeData(d){
+  return d && d.session_date && validCboeData(d.data);
+}
 function fetchCboeDataWithSource(url, sourceName){
   return fetchLiveData(url).then(d=>validCboeData(d) ? {data:d, source:sourceName} : null);
 }
@@ -3022,6 +3062,15 @@ function fetchFallbackCboeData(){
       ];
   return sources.reduce(
     (chain,[url,source])=>chain.then(result=>result || fetchCboeDataWithSource(url, source)),
+    Promise.resolve(null)
+  );
+}
+function fetchOpenCboeData(){
+  const sources = isGithubPagesHost()
+    ? [repoOpenDataUrl('data'), openDataUrl(), repoOpenDataUrl('main')]
+    : [openDataUrl(), repoOpenDataUrl('data'), repoOpenDataUrl('main')];
+  return sources.reduce(
+    (chain,url)=>chain.then(result=>result || fetchLiveData(url).then(d=>validOpenCboeData(d) ? d : null)),
     Promise.resolve(null)
   );
 }
@@ -3135,6 +3184,9 @@ function loadData(thenRun){
       _lastLoadOk=!!result || validCboeData(REAL);
       if(result){ REAL=result.data; _lastDataSource=result.source; _lastFileLoadedAt=Date.now(); }
     })
+    .then(()=>fetchOpenCboeData().then(openData=>{
+      if(openData) OPEN_REAL=openData;
+    }))
     .then(()=>fetchMatrixSpXQuote())
     .finally(()=>{
       if(_firstLoad){

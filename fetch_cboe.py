@@ -8,6 +8,8 @@ import json
 import re
 import sys
 import urllib.request
+from pathlib import Path
+from zoneinfo import ZoneInfo
 
 
 # ETFs and equities use multiplier=100. CBOE index symbols require a leading "_".
@@ -24,6 +26,8 @@ SYMBOLS = [
 URL = "https://cdn.cboe.com/api/global/delayed_quotes/options/{}.json"
 OCC = re.compile(r"([A-Z]+)(\d{6})([CP])(\d{8})")
 RANGE = 0.25  # keep strikes within +/-25% of spot
+OPEN_DATA_PATH = Path("cboe_open_data.json")
+ET = ZoneInfo("America/New_York")
 
 
 def fetch(sym):
@@ -89,6 +93,23 @@ def main():
     with open("cboe_data.json", "w") as f:
         json.dump(out, f, separators=(",", ":"))
     print(f"wrote cboe_data.json  ({len(out)} symbols)")
+
+    now_et = datetime.datetime.now(ET)
+    if now_et.weekday() < 5 and now_et.time() >= datetime.time(9, 30):
+        session_date = now_et.date().isoformat()
+        existing_session = None
+        if OPEN_DATA_PATH.exists():
+            try:
+                existing_session = json.loads(OPEN_DATA_PATH.read_text()).get("session_date")
+            except Exception:
+                existing_session = None
+        if existing_session != session_date:
+            OPEN_DATA_PATH.write_text(
+                json.dumps({"session_date": session_date, "captured_at": now_et.isoformat(), "data": out}, separators=(",", ":"))
+            )
+            print(f"wrote {OPEN_DATA_PATH} for session {session_date}")
+        else:
+            print(f"kept existing {OPEN_DATA_PATH} for session {session_date}")
 
 
 if __name__ == "__main__":
