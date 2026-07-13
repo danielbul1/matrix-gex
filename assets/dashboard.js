@@ -299,6 +299,55 @@ function calcGEX(chain, mode){
 }
 function avg(a){return a.length?a.reduce((x,y)=>x+y,0)/a.length:0;}
 
+const NET_GEX_CHANGE_STORE_KEY = 'matrix_net_gex_open_baselines_v1';
+function etDateKeyFromMs(ms){
+  const parts=new Intl.DateTimeFormat('en-CA',{
+    timeZone:'America/New_York',year:'numeric',month:'2-digit',day:'2-digit'
+  }).formatToParts(new Date(ms || Date.now()));
+  const get=type=>parts.find(part=>part.type===type)?.value;
+  return `${get('year')}-${get('month')}-${get('day')}`;
+}
+function readNetGexBaselines(){
+  try{return JSON.parse(localStorage.getItem(NET_GEX_CHANGE_STORE_KEY) || '{}') || {};}
+  catch{return {};}
+}
+function writeNetGexBaselines(store){
+  try{localStorage.setItem(NET_GEX_CHANGE_STORE_KEY, JSON.stringify(store));}
+  catch{}
+}
+function netGexBaselineKey(R,{mode,expirations}){
+  const expKey=(expirations || []).slice().sort().join('|') || 'default';
+  const dayKey=etDateKeyFromMs(R.asof ? dataAsofToMs(R.asof) : R.fetchTs);
+  return [dayKey,R.symbol,mode,expKey].join('::');
+}
+function buildNetGexChange(R,opts){
+  const key=netGexBaselineKey(R,opts);
+  const store=readNetGexBaselines();
+  let base=store[key];
+  if(!base || !base.strikes){
+    base={
+      symbol:R.symbol,
+      mode:opts.mode,
+      expirations:(opts.expirations || []).slice().sort(),
+      createdAt:Date.now(),
+      asof:R.asof || null,
+      strikes:Object.fromEntries(R.strikes.map(s=>[String(s.strike),s.netGex || 0])),
+    };
+    store[key]=base;
+    const keys=Object.keys(store).sort((a,b)=>(store[b].createdAt || 0)-(store[a].createdAt || 0));
+    keys.slice(60).forEach(oldKey=>delete store[oldKey]);
+    writeNetGexBaselines(store);
+  }
+  const byStrike=base.strikes || {};
+  const rows=R.strikes.map(s=>{
+    const start=Number(byStrike[String(s.strike)]);
+    const baseline=Number.isFinite(start) ? start : 0;
+    return {...s, baselineNetGex:baseline, netGexChange:(s.netGex || 0)-baseline};
+  });
+  const totalChange=rows.reduce((sum,s)=>sum+s.netGexChange,0);
+  return {key,createdAt:base.createdAt,asof:base.asof,totalChange,rows};
+}
+
 function scenarioStepForSymbol(symbol){
   if(symbol==='SPX') return 10;
   if(symbol==='NDX') return 50;
@@ -1712,7 +1761,10 @@ function renderImpl(R){
   renderCommandCenter(R);
   renderOptionsHeatMap(R);
   renderDarkPoolLevels(R);
-  if(activeView === 'gex') drawChart(R);
+  if(activeView === 'gex'){
+    drawChart(R);
+    drawNetGexChangeChart(R);
+  }
   if(activeView === 'matrix-gex') drawChart(R,'matrixGexChart');
   if(activeView === 'shock-engine') drawShockEngine(R);
   if(activeView === 'net-flow') drawNetFlow(R);
@@ -1814,6 +1866,18 @@ function chartTargets(chartId){
     crosshairId: isMatrix ? 'matrixGexCrosshairX' : 'chartCrosshairX',
   };
 }
+function visibleStrikeData(R){
+  let visibleStrikes=[...R.strikes];
+  if(Number.isFinite(DISPLAY_SIGMA) && R.expectedMove>0){
+    const radius=DISPLAY_SIGMA*R.expectedMove;
+    visibleStrikes=visibleStrikes.filter(s=>Math.abs(s.strike-R.spot)<=radius);
+  }
+  if(!visibleStrikes.length){
+    visibleStrikes=[...R.strikes].sort((a,b)=>Math.abs(a.strike-R.spot)-Math.abs(b.strike-R.spot)).slice(0,1);
+  }
+  const data=visibleStrikes.sort((a,b)=>a.strike-b.strike);
+  return data;
+}
 function drawChart(R,chartId='gexChart'){
   const targets=chartTargets(chartId);
   const cv = document.getElementById(targets.canvasId);
@@ -1826,15 +1890,7 @@ function drawChart(R,chartId='gexChart'){
   const ctx = cv.getContext('2d'); ctx.setTransform(dpr,0,0,dpr,0,0);
   ctx.clearRect(0,0,W,H);
 
-  let visibleStrikes=[...R.strikes];
-  if(Number.isFinite(DISPLAY_SIGMA) && R.expectedMove>0){
-    const radius=DISPLAY_SIGMA*R.expectedMove;
-    visibleStrikes=visibleStrikes.filter(s=>Math.abs(s.strike-R.spot)<=radius);
-  }
-  if(!visibleStrikes.length){
-    visibleStrikes=[...R.strikes].sort((a,b)=>Math.abs(a.strike-R.spot)-Math.abs(b.strike-R.spot)).slice(0,1);
-  }
-  const data=visibleStrikes.sort((a,b)=>a.strike-b.strike);
+  const data=visibleStrikeData(R);
   if(!data.length) return;
 
   const order = Object.keys(METRICS);
@@ -1967,6 +2023,100 @@ function drawChart(R,chartId='gexChart'){
   ctx.fillStyle="#d0d0d0"; ctx.font=(mobile ? "bold 10px Segoe UI" : "bold 12px Segoe UI"); ctx.textAlign="center"; ctx.textBaseline="bottom";
   ctx.fillText("Strike",padL+plotW/2,H-4);
 }
+function drawNetGexChangeChart(R){
+  const cv=document.getElementById('gexChangeChart');
+  if(!cv || !R.netGexChange) return;
+  const dpr=window.devicePixelRatio||1;
+  const W=cv.clientWidth;
+  const mobile=W<640;
+  const H=mobile ? 320 : 360;
+  cv.width=W*dpr; cv.height=H*dpr; cv.style.height=H+'px';
+  const ctx=cv.getContext('2d'); ctx.setTransform(dpr,0,0,dpr,0,0);
+  ctx.clearRect(0,0,W,H);
+
+  const changeByStrike=new Map(R.netGexChange.rows.map(s=>[s.strike,s]));
+  const data=visibleStrikeData(R).map(s=>changeByStrike.get(s.strike) || {...s,baselineNetGex:0,netGexChange:0});
+  if(!data.length) return;
+
+  const legend=byId('gexChangeLegend');
+  const baselineTime=R.netGexChange.createdAt ? new Date(R.netGexChange.createdAt).toLocaleTimeString('he-IL',{hour:'2-digit',minute:'2-digit'}) : '--';
+  if(legend){
+    legend.innerHTML=`<span class="sq" style="background:#22aaf2"></span>Increase&nbsp;&nbsp;<span class="sq" style="background:#ff2417"></span>Decrease&nbsp;&nbsp;<span>Total ${fmtNum(R.netGexChange.totalChange)} from ${baselineTime}</span>`;
+  }
+
+  const padL=mobile ? 48 : 70;
+  const padR=mobile ? 18 : 42;
+  const padT=mobile ? 26 : 32;
+  const padB=mobile ? 62 : 76;
+  const plotW=W-padL-padR, plotH=H-padT-padB;
+  const top=padT, bottom=padT+plotH;
+  const slot=plotW/data.length;
+  const xCenter=i=>padL+slot*(i+.5);
+  const vals=data.map(s=>s.netGexChange || 0);
+  const maxAbs=Math.max(...vals.map(v=>Math.abs(v)),1)*1.08;
+  const lMin=-maxAbs,lMax=maxAbs;
+  const y=v=>top+(lMax-v)/(lMax-lMin)*plotH;
+  const y0=y(0);
+
+  ctx.font=(mobile ? 'bold 10px Segoe UI' : 'bold 12px Segoe UI');
+  ctx.textBaseline='middle';
+  for(let t=0;t<=4;t++){
+    const f=t/4, yy=bottom-f*plotH;
+    ctx.strokeStyle='rgba(255,255,255,.025)'; ctx.lineWidth=1;
+    ctx.beginPath(); ctx.moveTo(padL,yy); ctx.lineTo(W-padR,yy); ctx.stroke();
+    ctx.fillStyle='#c4c4c4'; ctx.textAlign='right';
+    ctx.fillText(fmtAxis(lMin+(lMax-lMin)*f),padL-8,yy);
+  }
+
+  const bw=Math.max(2,Math.min(slot*.70,32));
+  const hitBars=data.map((s,i)=>{
+    const v=s.netGexChange || 0;
+    const yy=y(v);
+    const x=xCenter(i)-bw/2;
+    const barY=Math.min(yy,y0);
+    const h=Math.max(1,Math.abs(yy-y0));
+    ctx.fillStyle=v>=0 ? '#22aaf2' : '#ff2417';
+    ctx.fillRect(x,barY,bw,h);
+    return {x,y:barY,w:bw,h,s};
+  });
+  ctx.strokeStyle='rgba(255,255,255,.20)'; ctx.lineWidth=1;
+  ctx.beginPath(); ctx.moveTo(padL,y0); ctx.lineTo(W-padR,y0); ctx.stroke();
+
+  ctx.fillStyle='#c4c4c4'; ctx.font=(mobile ? 'bold 9px Segoe UI' : 'bold 10px Segoe UI');
+  data.forEach((s,i)=>{
+    ctx.save();
+    ctx.translate(xCenter(i),bottom+7);
+    ctx.rotate(-Math.PI/2);
+    ctx.textAlign='right'; ctx.textBaseline='middle';
+    ctx.fillText(fmtPrice(s.strike),0,0);
+    ctx.restore();
+  });
+
+  const xAt=price=>{
+    if(price<=data[0].strike) return padL;
+    if(price>=data[data.length-1].strike) return padL+plotW;
+    for(let i=0;i<data.length-1;i++){
+      if(price>=data[i].strike && price<=data[i+1].strike){
+        const frac=(price-data[i].strike)/(data[i+1].strike-data[i].strike);
+        return xCenter(i)+frac*slot;
+      }
+    }
+    return padL+plotW/2;
+  };
+  const px=xAt(R.spot);
+  ctx.strokeStyle='#d58b16'; ctx.lineWidth=2;
+  ctx.beginPath(); ctx.moveTo(px,padT-5); ctx.lineTo(px,bottom); ctx.stroke();
+  ctx.fillStyle='#d58b16'; ctx.font=(mobile ? 'bold 10px Segoe UI' : 'bold 12px Segoe UI'); ctx.textAlign='left'; ctx.textBaseline='alphabetic';
+  ctx.fillText('Price: '+fmtPrice(R.spot),px+6,padT-8);
+
+  ctx.save(); ctx.translate(14,padT+plotH/2); ctx.rotate(-Math.PI/2);
+  ctx.fillStyle='#d0d0d0'; ctx.font=(mobile ? 'bold 11px Segoe UI' : 'bold 13px Segoe UI'); ctx.textAlign='center';
+  ctx.fillText('Net GEX Change',0,0); ctx.restore();
+  ctx.fillStyle='#d0d0d0'; ctx.font=(mobile ? 'bold 10px Segoe UI' : 'bold 12px Segoe UI'); ctx.textAlign='center'; ctx.textBaseline='bottom';
+  ctx.fillText('Strike',padL+plotW/2,H-4);
+
+  cv._matrixBars=hitBars;
+}
 function fmtAxis(v){
   const a=Math.abs(v);
   if(a>=1e9) return (v/1e9).toFixed(1)+"B";
@@ -2032,8 +2182,48 @@ function showChartTooltip(ev){
   tt.style.top=Math.max(6,top)+'px';
 }
 function hideChartTooltip(){
-  ['chartTooltip','matrixGexTooltip'].forEach(id=>{const el=byId(id); if(el) el.style.display='none';});
-  ['chartCrosshairX','matrixGexCrosshairX'].forEach(id=>{const el=byId(id); if(el) el.style.display='none';});
+  ['chartTooltip','matrixGexTooltip','gexChangeTooltip'].forEach(id=>{const el=byId(id); if(el) el.style.display='none';});
+  ['chartCrosshairX','matrixGexCrosshairX','gexChangeCrosshairX'].forEach(id=>{const el=byId(id); if(el) el.style.display='none';});
+}
+function showGexChangeTooltip(ev){
+  const cv=ev.currentTarget || document.getElementById('gexChangeChart');
+  const tt=document.getElementById('gexChangeTooltip');
+  const cross=document.getElementById('gexChangeCrosshairX');
+  if(!cv || !tt || !cross) return;
+  const bars=cv._matrixBars || [];
+  if(!bars.length) return;
+  const rect=cv.getBoundingClientRect();
+  const point=ev.touches && ev.touches[0] ? ev.touches[0] : ev;
+  const x=point.clientX-rect.left;
+  const y=point.clientY-rect.top;
+  let hit=bars.find(b=>x>=b.x-3 && x<=b.x+b.w+3 && y>=Math.min(b.y,b.y+b.h)-8 && y<=Math.max(b.y+b.h,b.y)+8);
+  if(!hit){
+    hit=bars.reduce((best,b)=>{
+      const cx=b.x+b.w/2;
+      const dist=Math.abs(cx-x);
+      return !best || dist<best.dist ? {bar:b,dist} : best;
+    },null)?.bar;
+    if(!hit || Math.abs((hit.x+hit.w/2)-x)>18){ tt.style.display='none'; cross.style.display='none'; return; }
+  }
+  const s=hit.s;
+  const R=window._lastR;
+  const cls=s.netGexChange>=0?'pos':'neg';
+  const row=(label,value,rowCls='')=>`<div class="tt-row"><span>${label}</span><span class="${rowCls}">${value}</span></div>`;
+  tt.innerHTML=`
+    <div class="tt-title">${R?.symbol || ''} Strike ${fmtPrice(s.strike)}</div>
+    ${row('Change',fmtNum(s.netGexChange || 0),cls)}
+    ${row('Current Net GEX',fmtNum(s.netGex || 0),s.netGex>=0?'pos':'neg')}
+    ${row('Open Baseline',fmtNum(s.baselineNetGex || 0),s.baselineNetGex>=0?'pos':'neg')}
+  `;
+  tt.style.display='block';
+  cross.style.display='block';
+  cross.style.left=Math.max(0,Math.min(rect.width,hit.x+hit.w/2))+'px';
+  const tw=tt.offsetWidth, th=tt.offsetHeight;
+  let left=x+14, top=y+14;
+  if(left+tw>rect.width) left=x-tw-14;
+  if(top+th>rect.height) top=y-th-14;
+  tt.style.left=Math.max(6,left)+'px';
+  tt.style.top=Math.max(6,top)+'px';
 }
 
 // ---------- Dealer Pressure: GEX / Vanna / Charm pressure map ----------
@@ -2556,7 +2746,10 @@ function setView(view){
   document.querySelectorAll('.app-view').forEach(section=>section.classList.toggle('active',section.id===`view-${view}`));
   hideAllHoverHelpers();
   run();
-  if(view === 'gex' && window._lastR) requestAnimationFrame(()=>drawChart(window._lastR));
+  if(view === 'gex' && window._lastR) requestAnimationFrame(()=>{
+    drawChart(window._lastR);
+    drawNetGexChangeChart(window._lastR);
+  });
   if(view === 'matrix-gex' && window._lastR) requestAnimationFrame(()=>drawChart(window._lastR,'matrixGexChart'));
   if(view === 'shock-engine' && window._lastR) requestAnimationFrame(()=>drawShockEngine(window._lastR));
   if(view === 'max-pain' && window._lastR) requestAnimationFrame(()=>drawMaxPain(window._lastR));
@@ -2578,7 +2771,8 @@ function run(){
   }
   updateNetFlowHistoryFromSnapshot(chain);
   populateExpirations(chain);
-  const selectedExpirations = new Set([...document.querySelectorAll('#expirationPicker input:checked')].map(input=>input.value));
+  const selectedExpirationValues = [...document.querySelectorAll('#expirationPicker input:checked')].map(input=>input.value);
+  const selectedExpirations = new Set(selectedExpirationValues);
   const fullChain = chain;
   if(selectedExpirations.size){
     chain = {...chain, quotes: chain.quotes.filter(q=>selectedExpirations.has(q.exp))};
@@ -2590,6 +2784,7 @@ function run(){
   R.maxPain = maxPain;
   R.live = !!chain.live;
   R.asof = useLive ? REAL[sym].asof : null;
+  R.netGexChange = buildNetGexChange(R,{mode,expirations:selectedExpirationValues});
   R.marketRead = buildMarketRead(R);
   renderImpl(R);
 }
@@ -2622,7 +2817,10 @@ if(byId('run')) byId('run').textContent = 'Refresh';
 bind('run','click',()=>loadData(true));
 window.addEventListener('resize',()=>{
   if(!window._lastR) return;
-  if(activeView === 'gex') drawChart(window._lastR);
+  if(activeView === 'gex'){
+    drawChart(window._lastR);
+    drawNetGexChangeChart(window._lastR);
+  }
   if(activeView === 'matrix-gex') drawChart(window._lastR,'matrixGexChart');
   if(activeView === 'shock-engine') drawShockEngine(window._lastR);
   if(activeView === 'max-pain') drawMaxPain(window._lastR);
@@ -2632,6 +2830,11 @@ bind('gexChart','mouseleave',hideChartTooltip);
 bind('gexChart','touchstart',showChartTooltip,{passive:true});
 bind('gexChart','touchmove',showChartTooltip,{passive:true});
 bind('gexChart','touchend',()=>setTimeout(hideChartTooltip,1200),{passive:true});
+bind('gexChangeChart','mousemove',showGexChangeTooltip);
+bind('gexChangeChart','mouseleave',hideChartTooltip);
+bind('gexChangeChart','touchstart',showGexChangeTooltip,{passive:true});
+bind('gexChangeChart','touchmove',showGexChangeTooltip,{passive:true});
+bind('gexChangeChart','touchend',()=>setTimeout(hideChartTooltip,1200),{passive:true});
 bind('matrixGexChart','mousemove',showChartTooltip);
 bind('matrixGexChart','mouseleave',hideChartTooltip);
 bind('matrixGexChart','touchstart',showChartTooltip,{passive:true});
@@ -2692,7 +2895,10 @@ document.querySelectorAll('.pbtn').forEach(btn=>{
     const m=btn.dataset.metric;
     if(ACTIVE.has(m)) ACTIVE.delete(m); else ACTIVE.add(m);
     btn.classList.toggle('active', ACTIVE.has(m));
-    if(window._lastR && activeView === 'gex') drawChart(window._lastR);
+    if(window._lastR && activeView === 'gex'){
+      drawChart(window._lastR);
+      drawNetGexChangeChart(window._lastR);
+    }
   });
 });
 
@@ -2705,7 +2911,10 @@ document.querySelectorAll('[data-sigma]').forEach(btn=>{
   btn.addEventListener('click',()=>{
     DISPLAY_SIGMA=btn.dataset.sigma==='all' ? Infinity : Number(btn.dataset.sigma);
     syncSigmaButtons();
-    if(window._lastR && activeView === 'gex') drawChart(window._lastR);
+    if(window._lastR && activeView === 'gex'){
+      drawChart(window._lastR);
+      drawNetGexChangeChart(window._lastR);
+    }
   });
 });
 document.querySelectorAll('[data-edge-sigma]').forEach(btn=>{
