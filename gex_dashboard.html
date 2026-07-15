@@ -41,10 +41,16 @@
   </div>
   <div class="ctrl history-control">
     <label>History</label>
-    <div class="history-row">
+    <div class="history-date-row">
       <select id="historyDate" aria-label="Choose historical trading day"><option value="live">Live</option></select>
-      <select id="historyTime" aria-label="Choose historical snapshot time" disabled><option value="">Now</option></select>
+      <output id="historyTimeLabel" for="historyTimeline">Now</output>
     </div>
+    <div class="history-timeline-row">
+      <button type="button" id="historyPrev" class="history-step" aria-label="Previous historical snapshot" disabled>&lsaquo;</button>
+      <input id="historyTimeline" type="range" min="0" max="0" value="0" step="1" aria-label="Move through intraday historical snapshots" disabled>
+      <button type="button" id="historyNext" class="history-step" aria-label="Next historical snapshot" disabled>&rsaquo;</button>
+    </div>
+    <div class="history-scale"><span id="historyStartTime">--</span><span id="historyEndTime">--</span></div>
     <span class="history-note" id="historyNote">Live expirations</span>
   </div>
   <div class="ctrl">
@@ -409,6 +415,6 @@
   Synthetic data is generated in-browser when live CBOE data is unavailable. Original demo: gex.kctradings.com
 </footer>
 
-<script src="assets/dashboard.js?v=20260715-dex1"></script>
+<script src="assets/dashboard.js?v=20260715-timeline1"></script>
 </body>
 </html>

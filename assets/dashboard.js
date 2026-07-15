@@ -3002,7 +3002,14 @@ bind('symbol','change',()=>{
   if(byId('historyDate')?.value!=='live') loadExposureHistoryDay(); else run();
 });
 bind('historyDate','change',loadExposureHistoryDay);
-bind('historyTime','change',run);
+let _historyFrame=null;
+bind('historyTimeline','input',()=>{
+  updateHistoryTimelineLabel();
+  if(_historyFrame) cancelAnimationFrame(_historyFrame);
+  _historyFrame=requestAnimationFrame(()=>{_historyFrame=null;run();});
+});
+bind('historyPrev','click',()=>stepHistoryTimeline(-1));
+bind('historyNext','click',()=>stepHistoryTimeline(1));
 bind('expirationPicker','change',()=>{
   saveCurrentExpirationSelection();
   if(gexChangeExpirationsSynced){
@@ -3254,29 +3261,53 @@ function loadExposureHistoryIndex(){
     renderHistoryDays();
   });
 }
+function historySnapshotTimeLabel(snapshot){
+  const ms=dataAsofToMs(snapshot?.asof);
+  return ms ? new Date(ms).toLocaleTimeString('en-US',{timeZone:'America/New_York',hour:'2-digit',minute:'2-digit'})+' ET' : (snapshot?.asof || '--');
+}
+function updateHistoryTimelineLabel(){
+  const timeline=byId('historyTimeline');
+  const snapshots=EXPOSURE_HISTORY_DAY?.snapshots || [];
+  const index=Math.max(0,Math.min(snapshots.length-1,Number(timeline?.value)||0));
+  const label=byId('historyTimeLabel');
+  if(label) label.textContent=snapshots.length ? historySnapshotTimeLabel(snapshots[index]) : 'Now';
+  const prev=byId('historyPrev'); if(prev) prev.disabled=!snapshots.length || index<=0;
+  const next=byId('historyNext'); if(next) next.disabled=!snapshots.length || index>=snapshots.length-1;
+}
 function renderHistoryTimes(){
-  const select=byId('historyTime');
+  const timeline=byId('historyTimeline');
   const note=byId('historyNote');
   const snapshots=EXPOSURE_HISTORY_DAY?.snapshots || [];
-  if(!select) return;
-  select.innerHTML=snapshots.map((snap,index)=>{
-    const ms=dataAsofToMs(snap.asof);
-    const label=ms ? new Date(ms).toLocaleTimeString('en-US',{timeZone:'America/New_York',hour:'2-digit',minute:'2-digit'})+' ET' : (snap.asof || `Snapshot ${index+1}`);
-    return `<option value="${index}">${label}</option>`;
-  }).join('');
-  select.disabled=!snapshots.length;
-  if(snapshots.length) select.value=String(snapshots.length-1);
+  if(!timeline) return;
+  timeline.min='0';
+  timeline.max=String(Math.max(0,snapshots.length-1));
+  timeline.value=String(Math.max(0,snapshots.length-1));
+  timeline.disabled=!snapshots.length;
+  const start=byId('historyStartTime'); if(start) start.textContent=snapshots.length ? historySnapshotTimeLabel(snapshots[0]).replace(' ET','') : '--';
+  const end=byId('historyEndTime'); if(end) end.textContent=snapshots.length ? historySnapshotTimeLabel(snapshots[snapshots.length-1]).replace(' ET','') : '--';
+  updateHistoryTimelineLabel();
   if(note){
-    note.textContent=snapshots.length ? `${snapshots.length} snapshots · all expirations · 5 min` : 'No snapshots for this symbol';
+    note.textContent=snapshots.length ? `${snapshots.length} snapshots · drag the timeline · all expirations · 5 min` : 'No snapshots for this symbol';
     note.classList.toggle('active',!!snapshots.length);
   }
+}
+function stepHistoryTimeline(delta){
+  const timeline=byId('historyTimeline');
+  if(!timeline || timeline.disabled) return;
+  timeline.value=String(Math.max(Number(timeline.min),Math.min(Number(timeline.max),Number(timeline.value)+delta)));
+  updateHistoryTimelineLabel();
+  run();
 }
 function loadExposureHistoryDay(){
   const day=byId('historyDate')?.value;
   const symbol=byId('symbol')?.value;
   if(!day || day==='live'){
     EXPOSURE_HISTORY_DAY=null;
-    const time=byId('historyTime'); if(time){time.innerHTML='<option value="">Now</option>';time.disabled=true;}
+    const timeline=byId('historyTimeline'); if(timeline){timeline.min='0';timeline.max='0';timeline.value='0';timeline.disabled=true;}
+    ['historyPrev','historyNext'].forEach(id=>{const button=byId(id);if(button)button.disabled=true;});
+    const label=byId('historyTimeLabel'); if(label) label.textContent='Now';
+    const start=byId('historyStartTime'); if(start) start.textContent='--';
+    const end=byId('historyEndTime'); if(end) end.textContent='--';
     const note=byId('historyNote'); if(note){note.textContent='Live expirations';note.classList.remove('active');}
     document.querySelectorAll('#expirationPicker input').forEach(input=>input.disabled=false);
     run();
@@ -3291,7 +3322,7 @@ function loadExposureHistoryDay(){
 }
 function selectedHistorySnapshot(){
   const snapshots=EXPOSURE_HISTORY_DAY?.snapshots || [];
-  const index=Number(byId('historyTime')?.value);
+  const index=Number(byId('historyTimeline')?.value);
   return snapshots[Number.isInteger(index) ? index : snapshots.length-1] || null;
 }
 function applyHistorySnapshot(R,snapshot,firstSnapshot){
