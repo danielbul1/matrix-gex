@@ -84,6 +84,8 @@ let REAL_ASOF = {};
 let OPEN_REAL = null;
 const RISK_FREE = {US:0.05, IN:0.065};
 const SPX_SPY_RATIO = 10.03657299922611;
+// User-provided conversion example: QQQ 752.00 = NDX 30,916.24.
+const NDX_QQQ_RATIO = 30916.24 / 752;
 const DEFAULT_SYMBOL = 'SPY';
 
 function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
@@ -561,6 +563,29 @@ function spxPriceFromSpyPrice(price,R){
   if(!Number.isFinite(price) || !Number.isFinite(SPX_SPY_RATIO) || SPX_SPY_RATIO <= 0) return null;
   return price * SPX_SPY_RATIO;
 }
+function qqqPriceFromNdxStrike(strike,R){
+  if(R?.symbol !== 'NDX') return null;
+  if(!Number.isFinite(strike) || !Number.isFinite(NDX_QQQ_RATIO) || NDX_QQQ_RATIO <= 0) return null;
+  return strike / NDX_QQQ_RATIO;
+}
+function ndxPriceFromQqqPrice(price,R){
+  if(R?.symbol !== 'QQQ') return null;
+  if(!Number.isFinite(price) || !Number.isFinite(NDX_QQQ_RATIO) || NDX_QQQ_RATIO <= 0) return null;
+  return price * NDX_QQQ_RATIO;
+}
+function linkedMarketPrice(value,R){
+  const price=Number(value);
+  if(!Number.isFinite(price)) return null;
+  if(R?.symbol === 'SPX') return {symbol:'SPY',price:spyPriceFromSpxStrike(price,R),decimals:2};
+  if(R?.symbol === 'SPY') return {symbol:'SPX',price:spxPriceFromSpyPrice(price,R),decimals:0};
+  if(R?.symbol === 'NDX') return {symbol:'QQQ',price:qqqPriceFromNdxStrike(price,R),decimals:2};
+  if(R?.symbol === 'QQQ') return {symbol:'NDX',price:ndxPriceFromQqqPrice(price,R),decimals:0};
+  return null;
+}
+function fmtLinkedMarketPrice(linked){
+  if(!linked || !Number.isFinite(linked.price)) return '--';
+  return linked.decimals === 2 ? fmtSpyConvertedPrice(linked.price) : fmtPrice(linked.price);
+}
 function esc(v){
   return String(v).replace(/[&<>"']/g,ch=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[ch]));
 }
@@ -578,9 +603,9 @@ function safeText(value,fallback='--'){
 function levelDisplayPrice(value,R){
   if(value == null || !Number.isFinite(Number(value))) return '--';
   const base = fmtPrice(Number(value));
-  const converted = R?.symbol === 'SPY' ? spxPriceFromSpyPrice(Number(value),R) : spyPriceFromSpxStrike(Number(value),R);
-  if(converted == null) return base;
-  return R.symbol === 'SPY' ? `${base} / SPX ${fmtPrice(converted)}` : `${base} / SPY ${fmtSpyConvertedPrice(converted)}`;
+  const linked = linkedMarketPrice(Number(value),R);
+  if(!linked || linked.price == null) return base;
+  return `${base} / ${linked.symbol} ${fmtLinkedMarketPrice(linked)}`;
 }
 function nearestStrikeLevel(R,side){
   if(!R?.strikes?.length) return null;
@@ -935,12 +960,15 @@ function writeMarketSnapshots(rows){
 function snapshotFromResult(R,note=''){
   const read = R.marketRead || buildMarketRead(R);
   const spxCalc = spxPriceFromSpyPrice(R.spot,R);
+  const linkedSpot = linkedMarketPrice(R.spot,R);
   return {
     id:`snap-${Date.now()}-${Math.random().toString(16).slice(2)}`,
     createdAt:new Date().toISOString(),
     symbol:R.symbol,
     spot:R.spot,
     spxCalc,
+    linkedSymbol:linkedSpot?.symbol || null,
+    linkedSpot:linkedSpot?.price ?? null,
     selectedExpirations:R.maxPain?.active?.selectedExps || [],
     dataState:read.dataQuality?.state || '',
     dataAge:read.dataQuality?.age || '',
@@ -1077,7 +1105,9 @@ function renderReviewPage(){
       <div class="snapshot-head">
         <div>
           <span>${esc(fmtSnapshotDate(row.createdAt))}</span>
-          <strong>${esc(row.symbol)} ${fmtPrice(row.spot)}${row.spxCalc==null?'':` / SPX ${fmtPrice(row.spxCalc)}`}</strong>
+          <strong>${esc(row.symbol)} ${fmtPrice(row.spot)}${row.linkedSpot==null
+            ? (row.spxCalc==null?'':` / SPX ${fmtPrice(row.spxCalc)}`)
+            : ` / ${esc(row.linkedSymbol)} ${esc(fmtLinkedMarketPrice({symbol:row.linkedSymbol,price:Number(row.linkedSpot),decimals:row.linkedSymbol==='SPY'||row.linkedSymbol==='QQQ'?2:0}))}`}</strong>
         </div>
         <div class="snapshot-bias ${esc((row.bias||'').toLowerCase().replace(/[^a-z]+/g,'-'))}">${esc(row.bias || '--')} · ${Number(row.confidence||0)}%</div>
       </div>
@@ -1596,20 +1626,15 @@ function renderMaxPainValues(R){
     host.innerHTML = '';
     return;
   }
-  const spyMaxPain = R?.maxPain?.symbol === 'SPX' ? spyPriceFromSpxStrike(maxPain,R) : null;
-  const spxMaxPain = R?.maxPain?.symbol === 'SPY' ? spxPriceFromSpyPrice(maxPain,R) : null;
+  const linkedMaxPain = linkedMarketPrice(maxPain,{symbol:R?.maxPain?.symbol});
   host.innerHTML = `
     <div class="maxpain-value" style="--c:#ffc107">
       <span class="k">Max Pain ${esc(R.maxPain.symbol)}</span>
       <span class="v">${fmtPrice(maxPain)}</span>
     </div>
-    ${spyMaxPain == null ? '' : `<div class="maxpain-value spy" style="--c:#22b8ff">
-      <span class="k">Max Pain SPY</span>
-      <span class="v">${fmtSpyConvertedPrice(spyMaxPain)}</span>
-    </div>`}
-    ${spxMaxPain == null ? '' : `<div class="maxpain-value spy" style="--c:#22b8ff">
-      <span class="k">Max Pain SPX calc</span>
-      <span class="v">${fmtPrice(spxMaxPain)}</span>
+    ${linkedMaxPain == null ? '' : `<div class="maxpain-value spy" style="--c:#22b8ff">
+      <span class="k">Max Pain ${esc(linkedMaxPain.symbol)} calc</span>
+      <span class="v">${fmtLinkedMarketPrice(linkedMaxPain)}</span>
     </div>`}
   `;
 }
@@ -1808,12 +1833,12 @@ function renderImpl(R){
               badge.textContent="DEMO - synthetic data · refreshed "+nowClient; }
   const regClass = R.regime==="positive_gamma"?"reg-pos":R.regime==="negative_gamma"?"reg-neg":"reg-neu";
   const regHeb = {positive_gamma:"Positive Gamma",negative_gamma:"Negative Gamma",neutral:"Neutral"}[R.regime];
-  const spxSpot = spxPriceFromSpyPrice(R.spot,R);
-  const spxSpotLine = spxSpot == null ? '' : `<div class="k" style="margin-top:6px">SPX calc: ${fmtPrice(spxSpot)}</div>`;
+  const linkedSpot = linkedMarketPrice(R.spot,R);
+  const linkedSpotLine = linkedSpot == null ? '' : `<div class="k" style="margin-top:6px">${esc(linkedSpot.symbol)} calc: ${fmtLinkedMarketPrice(linkedSpot)}</div>`;
   document.getElementById('topCards').innerHTML = `
     <div class="card"><div class="k">Symbol / Spot</div>
       <div class="v">${R.symbol} <small>${fmtPrice(R.spot)}</small></div>
-      ${spxSpotLine}</div>
+      ${linkedSpotLine}</div>
     <div class="card"><div class="k">Regime</div>
       <div class="v"><span class="regime-badge ${regClass}">${regHeb}</span></div>
       <div class="k" style="margin-top:8px">strength: ${R.strength}</div></div>
@@ -2079,8 +2104,10 @@ function drawChart(R,chartId='gexChart'){
   ctx.strokeStyle="#d58b16"; ctx.lineWidth=2;
   ctx.beginPath(); ctx.moveTo(px,padT-6); ctx.lineTo(px,bottom); ctx.stroke();
   ctx.fillStyle="#d58b16"; ctx.font=(mobile ? "bold 10px Segoe UI" : "bold 12px Segoe UI"); ctx.textBaseline="alphabetic";
-  const spxSpot = spxPriceFromSpyPrice(R.spot,R);
-  const priceLabel = spxSpot == null ? "Price: "+fmtPrice(R.spot) : "SPY: "+fmtPrice(R.spot)+" / SPX: "+fmtPrice(spxSpot);
+  const linkedSpot = linkedMarketPrice(R.spot,R);
+  const priceLabel = linkedSpot == null
+    ? "Price: "+fmtPrice(R.spot)
+    : `${R.symbol}: ${fmtPrice(R.spot)} / ${linkedSpot.symbol}: ${fmtLinkedMarketPrice(linkedSpot)}`;
   const labelWidth = ctx.measureText(priceLabel).width;
   const alignRight = px>W-labelWidth-12;
   ctx.textAlign = alignRight?"right":"left";
@@ -2236,15 +2263,12 @@ function showChartTooltip(ev){
     if(m==='power') return row('Power Zone',fmtNum(s.powerZone || 0));
     return '';
   }).join('');
-  const spyPrice = spyPriceFromSpxStrike(s.strike,R);
-  const spyRow = spyPrice == null ? '' : `<div class="tt-row spy-row"><span>SPY Price</span><span class="pos">${fmtSpyConvertedPrice(spyPrice)}</span></div>`;
-  const spxPrice = spxPriceFromSpyPrice(s.strike,R);
-  const spxRow = spxPrice == null ? '' : `<div class="tt-row spy-row"><span>SPX Price</span><span class="pos">${fmtPrice(spxPrice)}</span></div>`;
+  const linkedStrike = linkedMarketPrice(s.strike,R);
+  const linkedRow = linkedStrike == null ? '' : `<div class="tt-row spy-row"><span>${esc(linkedStrike.symbol)} Price</span><span class="pos">${fmtLinkedMarketPrice(linkedStrike)}</span></div>`;
   tt.innerHTML = `
     <div class="tt-title">${R?.symbol || ''} Strike ${fmtPrice(s.strike)}</div>
     ${metricRows || row('No metric selected','')}
-    ${spyRow}
-    ${spxRow}
+    ${linkedRow}
   `;
   tt.style.display='block';
   cross.style.display='block';
