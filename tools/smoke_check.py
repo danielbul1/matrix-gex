@@ -65,6 +65,7 @@ REQUIRED_IDS = (
     "reviewStatsPanel",
     "clearSnapshots",
     "gexChart",
+    "view-dex",
     "gexChangeChart",
     "gexChangeTooltip",
     "gexChangeCrosshairX",

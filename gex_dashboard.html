@@ -19,6 +19,7 @@
 <header>
   <nav class="side-nav">
     <a href="#" class="active" data-view="gex">GEX</a>
+    <a href="#" data-view="dex">DEX</a>
     <a href="#" data-view="matrix-gex">Matrix GEX</a>
     <a href="#" data-view="shock-engine">Shock Engine</a>
     <a href="#" data-view="max-pain">Max Pain</a>
@@ -165,7 +166,29 @@
           <canvas id="gexChangeChart" height="360"></canvas>
         </div>
       </div>
-      <div class="gex-change-panel dex-panel">
+    </div>
+
+    <div class="grid row-top" id="topCards"></div>
+  </section>
+
+  <section class="app-view" id="view-dex">
+    <div class="params">
+      <div class="range-control" role="group" aria-label="DEX strike display range">
+        <span class="range-label">Range</span>
+        <button type="button" class="range-btn" data-sigma="1">1&sigma;</button>
+        <button type="button" class="range-btn active" data-sigma="2">2&sigma;</button>
+        <button type="button" class="range-btn" data-sigma="3">3&sigma;</button>
+        <button type="button" class="range-btn" data-sigma="all">All</button>
+      </div>
+      <span class="plabel">Delta Exposure:</span>
+      <span class="pbtn active" style="--c:#22b8ff">Net DEX</span>
+    </div>
+    <div class="card chartcard dex-page-card">
+      <div class="dex-page-intro">
+        <div><span class="command-panel-tag">DEX</span><h2>Delta Exposure by Strike</h2></div>
+        <p>Uses the selected symbol and expirations. History and the intraday timeline update both charts together.</p>
+      </div>
+      <div class="dex-panel">
         <div class="charttop">
           <span class="symlabel" id="dexSymLabel"></span>
           <span class="chartlegend" id="dexChartLegend"></span>
@@ -190,8 +213,6 @@
         </div>
       </div>
     </div>
-
-    <div class="grid row-top" id="topCards"></div>
   </section>
 
   <section class="app-view" id="view-matrix-gex">
@@ -415,6 +436,6 @@
   Synthetic data is generated in-browser when live CBOE data is unavailable. Original demo: gex.kctradings.com
 </footer>
 
-<script src="assets/dashboard.js?v=20260715-timeline1"></script>
+<script src="assets/dashboard.js?v=20260715-dexpage1"></script>
 </body>
 </html>

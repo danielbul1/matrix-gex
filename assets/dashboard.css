@@ -378,6 +378,11 @@
   .chartwrap{position:relative;overflow:hidden}
   .gex-change-panel{margin-top:18px;padding-top:16px;border-top:1px solid #303030}
   .dex-panel{margin-top:30px;padding-top:26px;border-top-color:#454545}
+  .dex-page-card .dex-panel{margin-top:0;padding-top:0;border-top:0}
+  .dex-page-intro{display:flex;align-items:flex-end;justify-content:space-between;gap:18px;margin:0 0 22px;padding:0 72px 16px;border-bottom:1px solid #303030}
+  .dex-page-intro h2{margin:7px 0 0;color:#fff;font-size:21px}
+  .dex-page-intro p{margin:0;max-width:620px;color:#9da7ae;font-size:12px;line-height:1.5;text-align:right}
+  @media(max-width:700px){.dex-page-intro{display:block;padding:0 8px 14px}.dex-page-intro p{margin-top:10px;text-align:left}}
   .history-control{min-width:390px}
   .history-date-row{display:flex;align-items:center;justify-content:space-between;gap:8px}
   .history-date-row select{min-width:126px}

@@ -1878,8 +1878,10 @@ function renderImpl(R){
   if(activeView === 'gex'){
     drawChart(R);
     drawNetGexChangeChart(gexChangeChartResult(R));
+  }
+  if(activeView === 'dex'){
     drawChart(R,'dexChart');
-    drawNetDexChangeChart(gexChangeChartResult(R));
+    drawNetDexChangeChart(dexChangeChartResult(R));
   }
   if(activeView === 'matrix-gex') drawChart(R,'matrixGexChart');
   if(activeView === 'shock-engine') drawShockEngine(R);
@@ -1986,6 +1988,9 @@ function chartTargets(chartId){
 }
 function gexChangeChartResult(R){
   return R?.netGexChangeR || R;
+}
+function dexChangeChartResult(R){
+  return R?.netDexChangeR || R?.netGexChangeR || R;
 }
 function visibleStrikeData(R){
   let visibleStrikes=[...R.strikes];
@@ -2834,7 +2839,7 @@ function hideEdgeTooltip(){
 
 // ---------- Wiring ----------
 let activeView = 'gex';
-const selectedExpirationsByView = {gex:null, 'matrix-gex':null, 'shock-engine':null, 'max-pain':null};
+const selectedExpirationsByView = {gex:null,dex:null,'matrix-gex':null,'shock-engine':null,'max-pain':null};
 let gexChangeExpirationsSynced = true;
 let selectedGexChangeExpirations = null;
 function currentExpirationValues(){
@@ -2907,8 +2912,10 @@ function setView(view){
   if(view === 'gex' && window._lastR) requestAnimationFrame(()=>{
     drawChart(window._lastR);
     drawNetGexChangeChart(gexChangeChartResult(window._lastR));
+  });
+  if(view === 'dex' && window._lastR) requestAnimationFrame(()=>{
     drawChart(window._lastR,'dexChart');
-    drawNetDexChangeChart(gexChangeChartResult(window._lastR));
+    drawNetDexChangeChart(dexChangeChartResult(window._lastR));
   });
   if(view === 'matrix-gex' && window._lastR) requestAnimationFrame(()=>drawChart(window._lastR,'matrixGexChart'));
   if(view === 'shock-engine' && window._lastR) requestAnimationFrame(()=>drawShockEngine(window._lastR));
@@ -2955,14 +2962,20 @@ function run(){
   changeR.expectedMove = changeExpectedMove;
   changeR.live = R.live;
   changeR.asof = R.asof;
-  let openR=null;
+  let openR=null,openSelectedR=null;
   const openRec=OPEN_REAL?.data?.[sym];
   if(openRec && OPEN_REAL.session_date === netGexSessionDateKey(R)){
-    let openChain=buildChainRealFromRecord(sym,openRec,null);
+    const openFullChain=buildChainRealFromRecord(sym,openRec,null);
+    let openChain=openFullChain;
     if(changeExpirations.size){
       openChain={...openChain, quotes:openChain.quotes.filter(q=>changeExpirations.has(q.exp))};
     }
     openR=calcGEX(openChain,mode);
+    let openSelectedChain=openFullChain;
+    if(selectedExpirations.size){
+      openSelectedChain={...openFullChain,quotes:openFullChain.quotes.filter(q=>selectedExpirations.has(q.exp))};
+    }
+    openSelectedR=calcGEX(openSelectedChain,mode);
   }
   changeR.netGexChange = buildNetGexChange(changeR,{
     mode,
@@ -2971,6 +2984,12 @@ function run(){
     requireOpenData:useLive,
   });
   R.netGexChangeR = changeR;
+  R.netDexChangeR={...R,netGexChange:buildNetGexChange(R,{
+    mode,
+    expirations:selectedExpirationValues,
+    baselineResult:openSelectedR,
+    requireOpenData:useLive,
+  })};
   const historySnapshot=selectedHistorySnapshot();
   if(historySnapshot){
     R=applyHistorySnapshot(R,historySnapshot,EXPOSURE_HISTORY_DAY?.snapshots?.[0]);
@@ -2980,6 +2999,7 @@ function run(){
 }
 bind('market','change',()=>{
   selectedExpirationsByView.gex=null;
+  selectedExpirationsByView.dex=null;
   selectedExpirationsByView['matrix-gex']=null;
   selectedExpirationsByView['shock-engine']=null;
   selectedExpirationsByView['max-pain']=null;
@@ -2994,6 +3014,7 @@ bind('symbol','change',()=>{
   const changePicker=byId('gexChangeExpirationPicker');
   if(changePicker) changePicker.innerHTML='';
   selectedExpirationsByView.gex=null;
+  selectedExpirationsByView.dex=null;
   selectedExpirationsByView['matrix-gex']=null;
   selectedExpirationsByView['shock-engine']=null;
   selectedExpirationsByView['max-pain']=null;
@@ -3040,8 +3061,10 @@ window.addEventListener('resize',()=>{
   if(activeView === 'gex'){
     drawChart(window._lastR);
     drawNetGexChangeChart(gexChangeChartResult(window._lastR));
+  }
+  if(activeView === 'dex'){
     drawChart(window._lastR,'dexChart');
-    drawNetDexChangeChart(gexChangeChartResult(window._lastR));
+    drawNetDexChangeChart(dexChangeChartResult(window._lastR));
   }
   if(activeView === 'matrix-gex') drawChart(window._lastR,'matrixGexChart');
   if(activeView === 'shock-engine') drawShockEngine(window._lastR);
@@ -3130,8 +3153,6 @@ document.querySelectorAll('.pbtn').forEach(btn=>{
     if(window._lastR && activeView === 'gex'){
       drawChart(window._lastR);
       drawNetGexChangeChart(gexChangeChartResult(window._lastR));
-      drawChart(window._lastR,'dexChart');
-      drawNetDexChangeChart(gexChangeChartResult(window._lastR));
     }
   });
 });
@@ -3148,8 +3169,10 @@ document.querySelectorAll('[data-sigma]').forEach(btn=>{
     if(window._lastR && activeView === 'gex'){
       drawChart(window._lastR);
       drawNetGexChangeChart(gexChangeChartResult(window._lastR));
+    }
+    if(window._lastR && activeView === 'dex'){
       drawChart(window._lastR,'dexChart');
-      drawNetDexChangeChart(gexChangeChartResult(window._lastR));
+      drawNetDexChangeChart(dexChangeChartResult(window._lastR));
     }
   });
 });
@@ -3345,6 +3368,7 @@ function applyHistorySnapshot(R,snapshot,firstSnapshot){
   historical.totalGex=historical.totalCallGex+historical.totalPutGex;
   historical.totalDex=historical.totalCallDex+historical.totalPutDex;
   historical.netGexChangeR={...historical,netGexChange:exposureChange};
+  historical.netDexChangeR={...historical,netGexChange:exposureChange};
   return historical;
 }
 function getRefreshSeconds(){
