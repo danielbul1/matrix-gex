@@ -13,7 +13,7 @@
   };
 </script>
 <script src="https://unpkg.com/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js" onerror="window.__loadMatrixChartLib && window.__loadMatrixChartLib()"></script>
-<link rel="stylesheet" href="assets/dashboard.css?v=20260713-5">
+<link rel="stylesheet" href="assets/dashboard.css?v=20260715-dex1">
 </head>
 <body>
 <header>
@@ -38,6 +38,14 @@
   <div class="ctrl">
     <label>Expirations</label>
     <div id="expirationPicker" class="expiry-picker" aria-label="Choose expiration dates"></div>
+  </div>
+  <div class="ctrl history-control">
+    <label>History</label>
+    <div class="history-row">
+      <select id="historyDate" aria-label="Choose historical trading day"><option value="live">Live</option></select>
+      <select id="historyTime" aria-label="Choose historical snapshot time" disabled><option value="">Now</option></select>
+    </div>
+    <span class="history-note" id="historyNote">Live expirations</span>
   </div>
   <div class="ctrl">
     <label>Market</label>
@@ -149,6 +157,30 @@
           <div class="chart-crosshair-x" id="gexChangeCrosshairX"></div>
           <div class="chart-tooltip" id="gexChangeTooltip"></div>
           <canvas id="gexChangeChart" height="360"></canvas>
+        </div>
+      </div>
+      <div class="gex-change-panel dex-panel">
+        <div class="charttop">
+          <span class="symlabel" id="dexSymLabel"></span>
+          <span class="chartlegend" id="dexChartLegend"></span>
+        </div>
+        <div class="chartwrap">
+          <div class="watermark">Matrix</div>
+          <div class="chart-crosshair-x" id="dexCrosshairX"></div>
+          <div class="chart-tooltip" id="dexTooltip"></div>
+          <canvas id="dexChart" height="540"></canvas>
+        </div>
+        <div class="gex-change-panel">
+          <div class="charttop">
+            <span class="symlabel">Net DEX Change</span>
+            <span class="chartlegend" id="dexChangeLegend"></span>
+          </div>
+          <div class="chartwrap">
+            <div class="watermark">Matrix</div>
+            <div class="chart-crosshair-x" id="dexChangeCrosshairX"></div>
+            <div class="chart-tooltip" id="dexChangeTooltip"></div>
+            <canvas id="dexChangeChart" height="360"></canvas>
+          </div>
         </div>
       </div>
     </div>
@@ -377,6 +409,6 @@
   Synthetic data is generated in-browser when live CBOE data is unavailable. Original demo: gex.kctradings.com
 </footer>
 
-<script src="assets/dashboard.js?v=20260715-ndx1"></script>
+<script src="assets/dashboard.js?v=20260715-dex1"></script>
 </body>
 </html>

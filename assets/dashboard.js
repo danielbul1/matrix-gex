@@ -82,6 +82,8 @@ const SYMBOLS = {
 let REAL = {};
 let REAL_ASOF = {};
 let OPEN_REAL = null;
+let EXPOSURE_HISTORY_INDEX = null;
+let EXPOSURE_HISTORY_DAY = null;
 const RISK_FREE = {US:0.05, IN:0.065};
 const SPX_SPY_RATIO = 10.03657299922611;
 // User-provided conversion example: QQQ 752.00 = NDX 30,916.24.
@@ -206,20 +208,23 @@ function calcGEX(chain, mode){
   for(const q of kept){
     const gex = q.g.gamma * q.oi * mult * spot * spot * 0.01;
     if(!byStrike[q.K]) byStrike[q.K] = {strike:q.K, callGex:0, putGex:0, netGex:0,
+        callDex:0, putDex:0, netDex:0,
         callVex:0, putVex:0, netVex:0, callCharm:0, putCharm:0, netCharm:0,
         callOI:0, putOI:0, callVol:0, putVol:0, callIV:0, putIV:0, gamma:0, ts:q.ts};
     const s = byStrike[q.K];
+    const dex = (q.g.delta || 0) * q.oi * mult * spot * 0.01;
     const vex = (q.g.vanna || 0) * q.oi * mult * spot * 0.01;
     const charm = (q.g.charm || 0) * q.oi * mult * spot / 252;
     if(q.isCall){
-      s.callGex += gex; s.callVex += vex; s.callCharm += charm;
+      s.callGex += gex; s.callDex += dex; s.callVex += vex; s.callCharm += charm;
       s.callOI+=q.oi; s.callVol+=q.vol; s.callIV=q.iv;
     } else {
-      s.putGex -= gex; s.putVex -= vex; s.putCharm -= charm;
+      s.putGex -= gex; s.putDex += dex; s.putVex -= vex; s.putCharm -= charm;
       s.putOI +=q.oi; s.putVol +=q.vol; s.putIV =q.iv;
     }
     s.gamma = Math.max(s.gamma, q.g.gamma);
     s.netGex = s.callGex + s.putGex;
+    s.netDex = s.callDex + s.putDex;
     s.netVex = s.callVex + s.putVex;
     s.netCharm = s.callCharm + s.putCharm;
     s.ts = Math.max(s.ts, q.ts);
@@ -241,6 +246,9 @@ function calcGEX(chain, mode){
   const totalCallGex = strikes.reduce((a,s)=>a+s.callGex,0);
   const totalPutGex  = strikes.reduce((a,s)=>a+s.putGex,0);
   const totalGex     = totalCallGex + totalPutGex;
+  const totalCallDex = strikes.reduce((a,s)=>a+s.callDex,0);
+  const totalPutDex  = strikes.reduce((a,s)=>a+s.putDex,0);
+  const totalDex     = totalCallDex + totalPutDex;
   const netCallOI = strikes.reduce((a,s)=>a+s.callOI,0);
   const netPutOI  = strikes.reduce((a,s)=>a+s.putOI,0);
   const pcr = netCallOI>0 ? netPutOI/netCallOI : 0;
@@ -296,7 +304,7 @@ function calcGEX(chain, mode){
   const atmQ = kept.filter(q=>q.isCall).sort((a,b)=>Math.abs(a.K-spot)-Math.abs(b.K-spot))[0];
 
   return {symbol:chain.symbol, market:chain.market, spot, mult, fetchTs:chain.fetchTs,
-    strikes, totalGex, totalCallGex, totalPutGex,
+    strikes, totalGex, totalCallGex, totalPutGex, totalDex, totalCallDex, totalPutDex,
     maxGammaStrike, flip, callWall, putWall, callWallGex:cwG, putWallGex:pwG,
     regime, strength, distPct, pcr, netCallOI, netPutOI, callGexPct,
     avgCallIV, avgPutIV, ivSkew, sentiment, atmGreeks:atmQ?atmQ.g:null,
@@ -362,25 +370,29 @@ function netGexBaselineKey(R,{mode,expirations}){
 }
 function buildNetGexChange(R,opts){
   if(opts.baselineResult && Array.isArray(opts.baselineResult.strikes)){
-    const byStrike=Object.fromEntries(opts.baselineResult.strikes.map(s=>[String(s.strike),s.netGex || 0]));
+    const byStrike=Object.fromEntries(opts.baselineResult.strikes.map(s=>[String(s.strike),s]));
     const rows=R.strikes.map(s=>{
-      const start=Number(byStrike[String(s.strike)]);
-      const baseline=Number.isFinite(start) ? start : 0;
-      return {...s, baselineNetGex:baseline, netGexChange:(s.netGex || 0)-baseline};
+      const start=byStrike[String(s.strike)] || {};
+      const baseline=Number.isFinite(Number(start.netGex)) ? Number(start.netGex) : 0;
+      const baselineDex=Number.isFinite(Number(start.netDex)) ? Number(start.netDex) : 0;
+      return {...s, baselineNetGex:baseline, netGexChange:(s.netGex || 0)-baseline,
+        baselineNetDex:baselineDex,netDexChange:(s.netDex || 0)-baselineDex};
     });
     const totalChange=rows.reduce((sum,s)=>sum+s.netGexChange,0);
+    const totalDexChange=rows.reduce((sum,s)=>sum+s.netDexChange,0);
     return {
       key:'open-data',
       source:'open_data',
+      captureKind:OPEN_REAL?.capture_kind || 'open',
       sessionDate:OPEN_REAL?.session_date || netGexSessionDateKey(R),
       createdAt:Date.parse(OPEN_REAL?.captured_at || '') || Date.now(),
       asof:OPEN_REAL?.captured_at || null,
-      totalChange,
+      totalChange,totalDexChange,
       rows,
     };
   }
   if(opts.requireOpenData){
-    const rows=R.strikes.map(s=>({...s, baselineNetGex:null, netGexChange:0}));
+    const rows=R.strikes.map(s=>({...s, baselineNetGex:null,netGexChange:0,baselineNetDex:null,netDexChange:0}));
     return {
       key:'missing-open-data',
       source:'missing_open_data',
@@ -388,7 +400,7 @@ function buildNetGexChange(R,opts){
       sessionDate:netGexSessionDateKey(R),
       createdAt:null,
       asof:null,
-      totalChange:0,
+      totalChange:0,totalDexChange:0,
       rows,
     };
   }
@@ -403,7 +415,7 @@ function buildNetGexChange(R,opts){
       expirations:(opts.expirations || []).slice().sort(),
       createdAt:Date.now(),
       asof:R.asof || null,
-      strikes:Object.fromEntries(R.strikes.map(s=>[String(s.strike),s.netGex || 0])),
+      strikes:Object.fromEntries(R.strikes.map(s=>[String(s.strike),{netGex:s.netGex || 0,netDex:s.netDex || 0}])),
     };
     store[key]=base;
     const keys=Object.keys(store).sort((a,b)=>(store[b].createdAt || 0)-(store[a].createdAt || 0));
@@ -412,12 +424,17 @@ function buildNetGexChange(R,opts){
   }
   const byStrike=base.strikes || {};
   const rows=R.strikes.map(s=>{
-    const start=Number(byStrike[String(s.strike)]);
+    const raw=byStrike[String(s.strike)];
+    const start=typeof raw==='object' ? Number(raw.netGex) : Number(raw);
+    const startDex=typeof raw==='object' ? Number(raw.netDex) : 0;
     const baseline=Number.isFinite(start) ? start : 0;
-    return {...s, baselineNetGex:baseline, netGexChange:(s.netGex || 0)-baseline};
+    const baselineDex=Number.isFinite(startDex) ? startDex : 0;
+    return {...s,baselineNetGex:baseline,netGexChange:(s.netGex || 0)-baseline,
+      baselineNetDex:baselineDex,netDexChange:(s.netDex || 0)-baselineDex};
   });
   const totalChange=rows.reduce((sum,s)=>sum+s.netGexChange,0);
-  return {key,sessionDate:base.sessionDate || netGexSessionDateKey(R),createdAt:base.createdAt,asof:base.asof,totalChange,rows};
+  const totalDexChange=rows.reduce((sum,s)=>sum+s.netDexChange,0);
+  return {key,sessionDate:base.sessionDate || netGexSessionDateKey(R),createdAt:base.createdAt,asof:base.asof,totalChange,totalDexChange,rows};
 }
 
 function scenarioStepForSymbol(symbol){
@@ -1827,7 +1844,9 @@ function renderImpl(R){
   window._lastR=R;
   const badge=document.getElementById('srcBadge');
   const nowClient=new Date().toLocaleTimeString('he-IL');
-  if(R.live){ badge.style.color="var(--green)"; badge.style.borderColor="var(--green)";
+  if(R.historical){ badge.style.color="var(--amber)"; badge.style.borderColor="var(--amber)";
+              badge.textContent="HISTORY · "+(R.asof||""); }
+  else if(R.live){ badge.style.color="var(--green)"; badge.style.borderColor="var(--green)";
               badge.textContent="LIVE - CBOE delayed · data "+(R.asof||"")+" · refreshed "+nowClient; }
   else      { badge.style.color="var(--amber)"; badge.style.borderColor="var(--amber)";
               badge.textContent="DEMO - synthetic data · refreshed "+nowClient; }
@@ -1859,6 +1878,8 @@ function renderImpl(R){
   if(activeView === 'gex'){
     drawChart(R);
     drawNetGexChangeChart(gexChangeChartResult(R));
+    drawChart(R,'dexChart');
+    drawNetDexChangeChart(gexChangeChartResult(R));
   }
   if(activeView === 'matrix-gex') drawChart(R,'matrixGexChart');
   if(activeView === 'shock-engine') drawShockEngine(R);
@@ -1941,6 +1962,7 @@ let ACTIVE = new Set(["net_gex"]);
 let DISPLAY_SIGMA = 2;
 const METRICS = {
   net_gex:  {label:"Net GEX",     color:"#22b8ff", kind:"bar",  signed:true,  val:s=>s.netGex},
+  net_dex:  {label:"Net DEX",     color:"#22b8ff", kind:"bar",  signed:true,  val:s=>s.netDex},
   ag:       {label:"AG",          color:"#ab7df6", kind:"area", val:s=>Math.abs(s.callGex)+Math.abs(s.putGex)},
   call_oi:  {label:"Call OI",     color:"#26c281", kind:"area", val:s=>s.callOI},
   put_oi:   {label:"Put OI",      color:"#ef5350", kind:"area", val:s=>s.putOI},
@@ -1953,12 +1975,13 @@ function hexA(hex,a){const n=parseInt(hex.slice(1),16);return `rgba(${n>>16&255}
 // ---------- Canvas chart: vertical bars by strike + area overlays ----------
 function chartTargets(chartId){
   const isMatrix = chartId === 'matrixGexChart';
+  const isDex = chartId === 'dexChart';
   return {
     canvasId: chartId,
-    symbolId: isMatrix ? 'matrixSymLabel' : 'symLabel',
-    legendId: isMatrix ? 'matrixChartLegend' : 'chartLegend',
-    tooltipId: isMatrix ? 'matrixGexTooltip' : 'chartTooltip',
-    crosshairId: isMatrix ? 'matrixGexCrosshairX' : 'chartCrosshairX',
+    symbolId: isMatrix ? 'matrixSymLabel' : (isDex ? 'dexSymLabel' : 'symLabel'),
+    legendId: isMatrix ? 'matrixChartLegend' : (isDex ? 'dexChartLegend' : 'chartLegend'),
+    tooltipId: isMatrix ? 'matrixGexTooltip' : (isDex ? 'dexTooltip' : 'chartTooltip'),
+    crosshairId: isMatrix ? 'matrixGexCrosshairX' : (isDex ? 'dexCrosshairX' : 'chartCrosshairX'),
   };
 }
 function gexChangeChartResult(R){
@@ -1978,6 +2001,7 @@ function visibleStrikeData(R){
 }
 function drawChart(R,chartId='gexChart'){
   const targets=chartTargets(chartId);
+  const isDex=chartId==='dexChart';
   const cv = document.getElementById(targets.canvasId);
   if(!cv) return;
   const dpr = window.devicePixelRatio||1;
@@ -1991,9 +2015,10 @@ function drawChart(R,chartId='gexChart'){
   const data=visibleStrikeData(R);
   if(!data.length) return;
 
-  const order = Object.keys(METRICS);
-  const active = order.filter(m=>ACTIVE.has(m));
-  const hasBar = ACTIVE.has("net_gex");
+  const order = Object.keys(METRICS).filter(m=>m!=='net_dex');
+  const active = isDex ? ['net_dex'] : order.filter(m=>ACTIVE.has(m));
+  const hasBar = isDex || ACTIVE.has("net_gex");
+  const barMetric = isDex ? METRICS.net_dex : METRICS.net_gex;
   const areas = active.filter(m=>METRICS[m].kind==="area");
 
   // header symbol + legend
@@ -2020,7 +2045,7 @@ function drawChart(R,chartId='gexChart'){
   // ----- VERTICAL axis (Net GEX, signed and centered on zero) -----
   let lMin=0,lMax=1,yL=v=>bottom,y0=bottom;
   if(hasBar){
-    const vals=data.map(METRICS.net_gex.val);
+    const vals=data.map(barMetric.val);
     const maxAbs=Math.max(...vals.map(v=>Math.abs(v)),1)*1.08;
     lMin=-maxAbs; lMax=maxAbs;
     yL=v=>top+(lMax-v)/(lMax-lMin)*plotH; y0=yL(0);
@@ -2063,7 +2088,7 @@ function drawChart(R,chartId='gexChart'){
   if(hasBar){
     const bw=Math.max(2,Math.min(slot*0.70,32));
     data.forEach((s,i)=>{
-      const v=METRICS.net_gex.val(s), yy=yL(v);
+      const v=barMetric.val(s), yy=yL(v);
       const x=xCenter(i)-bw/2;
       const y=Math.min(yy,y0);
       const h=Math.max(1,Math.abs(yy-y0));
@@ -2116,15 +2141,16 @@ function drawChart(R,chartId='gexChart'){
   // ----- axis titles -----
   if(hasBar){ ctx.save(); ctx.translate(14,padT+plotH/2); ctx.rotate(-Math.PI/2);
     ctx.fillStyle="#d0d0d0"; ctx.font=(mobile ? "bold 11px Segoe UI" : "bold 13px Segoe UI"); ctx.textAlign="center";
-    ctx.fillText("Net GEX",0,0); ctx.restore(); }
+    ctx.fillText(isDex ? "Net DEX" : "Net GEX",0,0); ctx.restore(); }
   if(areas.length){ ctx.save(); ctx.translate(W-12,padT+plotH/2); ctx.rotate(Math.PI/2);
     ctx.fillStyle="#d0d0d0"; ctx.font=(mobile ? "bold 11px Segoe UI" : "bold 13px Segoe UI"); ctx.textAlign="center";
     ctx.fillText(METRICS[dom].label,0,0); ctx.restore(); }
   ctx.fillStyle="#d0d0d0"; ctx.font=(mobile ? "bold 10px Segoe UI" : "bold 12px Segoe UI"); ctx.textAlign="center"; ctx.textBaseline="bottom";
   ctx.fillText("Strike",padL+plotW/2,H-4);
 }
-function drawNetGexChangeChart(R){
-  const cv=document.getElementById('gexChangeChart');
+function drawExposureChangeChart(R,kind='gex'){
+  const isDex=kind==='dex';
+  const cv=document.getElementById(isDex ? 'dexChangeChart' : 'gexChangeChart');
   if(!cv || !R.netGexChange) return;
   const dpr=window.devicePixelRatio||1;
   const W=cv.clientWidth;
@@ -2138,12 +2164,13 @@ function drawNetGexChangeChart(R){
   const data=visibleStrikeData(R).map(s=>changeByStrike.get(s.strike) || {...s,baselineNetGex:0,netGexChange:0});
   if(!data.length) return;
 
-  const legend=byId('gexChangeLegend');
+  const legend=byId(isDex ? 'dexChangeLegend' : 'gexChangeLegend');
   const baselineTime=R.netGexChange.createdAt ? new Date(R.netGexChange.createdAt).toLocaleTimeString('he-IL',{hour:'2-digit',minute:'2-digit'}) : '--';
+  const baselineLabel=R.netGexChange.captureKind==='first_available' ? 'first available' : 'open';
   if(legend){
     legend.innerHTML=R.netGexChange.missingOpenData
       ? `<span style="color:#ffc107">Waiting for open baseline file</span>`
-      : `<span class="sq" style="background:#22aaf2"></span>Increase&nbsp;&nbsp;<span class="sq" style="background:#ff2417"></span>Decrease&nbsp;&nbsp;<span>${R.netGexChange.sessionDate || ''} total ${fmtNum(R.netGexChange.totalChange)} from ${baselineTime}</span>`;
+      : `<span class="sq" style="background:#22aaf2"></span>Increase&nbsp;&nbsp;<span class="sq" style="background:#ff2417"></span>Decrease&nbsp;&nbsp;<span>${R.netGexChange.sessionDate || ''} total ${fmtNum(isDex ? R.netGexChange.totalDexChange : R.netGexChange.totalChange)} from ${baselineLabel} ${baselineTime}</span>`;
   }
 
   const padL=mobile ? 48 : 70;
@@ -2154,7 +2181,8 @@ function drawNetGexChangeChart(R){
   const top=padT, bottom=padT+plotH;
   const slot=plotW/data.length;
   const xCenter=i=>padL+slot*(i+.5);
-  const vals=data.map(s=>s.netGexChange || 0);
+  const valueKey=isDex ? 'netDexChange' : 'netGexChange';
+  const vals=data.map(s=>s[valueKey] || 0);
   const maxAbs=Math.max(...vals.map(v=>Math.abs(v)),1)*1.08;
   const lMin=-maxAbs,lMax=maxAbs;
   const y=v=>top+(lMax-v)/(lMax-lMin)*plotH;
@@ -2172,7 +2200,7 @@ function drawNetGexChangeChart(R){
 
   const bw=Math.max(2,Math.min(slot*.70,32));
   const hitBars=data.map((s,i)=>{
-    const v=s.netGexChange || 0;
+    const v=s[valueKey] || 0;
     const yy=y(v);
     const x=xCenter(i)-bw/2;
     const barY=Math.min(yy,y0);
@@ -2213,12 +2241,14 @@ function drawNetGexChangeChart(R){
 
   ctx.save(); ctx.translate(14,padT+plotH/2); ctx.rotate(-Math.PI/2);
   ctx.fillStyle='#d0d0d0'; ctx.font=(mobile ? 'bold 11px Segoe UI' : 'bold 13px Segoe UI'); ctx.textAlign='center';
-  ctx.fillText('Net GEX Change',0,0); ctx.restore();
+  ctx.fillText(isDex ? 'Net DEX Change' : 'Net GEX Change',0,0); ctx.restore();
   ctx.fillStyle='#d0d0d0'; ctx.font=(mobile ? 'bold 10px Segoe UI' : 'bold 12px Segoe UI'); ctx.textAlign='center'; ctx.textBaseline='bottom';
   ctx.fillText('Strike',padL+plotW/2,H-4);
 
   cv._matrixBars=hitBars;
 }
+function drawNetGexChangeChart(R){ drawExposureChangeChart(R,'gex'); }
+function drawNetDexChangeChart(R){ drawExposureChangeChart(R,'dex'); }
 function fmtAxis(v){
   const a=Math.abs(v);
   if(a>=1e9) return (v/1e9).toFixed(1)+"B";
@@ -2251,10 +2281,13 @@ function showChartTooltip(ev){
 
   const s=hit.s;
   const R=window._lastR;
-  const active = Object.keys(METRICS).filter(m=>ACTIVE.has(m));
+  const isDex=cv.id==='dexChart';
+  const active = isDex ? ['net_dex'] : Object.keys(METRICS).filter(m=>m!=='net_dex' && ACTIVE.has(m));
   const row = (label,value,cls='') => `<div class="tt-row"><span>${label}</span><span class="${cls}">${value}</span></div>`;
   const metricRows = active.map(m=>{
     if(m==='net_gex') return row('Net GEX',fmtNum(s.netGex),s.netGex>=0?'pos':'neg');
+    if(m==='net_dex') return row('Net DEX',fmtNum(s.netDex),s.netDex>=0?'pos':'neg')+
+      row('Call DEX',fmtNum(s.callDex),'pos')+row('Put DEX',fmtNum(s.putDex),'neg');
     if(m==='ag') return row('AG',fmtNum(Math.abs(s.callGex)+Math.abs(s.putGex)));
     if(m==='call_oi') return row('Call OI',fmtNum(s.callOI),'pos');
     if(m==='put_oi') return row('Put OI',fmtNum(s.putOI),'neg');
@@ -2281,13 +2314,14 @@ function showChartTooltip(ev){
   tt.style.top=Math.max(6,top)+'px';
 }
 function hideChartTooltip(){
-  ['chartTooltip','matrixGexTooltip','gexChangeTooltip'].forEach(id=>{const el=byId(id); if(el) el.style.display='none';});
-  ['chartCrosshairX','matrixGexCrosshairX','gexChangeCrosshairX'].forEach(id=>{const el=byId(id); if(el) el.style.display='none';});
+  ['chartTooltip','matrixGexTooltip','gexChangeTooltip','dexTooltip','dexChangeTooltip'].forEach(id=>{const el=byId(id); if(el) el.style.display='none';});
+  ['chartCrosshairX','matrixGexCrosshairX','gexChangeCrosshairX','dexCrosshairX','dexChangeCrosshairX'].forEach(id=>{const el=byId(id); if(el) el.style.display='none';});
 }
 function showGexChangeTooltip(ev){
   const cv=ev.currentTarget || document.getElementById('gexChangeChart');
-  const tt=document.getElementById('gexChangeTooltip');
-  const cross=document.getElementById('gexChangeCrosshairX');
+  const isDex=cv?.id==='dexChangeChart';
+  const tt=document.getElementById(isDex ? 'dexChangeTooltip' : 'gexChangeTooltip');
+  const cross=document.getElementById(isDex ? 'dexChangeCrosshairX' : 'gexChangeCrosshairX');
   if(!cv || !tt || !cross) return;
   const bars=cv._matrixBars || [];
   if(!bars.length) return;
@@ -2306,13 +2340,16 @@ function showGexChangeTooltip(ev){
   }
   const s=hit.s;
   const R=gexChangeChartResult(window._lastR);
-  const cls=s.netGexChange>=0?'pos':'neg';
+  const change=isDex ? s.netDexChange : s.netGexChange;
+  const current=isDex ? s.netDex : s.netGex;
+  const baseline=isDex ? s.baselineNetDex : s.baselineNetGex;
+  const cls=change>=0?'pos':'neg';
   const row=(label,value,rowCls='')=>`<div class="tt-row"><span>${label}</span><span class="${rowCls}">${value}</span></div>`;
   tt.innerHTML=`
     <div class="tt-title">${R?.symbol || ''} Strike ${fmtPrice(s.strike)}</div>
-    ${row('Change',fmtNum(s.netGexChange || 0),cls)}
-    ${row('Current Net GEX',fmtNum(s.netGex || 0),s.netGex>=0?'pos':'neg')}
-    ${row('Open Baseline',fmtNum(s.baselineNetGex || 0),s.baselineNetGex>=0?'pos':'neg')}
+    ${row(isDex?'DEX Change':'GEX Change',fmtNum(change || 0),cls)}
+    ${row(isDex?'Current Net DEX':'Current Net GEX',fmtNum(current || 0),current>=0?'pos':'neg')}
+    ${row('Open Baseline',fmtNum(baseline || 0),baseline>=0?'pos':'neg')}
   `;
   tt.style.display='block';
   cross.style.display='block';
@@ -2870,6 +2907,8 @@ function setView(view){
   if(view === 'gex' && window._lastR) requestAnimationFrame(()=>{
     drawChart(window._lastR);
     drawNetGexChangeChart(gexChangeChartResult(window._lastR));
+    drawChart(window._lastR,'dexChart');
+    drawNetDexChangeChart(gexChangeChartResult(window._lastR));
   });
   if(view === 'matrix-gex' && window._lastR) requestAnimationFrame(()=>drawChart(window._lastR,'matrixGexChart'));
   if(view === 'shock-engine' && window._lastR) requestAnimationFrame(()=>drawShockEngine(window._lastR));
@@ -2907,7 +2946,7 @@ function run(){
   const expectedMove = calcExpectedMove(chain);
   const changeExpectedMove = calcExpectedMove(changeChain);
   const maxPain = buildMaxPain(fullChain, selectedExpirations);
-  const R = calcGEX(chain,mode);
+  let R = calcGEX(chain,mode);
   const changeR = calcGEX(changeChain,mode);
   R.expectedMove = expectedMove;
   R.maxPain = maxPain;
@@ -2932,6 +2971,10 @@ function run(){
     requireOpenData:useLive,
   });
   R.netGexChangeR = changeR;
+  const historySnapshot=selectedHistorySnapshot();
+  if(historySnapshot){
+    R=applyHistorySnapshot(R,historySnapshot,EXPOSURE_HISTORY_DAY?.snapshots?.[0]);
+  }
   R.marketRead = buildMarketRead(R);
   renderImpl(R);
 }
@@ -2956,8 +2999,10 @@ bind('symbol','change',()=>{
   selectedExpirationsByView['max-pain']=null;
   gexChangeExpirationsSynced=true;
   selectedGexChangeExpirations=null;
-  run();
+  if(byId('historyDate')?.value!=='live') loadExposureHistoryDay(); else run();
 });
+bind('historyDate','change',loadExposureHistoryDay);
+bind('historyTime','change',run);
 bind('expirationPicker','change',()=>{
   saveCurrentExpirationSelection();
   if(gexChangeExpirationsSynced){
@@ -2988,6 +3033,8 @@ window.addEventListener('resize',()=>{
   if(activeView === 'gex'){
     drawChart(window._lastR);
     drawNetGexChangeChart(gexChangeChartResult(window._lastR));
+    drawChart(window._lastR,'dexChart');
+    drawNetDexChangeChart(gexChangeChartResult(window._lastR));
   }
   if(activeView === 'matrix-gex') drawChart(window._lastR,'matrixGexChart');
   if(activeView === 'shock-engine') drawShockEngine(window._lastR);
@@ -3003,6 +3050,16 @@ bind('gexChangeChart','mouseleave',hideChartTooltip);
 bind('gexChangeChart','touchstart',showGexChangeTooltip,{passive:true});
 bind('gexChangeChart','touchmove',showGexChangeTooltip,{passive:true});
 bind('gexChangeChart','touchend',()=>setTimeout(hideChartTooltip,1200),{passive:true});
+bind('dexChart','mousemove',showChartTooltip);
+bind('dexChart','mouseleave',hideChartTooltip);
+bind('dexChart','touchstart',showChartTooltip,{passive:true});
+bind('dexChart','touchmove',showChartTooltip,{passive:true});
+bind('dexChart','touchend',()=>setTimeout(hideChartTooltip,1200),{passive:true});
+bind('dexChangeChart','mousemove',showGexChangeTooltip);
+bind('dexChangeChart','mouseleave',hideChartTooltip);
+bind('dexChangeChart','touchstart',showGexChangeTooltip,{passive:true});
+bind('dexChangeChart','touchmove',showGexChangeTooltip,{passive:true});
+bind('dexChangeChart','touchend',()=>setTimeout(hideChartTooltip,1200),{passive:true});
 bind('matrixGexChart','mousemove',showChartTooltip);
 bind('matrixGexChart','mouseleave',hideChartTooltip);
 bind('matrixGexChart','touchstart',showChartTooltip,{passive:true});
@@ -3066,6 +3123,8 @@ document.querySelectorAll('.pbtn').forEach(btn=>{
     if(window._lastR && activeView === 'gex'){
       drawChart(window._lastR);
       drawNetGexChangeChart(gexChangeChartResult(window._lastR));
+      drawChart(window._lastR,'dexChart');
+      drawNetDexChangeChart(gexChangeChartResult(window._lastR));
     }
   });
 });
@@ -3082,6 +3141,8 @@ document.querySelectorAll('[data-sigma]').forEach(btn=>{
     if(window._lastR && activeView === 'gex'){
       drawChart(window._lastR);
       drawNetGexChangeChart(gexChangeChartResult(window._lastR));
+      drawChart(window._lastR,'dexChart');
+      drawNetDexChangeChart(gexChangeChartResult(window._lastR));
     }
   });
 });
@@ -3118,6 +3179,9 @@ function repoDataUrl(branch){
 }
 function repoOpenDataUrl(branch){
   return `${MATRIX_REPO_RAW_BASE}/${branch}/cboe_open_data.json?t=${Date.now()}`;
+}
+function exposureHistoryUrl(path){
+  return `${MATRIX_REPO_RAW_BASE}/data/exposure_history/${path}?t=${Date.now()}`;
 }
 function isGithubPagesHost(){
   return location.hostname.endsWith('github.io');
@@ -3175,6 +3239,82 @@ function fetchOpenCboeData(){
     (chain,url)=>chain.then(result=>result || fetchLiveData(url).then(d=>validOpenCboeData(d) ? d : null)),
     Promise.resolve(null)
   );
+}
+function renderHistoryDays(){
+  const select=byId('historyDate');
+  if(!select) return;
+  const current=select.value || 'live';
+  const days=(EXPOSURE_HISTORY_INDEX?.days || []).slice().reverse();
+  select.innerHTML='<option value="live">Live</option>'+days.map(day=>`<option value="${day}">${day}</option>`).join('');
+  select.value=days.includes(current) ? current : 'live';
+}
+function loadExposureHistoryIndex(){
+  return fetchLiveData(exposureHistoryUrl('index.json')).then(data=>{
+    if(data && Array.isArray(data.days)) EXPOSURE_HISTORY_INDEX=data;
+    renderHistoryDays();
+  });
+}
+function renderHistoryTimes(){
+  const select=byId('historyTime');
+  const note=byId('historyNote');
+  const snapshots=EXPOSURE_HISTORY_DAY?.snapshots || [];
+  if(!select) return;
+  select.innerHTML=snapshots.map((snap,index)=>{
+    const ms=dataAsofToMs(snap.asof);
+    const label=ms ? new Date(ms).toLocaleTimeString('en-US',{timeZone:'America/New_York',hour:'2-digit',minute:'2-digit'})+' ET' : (snap.asof || `Snapshot ${index+1}`);
+    return `<option value="${index}">${label}</option>`;
+  }).join('');
+  select.disabled=!snapshots.length;
+  if(snapshots.length) select.value=String(snapshots.length-1);
+  if(note){
+    note.textContent=snapshots.length ? `${snapshots.length} snapshots · all expirations · 5 min` : 'No snapshots for this symbol';
+    note.classList.toggle('active',!!snapshots.length);
+  }
+}
+function loadExposureHistoryDay(){
+  const day=byId('historyDate')?.value;
+  const symbol=byId('symbol')?.value;
+  if(!day || day==='live'){
+    EXPOSURE_HISTORY_DAY=null;
+    const time=byId('historyTime'); if(time){time.innerHTML='<option value="">Now</option>';time.disabled=true;}
+    const note=byId('historyNote'); if(note){note.textContent='Live expirations';note.classList.remove('active');}
+    document.querySelectorAll('#expirationPicker input').forEach(input=>input.disabled=false);
+    run();
+    return Promise.resolve();
+  }
+  return fetchLiveData(exposureHistoryUrl(`${day}/${symbol}.json`)).then(data=>{
+    EXPOSURE_HISTORY_DAY=data && Array.isArray(data.snapshots) ? data : null;
+    document.querySelectorAll('#expirationPicker input').forEach(input=>input.disabled=!!EXPOSURE_HISTORY_DAY);
+    renderHistoryTimes();
+    run();
+  });
+}
+function selectedHistorySnapshot(){
+  const snapshots=EXPOSURE_HISTORY_DAY?.snapshots || [];
+  const index=Number(byId('historyTime')?.value);
+  return snapshots[Number.isInteger(index) ? index : snapshots.length-1] || null;
+}
+function applyHistorySnapshot(R,snapshot,firstSnapshot){
+  if(!snapshot) return R;
+  const unpack=row=>({strike:row[0],callGex:row[1],putGex:row[2],netGex:row[1]+row[2],
+    callDex:row[3],putDex:row[4],netDex:row[3]+row[4],callVex:0,putVex:0,netVex:0,
+    callCharm:0,putCharm:0,netCharm:0,callOI:0,putOI:0,callVol:0,putVol:0,totalOI:0,totalVol:0,powerZone:0});
+  const strikes=(snapshot.rows || []).map(unpack);
+  const baseline=new Map((firstSnapshot?.rows || []).map(row=>[String(row[0]),unpack(row)]));
+  const rows=strikes.map(s=>{
+    const start=baseline.get(String(s.strike)) || {netGex:0,netDex:0};
+    return {...s,baselineNetGex:start.netGex,netGexChange:s.netGex-start.netGex,
+      baselineNetDex:start.netDex,netDexChange:s.netDex-start.netDex};
+  });
+  const exposureChange={source:'history',sessionDate:EXPOSURE_HISTORY_DAY?.date,createdAt:dataAsofToMs(firstSnapshot?.asof),
+    totalChange:rows.reduce((sum,s)=>sum+s.netGexChange,0),totalDexChange:rows.reduce((sum,s)=>sum+s.netDexChange,0),rows};
+  const historical={...R,spot:Number(snapshot.spot),asof:snapshot.asof,fetchTs:dataAsofToMs(snapshot.asof),strikes,
+    totalCallGex:strikes.reduce((sum,s)=>sum+s.callGex,0),totalPutGex:strikes.reduce((sum,s)=>sum+s.putGex,0),
+    totalCallDex:strikes.reduce((sum,s)=>sum+s.callDex,0),totalPutDex:strikes.reduce((sum,s)=>sum+s.putDex,0),live:true,historical:true};
+  historical.totalGex=historical.totalCallGex+historical.totalPutGex;
+  historical.totalDex=historical.totalCallDex+historical.totalPutDex;
+  historical.netGexChangeR={...historical,netGexChange:exposureChange};
+  return historical;
 }
 function getRefreshSeconds(){
   return Math.max(0,+document.getElementById('autorefresh').value || 0);
@@ -3321,4 +3461,4 @@ document.getElementById('source').value = 'live';
 document.getElementById('autorefresh').value = '30';
 document.getElementById('forceTripityRefresh').addEventListener('click',()=>loadData(true));
 _timerUiTimer=setInterval(updateDataTimer,1000);
-loadData(true).then(setupAutoRefresh);
+loadData(true).then(loadExposureHistoryIndex).then(setupAutoRefresh);

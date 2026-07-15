@@ -30,6 +30,7 @@ OPEN_DATA_PATH = Path("cboe_open_data.json")
 ET = ZoneInfo("America/New_York")
 OPEN_CAPTURE_START = datetime.time(9, 30)
 OPEN_CAPTURE_END = datetime.time(9, 45)
+MARKET_CAPTURE_END = datetime.time(16, 15)
 
 
 def fetch(sym):
@@ -97,17 +98,20 @@ def main():
     print(f"wrote cboe_data.json  ({len(out)} symbols)")
 
     now_et = datetime.datetime.now(ET)
-    if now_et.weekday() < 5 and OPEN_CAPTURE_START <= now_et.time() <= OPEN_CAPTURE_END:
-        session_date = now_et.date().isoformat()
-        existing_session = None
-        if OPEN_DATA_PATH.exists():
-            try:
-                existing_session = json.loads(OPEN_DATA_PATH.read_text()).get("session_date")
-            except Exception:
-                existing_session = None
+    session_date = now_et.date().isoformat()
+    existing_session = None
+    if OPEN_DATA_PATH.exists():
+        try:
+            existing_session = json.loads(OPEN_DATA_PATH.read_text()).get("session_date")
+        except Exception:
+            existing_session = None
+    is_open_window = now_et.weekday() < 5 and OPEN_CAPTURE_START <= now_et.time() <= OPEN_CAPTURE_END
+    is_first_available_window = now_et.weekday() < 5 and OPEN_CAPTURE_END < now_et.time() <= MARKET_CAPTURE_END
+    if is_open_window or (is_first_available_window and existing_session != session_date):
         if existing_session != session_date:
             OPEN_DATA_PATH.write_text(
-                json.dumps({"session_date": session_date, "captured_at": now_et.isoformat(), "data": out}, separators=(",", ":"))
+                json.dumps({"session_date": session_date, "captured_at": now_et.isoformat(),
+                            "capture_kind": "open" if is_open_window else "first_available", "data": out}, separators=(",", ":"))
             )
             print(f"wrote {OPEN_DATA_PATH} for session {session_date}")
         else:

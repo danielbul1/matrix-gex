@@ -377,6 +377,12 @@
   .chartlegend .sq{width:12px;height:12px;border-radius:2px;display:inline-block}
   .chartwrap{position:relative;overflow:hidden}
   .gex-change-panel{margin-top:18px;padding-top:16px;border-top:1px solid #303030}
+  .dex-panel{margin-top:30px;padding-top:26px;border-top-color:#454545}
+  .history-control{min-width:250px}
+  .history-row{display:flex;gap:6px}
+  .history-row select{min-width:116px}
+  .history-note{display:block;margin-top:5px;color:#8f9aa3;font-size:10px;font-weight:700;white-space:nowrap}
+  .history-note.active{color:#ffc107}
   .gex-change-controls{display:flex;align-items:flex-end;justify-content:space-between;gap:12px;margin-bottom:10px}
   .gex-change-expiry-picker{width:min(680px,calc(100vw - 560px));min-width:320px;max-height:74px}
   .gex-change-controls .range-btn{align-self:flex-end;border:1px solid #444;background:#252525;color:#cfd5d9}

@@ -7,6 +7,7 @@ on:
     paths:
       - "fetch_cboe.py"
       - "tools/build_data_status.py"
+      - "tools/build_exposure_history.py"
       - "tools/smoke_check.py"
       - ".github/workflows/update-cboe.yml"
   schedule:
@@ -33,7 +34,7 @@ jobs:
           python-version: "3.12"
 
       - name: Compile validation scripts
-        run: python -m py_compile fetch_cboe.py tools/build_data_status.py tools/smoke_check.py
+        run: python -m py_compile fetch_cboe.py tools/build_data_status.py tools/build_exposure_history.py tools/smoke_check.py
 
       - name: Fetch CBOE data
         run: |
@@ -42,11 +43,16 @@ jobs:
           end=$((SECONDS + 2100))
           while [ "$SECONDS" -lt "$end" ]; do
             now_utc=$(date -u +%H%M)
+            git fetch origin data || true
+            git show origin/data:cboe_open_data.json > cboe_open_data.json 2>/dev/null || rm -f cboe_open_data.json
             if python fetch_cboe.py && python tools/build_data_status.py && MATRIX_REQUIRE_FRESH_DATA=1 python tools/smoke_check.py; then
+              rm -rf /tmp/matrix-gex-data
               mkdir -p /tmp/matrix-gex-data
               cp cboe_data.json data_status.json /tmp/matrix-gex-data/
+              cp tools/build_exposure_history.py /tmp/matrix-gex-data/
+              if [ -f cboe_open_data.json ]; then cp cboe_open_data.json /tmp/matrix-gex-data/; fi
               git restore -- cboe_data.json data_status.json
-              git fetch origin data || true
+              rm -f cboe_open_data.json
               if git show-ref --verify --quiet refs/remotes/origin/data; then
                 git switch --force-create data origin/data
               else
@@ -54,7 +60,10 @@ jobs:
                 git rm -rf .
               fi
               cp /tmp/matrix-gex-data/cboe_data.json /tmp/matrix-gex-data/data_status.json .
-              git add cboe_data.json data_status.json
+              if [ -f /tmp/matrix-gex-data/cboe_open_data.json ]; then cp /tmp/matrix-gex-data/cboe_open_data.json .; fi
+              python /tmp/matrix-gex-data/build_exposure_history.py --input cboe_data.json --root exposure_history --retain 7
+              git add cboe_data.json data_status.json exposure_history
+              if [ -f cboe_open_data.json ]; then git add cboe_open_data.json; fi
               if ! git diff --cached --quiet; then
                 git commit -m "Update CBOE data"
                 git push origin data
