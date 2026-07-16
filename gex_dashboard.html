@@ -13,13 +13,15 @@
   };
 </script>
 <script src="https://unpkg.com/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js" onerror="window.__loadMatrixChartLib && window.__loadMatrixChartLib()"></script>
-<link rel="stylesheet" href="assets/dashboard.css?v=20260715-dex1">
+<link rel="stylesheet" href="assets/dashboard.css?v=20260716-market-structure1">
 </head>
 <body>
 <header>
   <nav class="side-nav">
-    <a href="#" class="active" data-view="gex">GEX</a>
+    <a href="#" class="active" data-view="market-structure">Market Structure</a>
+    <a href="#" data-view="gex">GEX</a>
     <a href="#" data-view="dex">DEX</a>
+    <a href="#" data-view="exposure-lab">Exposure Lab</a>
     <a href="#" data-view="matrix-gex">Matrix GEX</a>
     <a href="#" data-view="shock-engine">Shock Engine</a>
     <a href="#" data-view="max-pain">Max Pain</a>
@@ -39,20 +41,6 @@
   <div class="ctrl">
     <label>Expirations</label>
     <div id="expirationPicker" class="expiry-picker" aria-label="Choose expiration dates"></div>
-  </div>
-  <div class="ctrl history-control">
-    <label>History</label>
-    <div class="history-date-row">
-      <select id="historyDate" aria-label="Choose historical trading day"><option value="live">Live</option></select>
-      <output id="historyTimeLabel" for="historyTimeline">Now</output>
-    </div>
-    <div class="history-timeline-row">
-      <button type="button" id="historyPrev" class="history-step" aria-label="Previous historical snapshot" disabled>&lsaquo;</button>
-      <input id="historyTimeline" type="range" min="0" max="0" value="0" step="1" aria-label="Move through intraday historical snapshots" disabled>
-      <button type="button" id="historyNext" class="history-step" aria-label="Next historical snapshot" disabled>&rsaquo;</button>
-    </div>
-    <div class="history-scale"><span id="historyStartTime">--</span><span id="historyEndTime">--</span></div>
-    <span class="history-note" id="historyNote">Live expirations</span>
   </div>
   <div class="ctrl">
     <label>Market</label>
@@ -117,7 +105,7 @@
 <div class="stale-data-banner" id="staleDataBanner" role="status" aria-live="polite" hidden></div>
 
 <main>
-  <section class="app-view active" id="view-gex">
+  <section class="app-view" id="view-gex">
     <div class="params">
       <div class="range-control" role="group" aria-label="Strike display range">
         <span class="range-label">Range</span>
@@ -147,25 +135,6 @@
         <div class="chart-tooltip" id="chartTooltip"></div>
         <canvas id="gexChart" height="540"></canvas>
       </div>
-      <div class="gex-change-panel">
-        <div class="gex-change-controls">
-          <div>
-            <span class="range-label">Change Expirations</span>
-            <div id="gexChangeExpirationPicker" class="expiry-picker gex-change-expiry-picker" aria-label="Choose Net GEX change expiration dates"></div>
-          </div>
-          <button type="button" class="range-btn active" id="syncGexChangeExpirations">Sync</button>
-        </div>
-        <div class="charttop">
-          <span class="symlabel">Net GEX Change</span>
-          <span class="chartlegend" id="gexChangeLegend"></span>
-        </div>
-        <div class="chartwrap">
-          <div class="watermark">Matrix</div>
-          <div class="chart-crosshair-x" id="gexChangeCrosshairX"></div>
-          <div class="chart-tooltip" id="gexChangeTooltip"></div>
-          <canvas id="gexChangeChart" height="360"></canvas>
-        </div>
-      </div>
     </div>
 
     <div class="grid row-top" id="topCards"></div>
@@ -184,34 +153,124 @@
       <span class="pbtn active" style="--c:#22b8ff">Net DEX</span>
     </div>
     <div class="card chartcard dex-page-card">
-      <div class="dex-page-intro">
-        <div><span class="command-panel-tag">DEX</span><h2>Delta Exposure by Strike</h2></div>
-        <p>Uses the selected symbol and expirations. History and the intraday timeline update both charts together.</p>
+      <div class="charttop">
+        <span class="symlabel" id="dexSymLabel"></span>
+        <span class="chartlegend" id="dexChartLegend"></span>
       </div>
-      <div class="dex-panel">
-        <div class="charttop">
-          <span class="symlabel" id="dexSymLabel"></span>
-          <span class="chartlegend" id="dexChartLegend"></span>
+      <div class="chartwrap">
+        <div class="watermark">Matrix</div>
+        <div class="chart-crosshair-x" id="dexCrosshairX"></div>
+        <div class="chart-tooltip" id="dexTooltip"></div>
+        <canvas id="dexChart" height="540"></canvas>
+      </div>
+    </div>
+  </section>
+
+  <section class="app-view active" id="view-market-structure">
+    <div class="market-structure-head">
+      <div>
+        <span class="command-panel-tag">Live structure</span>
+        <h2>Market Structure</h2>
+        <p>Gamma exposure first, then intraday price action aligned with the strongest options levels.</p>
+      </div>
+      <div class="market-structure-status" id="marketStructureStatus">Waiting for price candles</div>
+    </div>
+
+    <div class="params market-structure-params">
+      <div class="range-control" role="group" aria-label="Market Structure strike display range">
+        <span class="range-label">GEX Range</span>
+        <button type="button" class="range-btn" data-sigma="1">1&sigma;</button>
+        <button type="button" class="range-btn active" data-sigma="2">2&sigma;</button>
+        <button type="button" class="range-btn" data-sigma="3">3&sigma;</button>
+        <button type="button" class="range-btn" data-sigma="all">All</button>
+      </div>
+      <span class="plabel">Net GEX + Price</span>
+    </div>
+
+    <div class="card market-structure-card">
+      <section class="market-structure-panel">
+        <div class="market-panel-title">
+          <div><span>Options positioning</span><h3>Net Gamma Exposure by Strike</h3></div>
+          <span class="chartlegend" id="marketGexLegend"></span>
         </div>
+        <div class="charttop market-symbol-row"><span class="symlabel" id="marketGexSymLabel"></span></div>
         <div class="chartwrap">
           <div class="watermark">Matrix</div>
-          <div class="chart-crosshair-x" id="dexCrosshairX"></div>
-          <div class="chart-tooltip" id="dexTooltip"></div>
-          <canvas id="dexChart" height="540"></canvas>
+          <div class="chart-crosshair-x" id="marketGexCrosshairX"></div>
+          <div class="chart-tooltip" id="marketGexTooltip"></div>
+          <canvas id="marketGexChart" height="540"></canvas>
         </div>
-        <div class="gex-change-panel">
-          <div class="charttop">
-            <span class="symlabel">Net DEX Change</span>
-            <span class="chartlegend" id="dexChangeLegend"></span>
-          </div>
-          <div class="chartwrap">
-            <div class="watermark">Matrix</div>
-            <div class="chart-crosshair-x" id="dexChangeCrosshairX"></div>
-            <div class="chart-tooltip" id="dexChangeTooltip"></div>
-            <canvas id="dexChangeChart" height="360"></canvas>
-          </div>
+      </section>
+
+      <section class="market-structure-panel market-price-panel">
+        <div class="market-panel-title">
+          <div><span>Intraday price action</span><h3 id="marketPriceTitle">Price + Options Power Profile</h3></div>
+          <div class="market-level-legend" id="marketLevelLegend"></div>
+        </div>
+        <div class="market-price-stage">
+          <div class="market-price-chart" id="marketPriceChart"></div>
+          <canvas class="market-power-profile" id="marketPowerProfile"></canvas>
+          <div class="market-price-tooltip" id="marketPriceTooltip"></div>
+          <div class="watermark market-watermark">Matrix</div>
+        </div>
+        <div class="market-price-note" id="marketPriceNote">Loading candles and options levels...</div>
+      </section>
+    </div>
+  </section>
+
+  <section class="app-view" id="view-exposure-lab">
+    <div class="lab-shell">
+      <div class="lab-header">
+        <div>
+          <span class="lab-eyebrow"><i></i> Live exposure workspace</span>
+          <h2>Exposure Lab</h2>
+          <p>Dealer positioning across Gamma, Delta, Vanna and Charm — synchronized to the global symbol and expiration selection.</p>
+        </div>
+        <div class="lab-range" role="group" aria-label="Exposure Lab strike range">
+          <span>Strike range</span>
+          <button type="button" data-lab-sigma="1">1&sigma;</button>
+          <button type="button" class="active" data-lab-sigma="2">2&sigma;</button>
+          <button type="button" data-lab-sigma="3">3&sigma;</button>
+          <button type="button" data-lab-sigma="all">All</button>
         </div>
       </div>
+
+      <div class="lab-kpis" id="labKpis" aria-live="polite"></div>
+
+      <div class="lab-grid">
+        <article class="lab-panel">
+          <div class="lab-panel-head">
+            <div><span>Exposure by strike</span><h3 id="labGexTitle">Net Gamma Exposure</h3></div>
+            <div class="lab-pills"><b>Gamma</b><b>Per 1% Move</b></div>
+          </div>
+          <div class="lab-chart-wrap"><canvas id="labGexChart" height="420"></canvas></div>
+        </article>
+
+        <article class="lab-panel">
+          <div class="lab-panel-head">
+            <div><span>Exposure by strike</span><h3 id="labDexTitle">Net Delta Exposure</h3></div>
+            <div class="lab-pills"><b>Delta</b><b>Per 1% Move</b></div>
+          </div>
+          <div class="lab-chart-wrap"><canvas id="labDexChart" height="420"></canvas></div>
+        </article>
+
+        <article class="lab-panel lab-map-panel">
+          <div class="lab-panel-head">
+            <div><span>Cross-Greek structure</span><h3>Exposure Concentration Map</h3></div>
+            <div class="lab-legend"><span><i class="positive"></i>Positive</span><span><i class="negative"></i>Negative</span><span><i class="price"></i>Spot</span></div>
+          </div>
+          <div class="lab-chart-wrap"><canvas id="labMapChart" height="470"></canvas></div>
+        </article>
+
+        <article class="lab-panel lab-heat-panel">
+          <div class="lab-panel-head">
+            <div><span>Normalized by metric</span><h3>Greek Heat Map</h3></div>
+            <div class="lab-pills"><b>GEX</b><b>DEX</b><b>VEX</b><b>CHEX</b></div>
+          </div>
+          <div class="lab-heatmap" id="labHeatMap"></div>
+        </article>
+      </div>
+      <div class="lab-tooltip" id="labTooltip"></div>
     </div>
   </section>
 
@@ -436,6 +495,6 @@
   Synthetic data is generated in-browser when live CBOE data is unavailable. Original demo: gex.kctradings.com
 </footer>
 
-<script src="assets/dashboard.js?v=20260715-dexpage1"></script>
+<script src="assets/dashboard.js?v=20260716-market-structure1"></script>
 </body>
 </html>

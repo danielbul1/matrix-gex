@@ -81,14 +81,11 @@ const SYMBOLS = {
 // Real delayed CBOE data is loaded from cboe_data.json. Empty data falls back to synthetic chains.
 let REAL = {};
 let REAL_ASOF = {};
-let OPEN_REAL = null;
-let EXPOSURE_HISTORY_INDEX = null;
-let EXPOSURE_HISTORY_DAY = null;
 const RISK_FREE = {US:0.05, IN:0.065};
 const SPX_SPY_RATIO = 10.03657299922611;
 // User-provided conversion example: QQQ 752.00 = NDX 30,916.24.
 const NDX_QQQ_RATIO = 30916.24 / 752;
-const DEFAULT_SYMBOL = 'SPY';
+const DEFAULT_SYMBOL = 'NDX';
 
 function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
 
@@ -312,130 +309,6 @@ function calcGEX(chain, mode){
     expiries:[...new Set(kept.map(q=>q.dte))].sort((a,b)=>a-b)};
 }
 function avg(a){return a.length?a.reduce((x,y)=>x+y,0)/a.length:0;}
-
-const NET_GEX_CHANGE_STORE_KEY = 'matrix_net_gex_open_baselines_v1';
-function etDateKeyFromMs(ms){
-  const parts=new Intl.DateTimeFormat('en-CA',{
-    timeZone:'America/New_York',year:'numeric',month:'2-digit',day:'2-digit'
-  }).formatToParts(new Date(ms || Date.now()));
-  const get=type=>parts.find(part=>part.type===type)?.value;
-  return `${get('year')}-${get('month')}-${get('day')}`;
-}
-function etPartsFromMs(ms){
-  const parts=new Intl.DateTimeFormat('en-US',{
-    timeZone:'America/New_York',year:'numeric',month:'2-digit',day:'2-digit',
-    weekday:'short',hour:'2-digit',minute:'2-digit',hourCycle:'h23'
-  }).formatToParts(new Date(ms || Date.now()));
-  const get=type=>parts.find(part=>part.type===type)?.value;
-  return {
-    year:Number(get('year')),
-    month:Number(get('month')),
-    day:Number(get('day')),
-    weekday:get('weekday'),
-    hour:Number(get('hour')),
-    minute:Number(get('minute')),
-  };
-}
-function prevTradingDateKey(year,month,day){
-  const d=new Date(Date.UTC(year,month-1,day,12));
-  do{ d.setUTCDate(d.getUTCDate()-1); }
-  while(d.getUTCDay()===0 || d.getUTCDay()===6);
-  return d.toISOString().slice(0,10);
-}
-function marketSessionDateKey(ms){
-  const et=etPartsFromMs(ms);
-  const dayKey=etDateKeyFromMs(ms);
-  if(et.weekday==='Sat' || et.weekday==='Sun') return prevTradingDateKey(et.year,et.month,et.day);
-  const minutes=et.hour*60+et.minute;
-  if(minutes < 9*60+30) return prevTradingDateKey(et.year,et.month,et.day);
-  return dayKey;
-}
-function netGexSessionDateKey(R){
-  const asofMs=R.asof ? dataAsofToMs(R.asof) : null;
-  const sourceMs=asofMs || R.fetchTs || Date.now();
-  return marketSessionDateKey(sourceMs);
-}
-function readNetGexBaselines(){
-  try{return JSON.parse(localStorage.getItem(NET_GEX_CHANGE_STORE_KEY) || '{}') || {};}
-  catch{return {};}
-}
-function writeNetGexBaselines(store){
-  try{localStorage.setItem(NET_GEX_CHANGE_STORE_KEY, JSON.stringify(store));}
-  catch{}
-}
-function netGexBaselineKey(R,{mode,expirations}){
-  const expKey=(expirations || []).slice().sort().join('|') || 'default';
-  const dayKey=netGexSessionDateKey(R);
-  return [dayKey,R.symbol,mode,expKey].join('::');
-}
-function buildNetGexChange(R,opts){
-  if(opts.baselineResult && Array.isArray(opts.baselineResult.strikes)){
-    const byStrike=Object.fromEntries(opts.baselineResult.strikes.map(s=>[String(s.strike),s]));
-    const rows=R.strikes.map(s=>{
-      const start=byStrike[String(s.strike)] || {};
-      const baseline=Number.isFinite(Number(start.netGex)) ? Number(start.netGex) : 0;
-      const baselineDex=Number.isFinite(Number(start.netDex)) ? Number(start.netDex) : 0;
-      return {...s, baselineNetGex:baseline, netGexChange:(s.netGex || 0)-baseline,
-        baselineNetDex:baselineDex,netDexChange:(s.netDex || 0)-baselineDex};
-    });
-    const totalChange=rows.reduce((sum,s)=>sum+s.netGexChange,0);
-    const totalDexChange=rows.reduce((sum,s)=>sum+s.netDexChange,0);
-    return {
-      key:'open-data',
-      source:'open_data',
-      captureKind:OPEN_REAL?.capture_kind || 'open',
-      sessionDate:OPEN_REAL?.session_date || netGexSessionDateKey(R),
-      createdAt:Date.parse(OPEN_REAL?.captured_at || '') || Date.now(),
-      asof:OPEN_REAL?.captured_at || null,
-      totalChange,totalDexChange,
-      rows,
-    };
-  }
-  if(opts.requireOpenData){
-    const rows=R.strikes.map(s=>({...s, baselineNetGex:null,netGexChange:0,baselineNetDex:null,netDexChange:0}));
-    return {
-      key:'missing-open-data',
-      source:'missing_open_data',
-      missingOpenData:true,
-      sessionDate:netGexSessionDateKey(R),
-      createdAt:null,
-      asof:null,
-      totalChange:0,totalDexChange:0,
-      rows,
-    };
-  }
-  const key=netGexBaselineKey(R,opts);
-  const store=readNetGexBaselines();
-  let base=store[key];
-  if(!base || !base.strikes){
-    base={
-      symbol:R.symbol,
-      mode:opts.mode,
-      sessionDate:netGexSessionDateKey(R),
-      expirations:(opts.expirations || []).slice().sort(),
-      createdAt:Date.now(),
-      asof:R.asof || null,
-      strikes:Object.fromEntries(R.strikes.map(s=>[String(s.strike),{netGex:s.netGex || 0,netDex:s.netDex || 0}])),
-    };
-    store[key]=base;
-    const keys=Object.keys(store).sort((a,b)=>(store[b].createdAt || 0)-(store[a].createdAt || 0));
-    keys.slice(60).forEach(oldKey=>delete store[oldKey]);
-    writeNetGexBaselines(store);
-  }
-  const byStrike=base.strikes || {};
-  const rows=R.strikes.map(s=>{
-    const raw=byStrike[String(s.strike)];
-    const start=typeof raw==='object' ? Number(raw.netGex) : Number(raw);
-    const startDex=typeof raw==='object' ? Number(raw.netDex) : 0;
-    const baseline=Number.isFinite(start) ? start : 0;
-    const baselineDex=Number.isFinite(startDex) ? startDex : 0;
-    return {...s,baselineNetGex:baseline,netGexChange:(s.netGex || 0)-baseline,
-      baselineNetDex:baselineDex,netDexChange:(s.netDex || 0)-baselineDex};
-  });
-  const totalChange=rows.reduce((sum,s)=>sum+s.netGexChange,0);
-  const totalDexChange=rows.reduce((sum,s)=>sum+s.netDexChange,0);
-  return {key,sessionDate:base.sessionDate || netGexSessionDateKey(R),createdAt:base.createdAt,asof:base.asof,totalChange,totalDexChange,rows};
-}
 
 function scenarioStepForSymbol(symbol){
   if(symbol==='SPX') return 10;
@@ -1844,9 +1717,7 @@ function renderImpl(R){
   window._lastR=R;
   const badge=document.getElementById('srcBadge');
   const nowClient=new Date().toLocaleTimeString('he-IL');
-  if(R.historical){ badge.style.color="var(--amber)"; badge.style.borderColor="var(--amber)";
-              badge.textContent="HISTORY · "+(R.asof||""); }
-  else if(R.live){ badge.style.color="var(--green)"; badge.style.borderColor="var(--green)";
+  if(R.live){ badge.style.color="var(--green)"; badge.style.borderColor="var(--green)";
               badge.textContent="LIVE - CBOE delayed · data "+(R.asof||"")+" · refreshed "+nowClient; }
   else      { badge.style.color="var(--amber)"; badge.style.borderColor="var(--amber)";
               badge.textContent="DEMO - synthetic data · refreshed "+nowClient; }
@@ -1877,12 +1748,10 @@ function renderImpl(R){
   renderDarkPoolLevels(R);
   if(activeView === 'gex'){
     drawChart(R);
-    drawNetGexChangeChart(gexChangeChartResult(R));
   }
-  if(activeView === 'dex'){
-    drawChart(R,'dexChart');
-    drawNetDexChangeChart(dexChangeChartResult(R));
-  }
+  if(activeView === 'dex') drawChart(R,'dexChart');
+  if(activeView === 'market-structure') renderMarketStructure(R);
+  if(activeView === 'exposure-lab') drawExposureLab(R);
   if(activeView === 'matrix-gex') drawChart(R,'matrixGexChart');
   if(activeView === 'shock-engine') drawShockEngine(R);
   if(activeView === 'net-flow') drawNetFlow(R);
@@ -1978,19 +1847,14 @@ function hexA(hex,a){const n=parseInt(hex.slice(1),16);return `rgba(${n>>16&255}
 function chartTargets(chartId){
   const isMatrix = chartId === 'matrixGexChart';
   const isDex = chartId === 'dexChart';
+  const isMarket = chartId === 'marketGexChart';
   return {
     canvasId: chartId,
-    symbolId: isMatrix ? 'matrixSymLabel' : (isDex ? 'dexSymLabel' : 'symLabel'),
-    legendId: isMatrix ? 'matrixChartLegend' : (isDex ? 'dexChartLegend' : 'chartLegend'),
-    tooltipId: isMatrix ? 'matrixGexTooltip' : (isDex ? 'dexTooltip' : 'chartTooltip'),
-    crosshairId: isMatrix ? 'matrixGexCrosshairX' : (isDex ? 'dexCrosshairX' : 'chartCrosshairX'),
+    symbolId: isMarket ? 'marketGexSymLabel' : (isMatrix ? 'matrixSymLabel' : (isDex ? 'dexSymLabel' : 'symLabel')),
+    legendId: isMarket ? 'marketGexLegend' : (isMatrix ? 'matrixChartLegend' : (isDex ? 'dexChartLegend' : 'chartLegend')),
+    tooltipId: isMarket ? 'marketGexTooltip' : (isMatrix ? 'matrixGexTooltip' : (isDex ? 'dexTooltip' : 'chartTooltip')),
+    crosshairId: isMarket ? 'marketGexCrosshairX' : (isMatrix ? 'matrixGexCrosshairX' : (isDex ? 'dexCrosshairX' : 'chartCrosshairX')),
   };
-}
-function gexChangeChartResult(R){
-  return R?.netGexChangeR || R;
-}
-function dexChangeChartResult(R){
-  return R?.netDexChangeR || R?.netGexChangeR || R;
 }
 function visibleStrikeData(R){
   let visibleStrikes=[...R.strikes];
@@ -2153,107 +2017,6 @@ function drawChart(R,chartId='gexChart'){
   ctx.fillStyle="#d0d0d0"; ctx.font=(mobile ? "bold 10px Segoe UI" : "bold 12px Segoe UI"); ctx.textAlign="center"; ctx.textBaseline="bottom";
   ctx.fillText("Strike",padL+plotW/2,H-4);
 }
-function drawExposureChangeChart(R,kind='gex'){
-  const isDex=kind==='dex';
-  const cv=document.getElementById(isDex ? 'dexChangeChart' : 'gexChangeChart');
-  if(!cv || !R.netGexChange) return;
-  const dpr=window.devicePixelRatio||1;
-  const W=cv.clientWidth;
-  const mobile=W<640;
-  const H=mobile ? 320 : 360;
-  cv.width=W*dpr; cv.height=H*dpr; cv.style.height=H+'px';
-  const ctx=cv.getContext('2d'); ctx.setTransform(dpr,0,0,dpr,0,0);
-  ctx.clearRect(0,0,W,H);
-
-  const changeByStrike=new Map(R.netGexChange.rows.map(s=>[s.strike,s]));
-  const data=visibleStrikeData(R).map(s=>changeByStrike.get(s.strike) || {...s,baselineNetGex:0,netGexChange:0});
-  if(!data.length) return;
-
-  const legend=byId(isDex ? 'dexChangeLegend' : 'gexChangeLegend');
-  const baselineTime=R.netGexChange.createdAt ? new Date(R.netGexChange.createdAt).toLocaleTimeString('he-IL',{hour:'2-digit',minute:'2-digit'}) : '--';
-  const baselineLabel=R.netGexChange.captureKind==='first_available' ? 'first available' : 'open';
-  if(legend){
-    legend.innerHTML=R.netGexChange.missingOpenData
-      ? `<span style="color:#ffc107">Waiting for open baseline file</span>`
-      : `<span class="sq" style="background:#22aaf2"></span>Increase&nbsp;&nbsp;<span class="sq" style="background:#ff2417"></span>Decrease&nbsp;&nbsp;<span>${R.netGexChange.sessionDate || ''} total ${fmtNum(isDex ? R.netGexChange.totalDexChange : R.netGexChange.totalChange)} from ${baselineLabel} ${baselineTime}</span>`;
-  }
-
-  const padL=mobile ? 48 : 70;
-  const padR=mobile ? 18 : 42;
-  const padT=mobile ? 26 : 32;
-  const padB=mobile ? 62 : 76;
-  const plotW=W-padL-padR, plotH=H-padT-padB;
-  const top=padT, bottom=padT+plotH;
-  const slot=plotW/data.length;
-  const xCenter=i=>padL+slot*(i+.5);
-  const valueKey=isDex ? 'netDexChange' : 'netGexChange';
-  const vals=data.map(s=>s[valueKey] || 0);
-  const maxAbs=Math.max(...vals.map(v=>Math.abs(v)),1)*1.08;
-  const lMin=-maxAbs,lMax=maxAbs;
-  const y=v=>top+(lMax-v)/(lMax-lMin)*plotH;
-  const y0=y(0);
-
-  ctx.font=(mobile ? 'bold 10px Segoe UI' : 'bold 12px Segoe UI');
-  ctx.textBaseline='middle';
-  for(let t=0;t<=4;t++){
-    const f=t/4, yy=bottom-f*plotH;
-    ctx.strokeStyle='rgba(255,255,255,.025)'; ctx.lineWidth=1;
-    ctx.beginPath(); ctx.moveTo(padL,yy); ctx.lineTo(W-padR,yy); ctx.stroke();
-    ctx.fillStyle='#c4c4c4'; ctx.textAlign='right';
-    ctx.fillText(fmtAxis(lMin+(lMax-lMin)*f),padL-8,yy);
-  }
-
-  const bw=Math.max(2,Math.min(slot*.70,32));
-  const hitBars=data.map((s,i)=>{
-    const v=s[valueKey] || 0;
-    const yy=y(v);
-    const x=xCenter(i)-bw/2;
-    const barY=Math.min(yy,y0);
-    const h=Math.max(1,Math.abs(yy-y0));
-    ctx.fillStyle=v>=0 ? '#22aaf2' : '#ff2417';
-    ctx.fillRect(x,barY,bw,h);
-    return {x,y:barY,w:bw,h,s};
-  });
-  ctx.strokeStyle='rgba(255,255,255,.20)'; ctx.lineWidth=1;
-  ctx.beginPath(); ctx.moveTo(padL,y0); ctx.lineTo(W-padR,y0); ctx.stroke();
-
-  ctx.fillStyle='#c4c4c4'; ctx.font=(mobile ? 'bold 9px Segoe UI' : 'bold 10px Segoe UI');
-  data.forEach((s,i)=>{
-    ctx.save();
-    ctx.translate(xCenter(i),bottom+7);
-    ctx.rotate(-Math.PI/2);
-    ctx.textAlign='right'; ctx.textBaseline='middle';
-    ctx.fillText(fmtPrice(s.strike),0,0);
-    ctx.restore();
-  });
-
-  const xAt=price=>{
-    if(price<=data[0].strike) return padL;
-    if(price>=data[data.length-1].strike) return padL+plotW;
-    for(let i=0;i<data.length-1;i++){
-      if(price>=data[i].strike && price<=data[i+1].strike){
-        const frac=(price-data[i].strike)/(data[i+1].strike-data[i].strike);
-        return xCenter(i)+frac*slot;
-      }
-    }
-    return padL+plotW/2;
-  };
-  const px=xAt(R.spot);
-  ctx.strokeStyle='#d58b16'; ctx.lineWidth=2;
-  ctx.beginPath(); ctx.moveTo(px,padT-5); ctx.lineTo(px,bottom); ctx.stroke();
-  ctx.fillStyle='#d58b16'; ctx.font=(mobile ? 'bold 10px Segoe UI' : 'bold 12px Segoe UI'); ctx.textAlign='left'; ctx.textBaseline='alphabetic';
-  ctx.fillText('Price: '+fmtPrice(R.spot),px+6,padT-8);
-
-  ctx.save(); ctx.translate(14,padT+plotH/2); ctx.rotate(-Math.PI/2);
-  ctx.fillStyle='#d0d0d0'; ctx.font=(mobile ? 'bold 11px Segoe UI' : 'bold 13px Segoe UI'); ctx.textAlign='center';
-  ctx.fillText(isDex ? 'Net DEX Change' : 'Net GEX Change',0,0); ctx.restore();
-  ctx.fillStyle='#d0d0d0'; ctx.font=(mobile ? 'bold 10px Segoe UI' : 'bold 12px Segoe UI'); ctx.textAlign='center'; ctx.textBaseline='bottom';
-  ctx.fillText('Strike',padL+plotW/2,H-4);
-
-  cv._matrixBars=hitBars;
-}
-function drawNetGexChangeChart(R){ drawExposureChangeChart(R,'gex'); }
-function drawNetDexChangeChart(R){ drawExposureChangeChart(R,'dex'); }
 function fmtAxis(v){
   const a=Math.abs(v);
   if(a>=1e9) return (v/1e9).toFixed(1)+"B";
@@ -2261,6 +2024,106 @@ function fmtAxis(v){
   if(a>=1e3) return (v/1e3).toFixed(0)+"k";
   return v.toFixed(0);
 }
+
+// ---------- Exposure Lab (isolated workspace; original GEX view is unchanged) ----------
+let LAB_SIGMA=2;
+function labVisibleData(R){
+  let data=[...R.strikes].sort((a,b)=>a.strike-b.strike);
+  if(Number.isFinite(LAB_SIGMA) && R.expectedMove>0){
+    const radius=LAB_SIGMA*R.expectedMove;
+    data=data.filter(s=>Math.abs(s.strike-R.spot)<=radius);
+  }
+  if(!data.length) data=[...R.strikes].sort((a,b)=>Math.abs(a.strike-R.spot)-Math.abs(b.strike-R.spot)).slice(0,1);
+  return data.sort((a,b)=>a.strike-b.strike);
+}
+function labExposureColor(v,alpha=1){
+  return v>=0 ? `rgba(24,229,91,${alpha})` : `rgba(255,48,48,${alpha})`;
+}
+function drawLabExposureBars(R,{canvasId,valueKey,label}){
+  const cv=byId(canvasId);
+  if(!cv) return;
+  const data=labVisibleData(R);
+  const dpr=window.devicePixelRatio||1,W=cv.clientWidth,H=W<560?330:360;
+  cv.width=W*dpr;cv.height=H*dpr;cv.style.height=H+'px';
+  const ctx=cv.getContext('2d');ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,W,H);
+  const mobile=W<560,padL=mobile?48:62,padR=18,padT=28,padB=55;
+  const plotW=W-padL-padR,plotH=H-padT-padB,bottom=padT+plotH,slot=plotW/data.length;
+  const vals=data.map(s=>Number(s[valueKey])||0),maxAbs=Math.max(...vals.map(Math.abs),1)*1.08;
+  const y=v=>padT+(maxAbs-v)/(maxAbs*2)*plotH,y0=y(0),x=i=>padL+slot*(i+.5);
+  ctx.font='bold 10px Segoe UI';ctx.textBaseline='middle';
+  for(let i=0;i<=4;i++){
+    const yy=padT+plotH*i/4,v=maxAbs-(maxAbs*2*i/4);
+    ctx.strokeStyle='rgba(78,132,190,.13)';ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(padL,yy);ctx.lineTo(W-padR,yy);ctx.stroke();
+    ctx.fillStyle='#7897ba';ctx.textAlign='right';ctx.fillText(fmtAxis(v),padL-7,yy);
+  }
+  const bw=Math.max(3,Math.min(slot*.66,22));
+  const hits=data.map((s,i)=>{
+    const v=Number(s[valueKey])||0,yy=y(v),barY=Math.min(yy,y0),h=Math.max(1,Math.abs(yy-y0)),barX=x(i)-bw/2;
+    ctx.fillStyle=labExposureColor(v,.96);ctx.fillRect(barX,barY,bw,h);
+    return {x:barX,y:barY,w:bw,h,s,html:`<strong>${R.symbol} · Strike ${fmtPrice(s.strike)}</strong><div><span>${label}</span><b class="${v>=0?'pos':'neg'}">${fmtNum(v)}</b></div>`};
+  });
+  ctx.strokeStyle='rgba(197,222,250,.32)';ctx.beginPath();ctx.moveTo(padL,y0);ctx.lineTo(W-padR,y0);ctx.stroke();
+  const every=Math.max(1,Math.ceil(data.length/(mobile?7:11)));
+  ctx.fillStyle='#7f9dbd';ctx.font='bold 9px Segoe UI';ctx.textAlign='center';ctx.textBaseline='top';
+  data.forEach((s,i)=>{if(i%every===0||i===data.length-1)ctx.fillText(fmtPrice(s.strike),x(i),bottom+9);});
+  const xSpot=data.length===1?x(0):padL+((R.spot-data[0].strike)/(data.at(-1).strike-data[0].strike))*plotW;
+  if(xSpot>=padL&&xSpot<=W-padR){
+    ctx.strokeStyle='#268cff';ctx.lineWidth=1.5;ctx.setLineDash([5,4]);ctx.beginPath();ctx.moveTo(xSpot,padT);ctx.lineTo(xSpot,bottom);ctx.stroke();ctx.setLineDash([]);
+    ctx.fillStyle='#57a8ff';ctx.textAlign=xSpot>W-100?'right':'left';ctx.textBaseline='bottom';ctx.font='bold 9px Segoe UI';ctx.fillText('Spot '+fmtPrice(R.spot),xSpot+(xSpot>W-100?-5:5),padT-4);
+  }
+  cv._labHits=hits;
+}
+function drawLabMap(R){
+  const cv=byId('labMapChart');if(!cv)return;
+  let data=labVisibleData(R);
+  if(data.length>17){const step=Math.ceil(data.length/17);data=data.filter((_,i)=>i%step===0||i===data.length-1);}
+  const metrics=[['GEX','netGex'],['DEX','netDex'],['VEX','netVex'],['CHEX','netCharm']];
+  const dpr=window.devicePixelRatio||1,W=cv.clientWidth,H=W<560?390:410;
+  cv.width=W*dpr;cv.height=H*dpr;cv.style.height=H+'px';
+  const ctx=cv.getContext('2d');ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,W,H);
+  const padL=54,padR=18,padT=38,padB=28,plotW=W-padL-padR,plotH=H-padT-padB;
+  const x=i=>padL+plotW*(i+.5)/metrics.length;
+  const minK=data[0]?.strike||R.spot,maxK=data.at(-1)?.strike||R.spot+1;
+  const y=K=>padT+(maxK-K)/Math.max(maxK-minK,1)*plotH;
+  const maxByKey=Object.fromEntries(metrics.map(([,key])=>[key,Math.max(...data.map(s=>Math.abs(Number(s[key])||0)),1)]));
+  ctx.font='bold 10px Segoe UI';ctx.textAlign='center';ctx.textBaseline='bottom';
+  metrics.forEach(([name],i)=>{ctx.fillStyle='#a9c5e6';ctx.fillText(name,x(i),padT-10);ctx.strokeStyle='rgba(67,118,172,.12)';ctx.beginPath();ctx.moveTo(x(i),padT);ctx.lineTo(x(i),H-padB);ctx.stroke();});
+  const hits=[];
+  data.forEach(s=>metrics.forEach(([name,key],i)=>{
+    const v=Number(s[key])||0,r=2+Math.sqrt(Math.abs(v)/maxByKey[key])*12,cx=x(i),cy=y(s.strike);
+    ctx.fillStyle=labExposureColor(v,.82);ctx.beginPath();ctx.arc(cx,cy,r,0,Math.PI*2);ctx.fill();
+    hits.push({cx,cy,r,s,html:`<strong>${R.symbol} · Strike ${fmtPrice(s.strike)}</strong><div><span>${name}</span><b class="${v>=0?'pos':'neg'}">${fmtNum(v)}</b></div>`});
+  }));
+  const ySpot=y(R.spot);if(ySpot>=padT&&ySpot<=H-padB){ctx.strokeStyle='#268cff';ctx.lineWidth=1.5;ctx.beginPath();ctx.moveTo(padL,ySpot);ctx.lineTo(W-padR,ySpot);ctx.stroke();ctx.fillStyle='#57a8ff';ctx.textAlign='left';ctx.textBaseline='bottom';ctx.fillText('Spot '+fmtPrice(R.spot),padL+4,ySpot-4);}
+  ctx.fillStyle='#7897ba';ctx.textAlign='right';ctx.textBaseline='middle';
+  const tickCount=Math.min(7,data.length);for(let i=0;i<tickCount;i++){const K=minK+(maxK-minK)*i/Math.max(tickCount-1,1);ctx.fillText(fmtPrice(K),padL-7,y(K));}
+  cv._labHits=hits;
+}
+function renderLabHeatMap(R){
+  const host=byId('labHeatMap');if(!host)return;
+  let data=labVisibleData(R);
+  if(data.length>15){data=[...data].sort((a,b)=>Math.abs(a.strike-R.spot)-Math.abs(b.strike-R.spot)).slice(0,15).sort((a,b)=>b.strike-a.strike);}else data=[...data].sort((a,b)=>b.strike-a.strike);
+  const metrics=[['GEX','netGex'],['DEX','netDex'],['VEX','netVex'],['CHEX','netCharm']];
+  const max=Object.fromEntries(metrics.map(([,key])=>[key,Math.max(...data.map(s=>Math.abs(Number(s[key])||0)),1)]));
+  const cell=(v,key)=>{const t=Math.pow(Math.min(1,Math.abs(v)/max[key]),.55),bg=v>=0?`rgba(11,142,58,${.22+t*.7})`:`rgba(190,24,35,${.22+t*.7})`;return `<td style="background:${bg}" data-lab-tip="${esc(key)}|${v}">${fmtAxis(v)}</td>`;};
+  host.innerHTML=`<table class="lab-heat-table"><thead><tr><th>Strike</th>${metrics.map(([n])=>`<th>${n}</th>`).join('')}</tr></thead><tbody>${data.map(s=>`<tr class="${Math.abs(s.strike-R.spot)===Math.min(...data.map(x=>Math.abs(x.strike-R.spot)))?'at-spot':''}"><td>${fmtPrice(s.strike)}</td>${metrics.map(([,key])=>cell(Number(s[key])||0,key)).join('')}</tr>`).join('')}</tbody></table>`;
+}
+function drawExposureLab(R){
+  const kpis=byId('labKpis');if(!kpis)return;
+  const regime=R.regime==='positive_gamma'?'Positive Gamma':R.regime==='negative_gamma'?'Negative Gamma':'Neutral Gamma';
+  const kpi=(label,value,note,cls='')=>`<div class="lab-kpi ${cls}"><span>${label}</span><strong>${value}</strong><small>${note}</small></div>`;
+  kpis.innerHTML=kpi('Underlying',`${R.symbol} ${fmtPrice(R.spot)}`,'Live reference price','spot')+kpi('Total Net GEX',fmtNum(R.totalGex),'Per 1% underlying move',R.totalGex>=0?'positive':'negative')+kpi('Total Net DEX',fmtNum(R.totalDex),'Directional dealer exposure',R.totalDex>=0?'positive':'negative')+kpi('Gamma regime',regime,`Strength: ${R.strength}`,R.totalGex>=0?'positive':'negative');
+  byId('labGexTitle').textContent=`Net Gamma Exposure — ${R.symbol}`;byId('labDexTitle').textContent=`Net Delta Exposure — ${R.symbol}`;
+  drawLabExposureBars(R,{canvasId:'labGexChart',valueKey:'netGex',label:'Net GEX'});
+  drawLabExposureBars(R,{canvasId:'labDexChart',valueKey:'netDex',label:'Net DEX'});
+  drawLabMap(R);renderLabHeatMap(R);
+}
+function showLabTooltip(ev){
+  const cv=ev.currentTarget,tt=byId('labTooltip'),rect=cv.getBoundingClientRect(),x=ev.clientX-rect.left,y=ev.clientY-rect.top,hits=cv._labHits||[];
+  const hit=hits.find(h=>h.cx!=null?Math.hypot(h.cx-x,h.cy-y)<=h.r+5:x>=h.x-4&&x<=h.x+h.w+4&&y>=h.y-6&&y<=h.y+h.h+6);
+  if(!hit){tt.style.display='none';return;}tt.innerHTML=hit.html;tt.style.display='block';tt.style.left=Math.min(window.innerWidth-tt.offsetWidth-8,ev.clientX+13)+'px';tt.style.top=Math.min(window.innerHeight-tt.offsetHeight-8,ev.clientY+13)+'px';
+}
+function hideLabTooltip(){const tt=byId('labTooltip');if(tt)tt.style.display='none';}
 function showChartTooltip(ev){
   const cv=ev.currentTarget || document.getElementById('gexChart');
   const targets=chartTargets(cv?.id || 'gexChart');
@@ -2291,8 +2154,11 @@ function showChartTooltip(ev){
   const row = (label,value,cls='') => `<div class="tt-row"><span>${label}</span><span class="${cls}">${value}</span></div>`;
   const metricRows = active.map(m=>{
     if(m==='net_gex') return row('Net GEX',fmtNum(s.netGex),s.netGex>=0?'pos':'neg');
-    if(m==='net_dex') return row('Net DEX',fmtNum(s.netDex),s.netDex>=0?'pos':'neg')+
-      row('Call DEX',fmtNum(s.callDex),'pos')+row('Put DEX',fmtNum(s.putDex),'neg');
+    if(m==='net_dex') return [
+      row('Net DEX',fmtNum(s.netDex),s.netDex>=0?'pos':'neg'),
+      row('Call DEX',fmtNum(s.callDex),'pos'),
+      row('Put DEX',fmtNum(s.putDex),'neg'),
+    ].join('');
     if(m==='ag') return row('AG',fmtNum(Math.abs(s.callGex)+Math.abs(s.putGex)));
     if(m==='call_oi') return row('Call OI',fmtNum(s.callOI),'pos');
     if(m==='put_oi') return row('Put OI',fmtNum(s.putOI),'neg');
@@ -2319,54 +2185,9 @@ function showChartTooltip(ev){
   tt.style.top=Math.max(6,top)+'px';
 }
 function hideChartTooltip(){
-  ['chartTooltip','matrixGexTooltip','gexChangeTooltip','dexTooltip','dexChangeTooltip'].forEach(id=>{const el=byId(id); if(el) el.style.display='none';});
-  ['chartCrosshairX','matrixGexCrosshairX','gexChangeCrosshairX','dexCrosshairX','dexChangeCrosshairX'].forEach(id=>{const el=byId(id); if(el) el.style.display='none';});
+  ['chartTooltip','matrixGexTooltip','dexTooltip'].forEach(id=>{const el=byId(id); if(el) el.style.display='none';});
+  ['chartCrosshairX','matrixGexCrosshairX','dexCrosshairX'].forEach(id=>{const el=byId(id); if(el) el.style.display='none';});
 }
-function showGexChangeTooltip(ev){
-  const cv=ev.currentTarget || document.getElementById('gexChangeChart');
-  const isDex=cv?.id==='dexChangeChart';
-  const tt=document.getElementById(isDex ? 'dexChangeTooltip' : 'gexChangeTooltip');
-  const cross=document.getElementById(isDex ? 'dexChangeCrosshairX' : 'gexChangeCrosshairX');
-  if(!cv || !tt || !cross) return;
-  const bars=cv._matrixBars || [];
-  if(!bars.length) return;
-  const rect=cv.getBoundingClientRect();
-  const point=ev.touches && ev.touches[0] ? ev.touches[0] : ev;
-  const x=point.clientX-rect.left;
-  const y=point.clientY-rect.top;
-  let hit=bars.find(b=>x>=b.x-3 && x<=b.x+b.w+3 && y>=Math.min(b.y,b.y+b.h)-8 && y<=Math.max(b.y+b.h,b.y)+8);
-  if(!hit){
-    hit=bars.reduce((best,b)=>{
-      const cx=b.x+b.w/2;
-      const dist=Math.abs(cx-x);
-      return !best || dist<best.dist ? {bar:b,dist} : best;
-    },null)?.bar;
-    if(!hit || Math.abs((hit.x+hit.w/2)-x)>18){ tt.style.display='none'; cross.style.display='none'; return; }
-  }
-  const s=hit.s;
-  const R=gexChangeChartResult(window._lastR);
-  const change=isDex ? s.netDexChange : s.netGexChange;
-  const current=isDex ? s.netDex : s.netGex;
-  const baseline=isDex ? s.baselineNetDex : s.baselineNetGex;
-  const cls=change>=0?'pos':'neg';
-  const row=(label,value,rowCls='')=>`<div class="tt-row"><span>${label}</span><span class="${rowCls}">${value}</span></div>`;
-  tt.innerHTML=`
-    <div class="tt-title">${R?.symbol || ''} Strike ${fmtPrice(s.strike)}</div>
-    ${row(isDex?'DEX Change':'GEX Change',fmtNum(change || 0),cls)}
-    ${row(isDex?'Current Net DEX':'Current Net GEX',fmtNum(current || 0),current>=0?'pos':'neg')}
-    ${row('Open Baseline',fmtNum(baseline || 0),baseline>=0?'pos':'neg')}
-  `;
-  tt.style.display='block';
-  cross.style.display='block';
-  cross.style.left=Math.max(0,Math.min(rect.width,hit.x+hit.w/2))+'px';
-  const tw=tt.offsetWidth, th=tt.offsetHeight;
-  let left=x+14, top=y+14;
-  if(left+tw>rect.width) left=x-tw-14;
-  if(top+th>rect.height) top=y-th-14;
-  tt.style.left=Math.max(6,left)+'px';
-  tt.style.top=Math.max(6,top)+'px';
-}
-
 // ---------- Dealer Pressure: GEX / Vanna / Charm pressure map ----------
 function edgeVisibleStrikes(R){
   let data=[...R.strikes];
@@ -2635,6 +2456,211 @@ function renderMatrixPriceChart(R){
     updateMatrixPriceNote(`Could not draw SPY candles: ${err?.message || 'data load failed'}. Pressure levels below still update.`);
   });
 }
+
+// ---------- Market Structure: GEX followed by intraday candles ----------
+function fetchMarketStructureCandles(symbol,spot){
+  const safeSymbol=encodeURIComponent(String(symbol || 'SPY').toUpperCase());
+  return fetchLiveData(`${MATRIX_CANDLES_URL}?symbol=${safeSymbol}&interval=5m&range=1d&t=${Date.now()}`)
+    .then(d=>{
+      const direct=d && d.ok && Array.isArray(d.candles) ? d.candles : [];
+      if(direct.length || symbol!=='SPX') return {raw:direct,source:symbol,proxy:false};
+      return fetchLiveData(`${MATRIX_CANDLES_URL}?symbol=SPY&interval=5m&range=1d&t=${Date.now()}`)
+        .then(spy=>{
+          const raw=spy && spy.ok && Array.isArray(spy.candles) ? spy.candles : [];
+          const lastClose=Number(raw[raw.length-1]?.close);
+          const ratio=Number.isFinite(lastClose)&&lastClose>0&&Number.isFinite(Number(spot)) ? Number(spot)/lastClose : SPX_SPY_RATIO;
+          return {raw:raw.map(c=>({
+            ...c,open:Number(c.open)*ratio,high:Number(c.high)*ratio,
+            low:Number(c.low)*ratio,close:Number(c.close)*ratio,
+          })),source:'SPY',proxy:true,ratio};
+        });
+    });
+}
+function setMarketStructureStatus(text,state='loading'){
+  const el=document.getElementById('marketStructureStatus');
+  if(!el) return;
+  el.textContent=text;
+  el.dataset.state=state;
+}
+function marketStrongest(rows,value){
+  if(!rows?.length) return null;
+  return rows.reduce((best,row)=>value(row)>value(best)?row:best,rows[0]);
+}
+function marketStructureLevels(R){
+  const rows=R.strikes || [];
+  const callVol=marketStrongest(rows,s=>Number(s.callVol)||0);
+  const putVol=marketStrongest(rows,s=>Number(s.putVol)||0);
+  const power=marketStrongest(rows,s=>Number(s.powerZone)||0);
+  const ag=marketStrongest(rows,s=>Math.abs(Number(s.callGex)||0)+Math.abs(Number(s.putGex)||0));
+  const raw=[
+    {price:R.callWall,label:'Call Wall',color:'#22aaf2',width:2},
+    {price:R.putWall,label:'Put Wall',color:'#ff2a17',width:2},
+    {price:callVol?.strike,label:'Call Vol Strike',color:'#147eea',width:1},
+    {price:putVol?.strike,label:'Put Vol Strike',color:'#ff8a3d',width:1},
+    {price:power?.strike,label:'Quant Power',color:'#ffe600',width:2},
+    {price:ag?.strike,label:'AG Strike',color:'#b26cf2',width:1},
+    {price:R.flip,label:'Gamma Flip',color:'#21c75a',width:2,dashed:true},
+  ].filter(level=>Number.isFinite(Number(level.price)));
+  const byPrice=new Map();
+  raw.forEach(level=>{
+    const key=Number(level.price).toFixed(6);
+    const existing=byPrice.get(key);
+    if(existing){
+      existing.label+=` / ${level.label}`;
+      existing.width=Math.max(existing.width,level.width);
+    }else byPrice.set(key,{...level,price:Number(level.price)});
+  });
+  return [...byPrice.values()];
+}
+function updateMarketPriceTooltip(param){
+  const tt=document.getElementById('marketPriceTooltip');
+  if(!tt || !_marketCandleSeries || !param?.point || param.point.x<0 || param.point.y<0){
+    if(tt) tt.style.display='none';
+    return;
+  }
+  const bar=param.seriesData?.get(_marketCandleSeries);
+  if(!bar){tt.style.display='none';return;}
+  const date=param.time ? new Date(Number(param.time)*1000) : null;
+  const time=date && Number.isFinite(date.getTime())
+    ? date.toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'}) : '';
+  tt.innerHTML=`<strong>${esc(_marketPriceSymbol)} ${time}</strong>
+    <span>O ${fmtPrice(bar.open)}</span><span>H ${fmtPrice(bar.high)}</span>
+    <span>L ${fmtPrice(bar.low)}</span><span>C ${fmtPrice(bar.close)}</span>`;
+  tt.style.display='flex';
+  tt.style.left=Math.max(8,Math.min(param.point.x+14,(_marketChartElement?.clientWidth||600)-tt.offsetWidth-8))+'px';
+  tt.style.top=Math.max(8,Math.min(param.point.y+14,(_marketChartElement?.clientHeight||520)-tt.offsetHeight-8))+'px';
+}
+function ensureMarketPriceChart(){
+  const el=document.getElementById('marketPriceChart');
+  if(!el) return null;
+  _marketChartElement=el;
+  if(!window.LightweightCharts){
+    setMarketStructureStatus('Loading chart engine…');
+    if(window.__loadMatrixChartLib) window.__loadMatrixChartLib();
+    return null;
+  }
+  if(_marketPriceChart && _marketCandleSeries) return {chart:_marketPriceChart,series:_marketCandleSeries};
+  try{
+    _marketPriceChart=LightweightCharts.createChart(el,{
+      width:Math.max(320,el.clientWidth||800),
+      height:Math.max(390,el.clientHeight||540),
+      layout:{background:{color:'#191919'},textColor:'#d3d7db',fontFamily:'Segoe UI, Arial, sans-serif'},
+      grid:{vertLines:{color:'rgba(255,255,255,.055)'},horzLines:{color:'rgba(255,255,255,.07)'}},
+      rightPriceScale:{borderColor:'#3b3b3b',scaleMargins:{top:.08,bottom:.10}},
+      timeScale:{borderColor:'#3b3b3b',timeVisible:true,secondsVisible:false,rightOffset:5},
+      crosshair:{mode:0,vertLine:{color:'rgba(255,255,255,.48)',style:2},horzLine:{color:'rgba(255,255,255,.34)',style:2}},
+    });
+    const candleOptions={
+      upColor:'#26a69a',downColor:'#ef5350',borderVisible:false,
+      wickUpColor:'#58c7bb',wickDownColor:'#ff756f',
+    };
+    _marketCandleSeries=_marketPriceChart.addCandlestickSeries
+      ? _marketPriceChart.addCandlestickSeries(candleOptions)
+      : _marketPriceChart.addSeries(LightweightCharts.CandlestickSeries,candleOptions);
+    _marketPriceChart.subscribeCrosshairMove(updateMarketPriceTooltip);
+    if(window.ResizeObserver){
+      _marketResizeObserver=new ResizeObserver(()=>{
+        _marketPriceChart.applyOptions({
+          width:Math.max(320,el.clientWidth||800),height:Math.max(390,el.clientHeight||540),
+        });
+        requestAnimationFrame(()=>drawMarketPowerProfile(window._lastR));
+      });
+      _marketResizeObserver.observe(el);
+    }
+  }catch(e){
+    setMarketStructureStatus(`Chart error: ${e.message || 'initialization failed'}`,'error');
+    return null;
+  }
+  return {chart:_marketPriceChart,series:_marketCandleSeries};
+}
+function clearMarketPriceLines(){
+  if(!_marketCandleSeries) return;
+  _marketPriceLines.forEach(line=>{try{_marketCandleSeries.removePriceLine(line);}catch(e){}});
+  _marketPriceLines=[];
+}
+function drawMarketPowerProfile(R){
+  const cv=document.getElementById('marketPowerProfile');
+  const stage=cv?.parentElement;
+  if(!cv || !stage || !_marketCandleSeries || !R?.strikes?.length) return;
+  const W=stage.clientWidth,H=stage.clientHeight,dpr=window.devicePixelRatio||1;
+  cv.width=Math.max(1,W*dpr);cv.height=Math.max(1,H*dpr);cv.style.width=W+'px';cv.style.height=H+'px';
+  const ctx=cv.getContext('2d');ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,W,H);
+  const rows=visibleStrikeData(R).map(s=>({
+    strike:Number(s.strike),power:Number(s.powerZone)||0,
+    y:_marketCandleSeries.priceToCoordinate(Number(s.strike)),
+  })).filter(p=>Number.isFinite(p.y) && p.y>=0 && p.y<=H);
+  if(rows.length<2) return;
+  const maxPower=Math.max(...rows.map(p=>p.power),1);
+  const baseX=18,maxWidth=Math.min(230,Math.max(105,W*.18));
+  ctx.beginPath();ctx.moveTo(baseX,rows[0].y);
+  rows.forEach(p=>ctx.lineTo(baseX+(p.power/maxPower)*maxWidth,p.y));
+  ctx.lineTo(baseX,rows[rows.length-1].y);ctx.closePath();
+  const gradient=ctx.createLinearGradient(baseX,0,baseX+maxWidth,0);
+  gradient.addColorStop(0,'rgba(255,230,0,.30)');gradient.addColorStop(1,'rgba(255,230,0,.08)');
+  ctx.fillStyle=gradient;ctx.fill();
+  ctx.beginPath();rows.forEach((p,i)=>{const x=baseX+(p.power/maxPower)*maxWidth;i?ctx.lineTo(x,p.y):ctx.moveTo(x,p.y);});
+  ctx.strokeStyle='#ffe600';ctx.lineWidth=1.7;ctx.stroke();
+  ctx.fillStyle='rgba(255,230,0,.92)';ctx.font='800 10px Segoe UI';ctx.textAlign='left';ctx.fillText('POWER PROFILE',baseX+4,18);
+}
+function renderMarketLevelLegend(levels){
+  const host=document.getElementById('marketLevelLegend');
+  if(!host) return;
+  host.innerHTML=levels.map(level=>`<span><i style="background:${level.color}"></i>${esc(level.label)} ${fmtPrice(level.price)}</span>`).join('');
+}
+function renderMarketPriceChart(R){
+  const kit=ensureMarketPriceChart();
+  if(!kit){setTimeout(()=>activeView==='market-structure'&&renderMarketPriceChart(R),450);return;}
+  const {chart,series}=kit;
+  const symbol=String(R.symbol||'SPY').toUpperCase();
+  _marketPriceSymbol=symbol;
+  document.getElementById('marketPriceTitle').textContent=`${symbol} Price + Options Power Profile`;
+  const levels=marketStructureLevels(R);
+  clearMarketPriceLines();
+  levels.forEach(level=>{
+    const line=series.createPriceLine({
+      price:level.price,color:level.color,lineWidth:level.width,
+      lineStyle:level.dashed?(LightweightCharts.LineStyle.Dashed||2):LightweightCharts.LineStyle.Solid,
+      axisLabelVisible:true,title:`${level.label} ${fmtPrice(level.price)}`,
+    });
+    _marketPriceLines.push(line);
+  });
+  renderMarketLevelLegend(levels);
+  const cached=_marketCandlesBySymbol.get(symbol);
+  const needsLoad=!cached || Date.now()-cached.loadedAt>60000;
+  const draw=(candles,meta={})=>{
+    if(!candles.length){
+      document.getElementById('marketPriceNote').textContent=`No ${symbol} candles were returned. GEX and options levels are still live.`;
+      setMarketStructureStatus('Options live · candles unavailable','warning');
+      return;
+    }
+    series.setData(candles);chart.timeScale().fitContent();
+    document.getElementById('marketPriceNote').textContent=meta.proxy
+      ? `SPX proxy candles converted from SPY at ${Number(meta.ratio).toFixed(4)}×. Options levels remain native SPX.`
+      : `${symbol} 5-minute candles. The yellow profile and colored levels come from the selected option expirations.`;
+    setMarketStructureStatus(`${symbol}${meta.proxy?' proxy':''} · ${candles.length} candles · ${levels.length} levels`,'ready');
+    setTimeout(()=>drawMarketPowerProfile(R),80);
+  };
+  if(!needsLoad){draw(cached.candles,cached);return;}
+  setMarketStructureStatus(`Loading ${symbol} candles…`);
+  document.getElementById('marketPriceNote').textContent=`Loading ${symbol} intraday candles…`;
+  fetchMarketStructureCandles(symbol,R.spot).then(feed=>{
+    const raw=feed.raw || [];
+    const byTime=new Map();
+    raw.map(c=>({time:Number(c.time),open:Number(c.open),high:Number(c.high),low:Number(c.low),close:Number(c.close)}))
+      .filter(c=>Number.isFinite(c.time)&&Number.isFinite(c.open)&&Number.isFinite(c.high)&&Number.isFinite(c.low)&&Number.isFinite(c.close))
+      .forEach(c=>byTime.set(c.time,c));
+    const candles=[...byTime.values()].sort((a,b)=>a.time-b.time);
+    _marketCandlesBySymbol.set(symbol,{candles,loadedAt:Date.now(),proxy:feed.proxy,source:feed.source,ratio:feed.ratio});
+    draw(candles,feed);
+  }).catch(err=>{
+    document.getElementById('marketPriceNote').textContent=`Could not load ${symbol} candles: ${err?.message || 'request failed'}.`;
+    setMarketStructureStatus('Candle feed unavailable','error');
+  });
+}
+function renderMarketStructure(R){
+  drawChart(R,'marketGexChart');
+  renderMarketPriceChart(R);
+}
 function renderMarketRead(R){
   const host=document.getElementById('marketReadCard');
   if(!host) return;
@@ -2838,15 +2864,10 @@ function hideEdgeTooltip(){
 }
 
 // ---------- Wiring ----------
-let activeView = 'gex';
-const selectedExpirationsByView = {gex:null,dex:null,'matrix-gex':null,'shock-engine':null,'max-pain':null};
-let gexChangeExpirationsSynced = true;
-let selectedGexChangeExpirations = null;
+let activeView = 'market-structure';
+const selectedExpirationsByView = {gex:null,dex:null,'market-structure':null,'exposure-lab':null,'matrix-gex':null,'shock-engine':null,'max-pain':null};
 function currentExpirationValues(){
   return [...document.querySelectorAll('#expirationPicker input:checked')].map(input=>input.value);
-}
-function currentGexChangeExpirationValues(){
-  return [...document.querySelectorAll('#gexChangeExpirationPicker input:checked')].map(input=>input.value);
 }
 function saveCurrentExpirationSelection(){
   if(selectedExpirationsByView.hasOwnProperty(activeView)){
@@ -2872,13 +2893,8 @@ function renderExpirationPicker(picker, expiries, byExp, selectedValues){
   }).join('') : '<span class="expiry-empty">No expirations available</span>';
   return [...active];
 }
-function syncGexChangeButtonState(){
-  const btn=byId('syncGexChangeExpirations');
-  if(btn) btn.classList.toggle('active',gexChangeExpirationsSynced);
-}
 function populateExpirations(chain){
   const picker = document.getElementById('expirationPicker');
-  const changePicker = document.getElementById('gexChangeExpirationPicker');
   const remembered = selectedExpirationsByView[activeView];
   const selectedValues = remembered || (selectedExpirationsByView.hasOwnProperty(activeView) ? [] : currentExpirationValues());
   const selected = new Set(selectedValues);
@@ -2889,16 +2905,9 @@ function populateExpirations(chain){
     if(q.exp && q.exp >= todayIso && !byExp.has(q.exp)) byExp.set(q.exp, q.dte);
   });
   const expiries = [...byExp.keys()].sort();
-  const activeValues = renderExpirationPicker(picker, expiries, byExp, selectedValues);
+  renderExpirationPicker(picker, expiries, byExp, selectedValues);
   if(selectedExpirationsByView.hasOwnProperty(activeView) && !remembered){
     selectedExpirationsByView[activeView] = currentExpirationValues();
-  }
-  if(changePicker){
-    if(gexChangeExpirationsSynced || !selectedGexChangeExpirations){
-      selectedGexChangeExpirations = activeValues;
-    }
-    selectedGexChangeExpirations = renderExpirationPicker(changePicker, expiries, byExp, selectedGexChangeExpirations);
-    syncGexChangeButtonState();
   }
 }
 function setView(view){
@@ -2911,12 +2920,10 @@ function setView(view){
   run();
   if(view === 'gex' && window._lastR) requestAnimationFrame(()=>{
     drawChart(window._lastR);
-    drawNetGexChangeChart(gexChangeChartResult(window._lastR));
   });
-  if(view === 'dex' && window._lastR) requestAnimationFrame(()=>{
-    drawChart(window._lastR,'dexChart');
-    drawNetDexChangeChart(dexChangeChartResult(window._lastR));
-  });
+  if(view === 'dex' && window._lastR) requestAnimationFrame(()=>drawChart(window._lastR,'dexChart'));
+  if(view === 'market-structure' && window._lastR) requestAnimationFrame(()=>renderMarketStructure(window._lastR));
+  if(view === 'exposure-lab' && window._lastR) requestAnimationFrame(()=>drawExposureLab(window._lastR));
   if(view === 'matrix-gex' && window._lastR) requestAnimationFrame(()=>drawChart(window._lastR,'matrixGexChart'));
   if(view === 'shock-engine' && window._lastR) requestAnimationFrame(()=>drawShockEngine(window._lastR));
   if(view === 'max-pain' && window._lastR) requestAnimationFrame(()=>drawMaxPain(window._lastR));
@@ -2940,114 +2947,45 @@ function run(){
   populateExpirations(chain);
   const selectedExpirationValues = [...document.querySelectorAll('#expirationPicker input:checked')].map(input=>input.value);
   const selectedExpirations = new Set(selectedExpirationValues);
-  const changeExpirationValues = currentGexChangeExpirationValues();
-  const changeExpirations = new Set(changeExpirationValues);
   const fullChain = chain;
   if(selectedExpirations.size){
     chain = {...chain, quotes: chain.quotes.filter(q=>selectedExpirations.has(q.exp))};
   }
-  let changeChain = fullChain;
-  if(changeExpirations.size){
-    changeChain = {...fullChain, quotes: fullChain.quotes.filter(q=>changeExpirations.has(q.exp))};
-  }
   const expectedMove = calcExpectedMove(chain);
-  const changeExpectedMove = calcExpectedMove(changeChain);
   const maxPain = buildMaxPain(fullChain, selectedExpirations);
-  let R = calcGEX(chain,mode);
-  const changeR = calcGEX(changeChain,mode);
+  const R = calcGEX(chain,mode);
   R.expectedMove = expectedMove;
   R.maxPain = maxPain;
   R.live = !!chain.live;
   R.asof = useLive ? REAL[sym].asof : null;
-  changeR.expectedMove = changeExpectedMove;
-  changeR.live = R.live;
-  changeR.asof = R.asof;
-  let openR=null,openSelectedR=null;
-  const openRec=OPEN_REAL?.data?.[sym];
-  if(openRec && OPEN_REAL.session_date === netGexSessionDateKey(R)){
-    const openFullChain=buildChainRealFromRecord(sym,openRec,null);
-    let openChain=openFullChain;
-    if(changeExpirations.size){
-      openChain={...openChain, quotes:openChain.quotes.filter(q=>changeExpirations.has(q.exp))};
-    }
-    openR=calcGEX(openChain,mode);
-    let openSelectedChain=openFullChain;
-    if(selectedExpirations.size){
-      openSelectedChain={...openFullChain,quotes:openFullChain.quotes.filter(q=>selectedExpirations.has(q.exp))};
-    }
-    openSelectedR=calcGEX(openSelectedChain,mode);
-  }
-  changeR.netGexChange = buildNetGexChange(changeR,{
-    mode,
-    expirations:changeExpirationValues,
-    baselineResult:openR,
-    requireOpenData:useLive,
-  });
-  R.netGexChangeR = changeR;
-  R.netDexChangeR={...R,netGexChange:buildNetGexChange(R,{
-    mode,
-    expirations:selectedExpirationValues,
-    baselineResult:openSelectedR,
-    requireOpenData:useLive,
-  })};
-  const historySnapshot=selectedHistorySnapshot();
-  if(historySnapshot){
-    R=applyHistorySnapshot(R,historySnapshot,EXPOSURE_HISTORY_DAY?.snapshots?.[0]);
-  }
   R.marketRead = buildMarketRead(R);
   renderImpl(R);
 }
 bind('market','change',()=>{
   selectedExpirationsByView.gex=null;
   selectedExpirationsByView.dex=null;
+  selectedExpirationsByView['market-structure']=null;
+  selectedExpirationsByView['exposure-lab']=null;
   selectedExpirationsByView['matrix-gex']=null;
   selectedExpirationsByView['shock-engine']=null;
   selectedExpirationsByView['max-pain']=null;
-  gexChangeExpirationsSynced=true;
-  selectedGexChangeExpirations=null;
   populateSymbols();
   run();
 });
 bind('symbol','change',()=>{
   document.getElementById('spotOverride').value='';
   document.getElementById('expirationPicker').innerHTML='';
-  const changePicker=byId('gexChangeExpirationPicker');
-  if(changePicker) changePicker.innerHTML='';
   selectedExpirationsByView.gex=null;
   selectedExpirationsByView.dex=null;
+  selectedExpirationsByView['market-structure']=null;
+  selectedExpirationsByView['exposure-lab']=null;
   selectedExpirationsByView['matrix-gex']=null;
   selectedExpirationsByView['shock-engine']=null;
   selectedExpirationsByView['max-pain']=null;
-  gexChangeExpirationsSynced=true;
-  selectedGexChangeExpirations=null;
-  if(byId('historyDate')?.value!=='live') loadExposureHistoryDay(); else run();
+  run();
 });
-bind('historyDate','change',loadExposureHistoryDay);
-let _historyFrame=null;
-bind('historyTimeline','input',()=>{
-  updateHistoryTimelineLabel();
-  if(_historyFrame) cancelAnimationFrame(_historyFrame);
-  _historyFrame=requestAnimationFrame(()=>{_historyFrame=null;run();});
-});
-bind('historyPrev','click',()=>stepHistoryTimeline(-1));
-bind('historyNext','click',()=>stepHistoryTimeline(1));
 bind('expirationPicker','change',()=>{
   saveCurrentExpirationSelection();
-  if(gexChangeExpirationsSynced){
-    selectedGexChangeExpirations=currentExpirationValues();
-  }
-  run();
-});
-bind('gexChangeExpirationPicker','change',()=>{
-  gexChangeExpirationsSynced=false;
-  selectedGexChangeExpirations=currentGexChangeExpirationValues();
-  syncGexChangeButtonState();
-  run();
-});
-bind('syncGexChangeExpirations','click',()=>{
-  gexChangeExpirationsSynced=true;
-  selectedGexChangeExpirations=currentExpirationValues();
-  syncGexChangeButtonState();
   run();
 });
 bind('mode','change',run);
@@ -3060,12 +2998,10 @@ window.addEventListener('resize',()=>{
   if(!window._lastR) return;
   if(activeView === 'gex'){
     drawChart(window._lastR);
-    drawNetGexChangeChart(gexChangeChartResult(window._lastR));
   }
-  if(activeView === 'dex'){
-    drawChart(window._lastR,'dexChart');
-    drawNetDexChangeChart(dexChangeChartResult(window._lastR));
-  }
+  if(activeView === 'dex') drawChart(window._lastR,'dexChart');
+  if(activeView === 'market-structure') renderMarketStructure(window._lastR);
+  if(activeView === 'exposure-lab') drawExposureLab(window._lastR);
   if(activeView === 'matrix-gex') drawChart(window._lastR,'matrixGexChart');
   if(activeView === 'shock-engine') drawShockEngine(window._lastR);
   if(activeView === 'max-pain') drawMaxPain(window._lastR);
@@ -3075,26 +3011,25 @@ bind('gexChart','mouseleave',hideChartTooltip);
 bind('gexChart','touchstart',showChartTooltip,{passive:true});
 bind('gexChart','touchmove',showChartTooltip,{passive:true});
 bind('gexChart','touchend',()=>setTimeout(hideChartTooltip,1200),{passive:true});
-bind('gexChangeChart','mousemove',showGexChangeTooltip);
-bind('gexChangeChart','mouseleave',hideChartTooltip);
-bind('gexChangeChart','touchstart',showGexChangeTooltip,{passive:true});
-bind('gexChangeChart','touchmove',showGexChangeTooltip,{passive:true});
-bind('gexChangeChart','touchend',()=>setTimeout(hideChartTooltip,1200),{passive:true});
 bind('dexChart','mousemove',showChartTooltip);
 bind('dexChart','mouseleave',hideChartTooltip);
 bind('dexChart','touchstart',showChartTooltip,{passive:true});
 bind('dexChart','touchmove',showChartTooltip,{passive:true});
 bind('dexChart','touchend',()=>setTimeout(hideChartTooltip,1200),{passive:true});
-bind('dexChangeChart','mousemove',showGexChangeTooltip);
-bind('dexChangeChart','mouseleave',hideChartTooltip);
-bind('dexChangeChart','touchstart',showGexChangeTooltip,{passive:true});
-bind('dexChangeChart','touchmove',showGexChangeTooltip,{passive:true});
-bind('dexChangeChart','touchend',()=>setTimeout(hideChartTooltip,1200),{passive:true});
+bind('marketGexChart','mousemove',showChartTooltip);
+bind('marketGexChart','mouseleave',hideChartTooltip);
+bind('marketGexChart','touchstart',showChartTooltip,{passive:true});
+bind('marketGexChart','touchmove',showChartTooltip,{passive:true});
+bind('marketGexChart','touchend',()=>setTimeout(hideChartTooltip,1200),{passive:true});
 bind('matrixGexChart','mousemove',showChartTooltip);
 bind('matrixGexChart','mouseleave',hideChartTooltip);
 bind('matrixGexChart','touchstart',showChartTooltip,{passive:true});
 bind('matrixGexChart','touchmove',showChartTooltip,{passive:true});
 bind('matrixGexChart','touchend',()=>setTimeout(hideChartTooltip,1200),{passive:true});
+['labGexChart','labDexChart','labMapChart'].forEach(id=>{
+  bind(id,'mousemove',showLabTooltip);
+  bind(id,'mouseleave',hideLabTooltip);
+});
 bind('shockEngineChart','mousemove',showShockTooltip);
 bind('shockEngineChart','mouseleave',hideShockTooltip);
 bind('shockEngineChart','touchstart',showShockTooltip,{passive:true});
@@ -3148,11 +3083,11 @@ document.querySelectorAll('.maxpain-tab').forEach(btn=>{
 document.querySelectorAll('.pbtn').forEach(btn=>{
   btn.addEventListener('click',()=>{
     const m=btn.dataset.metric;
+    if(!m) return;
     if(ACTIVE.has(m)) ACTIVE.delete(m); else ACTIVE.add(m);
     btn.classList.toggle('active', ACTIVE.has(m));
     if(window._lastR && activeView === 'gex'){
       drawChart(window._lastR);
-      drawNetGexChangeChart(gexChangeChartResult(window._lastR));
     }
   });
 });
@@ -3166,14 +3101,9 @@ document.querySelectorAll('[data-sigma]').forEach(btn=>{
   btn.addEventListener('click',()=>{
     DISPLAY_SIGMA=btn.dataset.sigma==='all' ? Infinity : Number(btn.dataset.sigma);
     syncSigmaButtons();
-    if(window._lastR && activeView === 'gex'){
-      drawChart(window._lastR);
-      drawNetGexChangeChart(gexChangeChartResult(window._lastR));
-    }
-    if(window._lastR && activeView === 'dex'){
-      drawChart(window._lastR,'dexChart');
-      drawNetDexChangeChart(dexChangeChartResult(window._lastR));
-    }
+    if(window._lastR && activeView === 'gex') drawChart(window._lastR);
+    if(window._lastR && activeView === 'dex') drawChart(window._lastR,'dexChart');
+    if(window._lastR && activeView === 'market-structure') renderMarketStructure(window._lastR);
   });
 });
 document.querySelectorAll('[data-edge-sigma]').forEach(btn=>{
@@ -3183,6 +3113,14 @@ document.querySelectorAll('[data-edge-sigma]').forEach(btn=>{
     if(window._lastR && activeView === 'edge') drawEdge(window._lastR);
   });
 });
+document.querySelectorAll('[data-lab-sigma]').forEach(btn=>{
+  btn.addEventListener('click',()=>{
+    LAB_SIGMA=btn.dataset.labSigma==='all'?Infinity:Number(btn.dataset.labSigma);
+    document.querySelectorAll('[data-lab-sigma]').forEach(b=>b.classList.toggle('active',b===btn));
+    hideLabTooltip();
+    if(window._lastR&&activeView==='exposure-lab') drawExposureLab(window._lastR);
+  });
+});
 
 // ---------- Data loading + auto-refresh ----------
 // Reloads cboe_data.json and refreshes the display.
@@ -3190,6 +3128,8 @@ let _refreshTimer=null, _timerUiTimer=null, _firstLoad=true, _loadingData=false;
 let _lastFileLoadedAt=null, _lastLoadOk=false, _lastTripityRetryAt=0;
 let _lastDataSource='Waiting';
 let _matrixChart=null, _matrixCandleSeries=null, _matrixPriceLines=[], _matrixCandles=[], _matrixCandlesLoadedAt=0;
+let _marketPriceChart=null,_marketCandleSeries=null,_marketPriceLines=[],_marketChartElement=null,_marketResizeObserver=null;
+let _marketPriceSymbol='',_marketCandlesBySymbol=new Map();
 const MATRIX_SPX_QUOTE_URL = 'https://api.trytripity.site/api/matrix/spx-quote';
 const MATRIX_CBOE_DATA_URL = 'https://api.trytripity.site/api/matrix/cboe-data';
 const MATRIX_CANDLES_URL = 'https://api.trytripity.site/api/matrix/candles';
@@ -3201,17 +3141,8 @@ const MARKET_FRESHNESS_END_MIN = 16 * 60 + 30;
 function dataUrl(){
   return 'cboe_data.json?t=' + Date.now();
 }
-function openDataUrl(){
-  return 'cboe_open_data.json?t=' + Date.now();
-}
 function repoDataUrl(branch){
   return `${MATRIX_REPO_RAW_BASE}/${branch}/cboe_data.json?t=${Date.now()}`;
-}
-function repoOpenDataUrl(branch){
-  return `${MATRIX_REPO_RAW_BASE}/${branch}/cboe_open_data.json?t=${Date.now()}`;
-}
-function exposureHistoryUrl(path){
-  return `${MATRIX_REPO_RAW_BASE}/data/exposure_history/${path}?t=${Date.now()}`;
 }
 function isGithubPagesHost(){
   return location.hostname.endsWith('github.io');
@@ -3238,9 +3169,6 @@ function fetchMatrixSpXQuote(){
 function validCboeData(d){
   return d && d.SPX && Array.isArray(d.SPX.opts) && Number.isFinite(Number(d.SPX.spot));
 }
-function validOpenCboeData(d){
-  return d && d.session_date && validCboeData(d.data);
-}
 function fetchCboeDataWithSource(url, sourceName){
   return fetchLiveData(url).then(d=>validCboeData(d) ? {data:d, source:sourceName} : null);
 }
@@ -3260,116 +3188,6 @@ function fetchFallbackCboeData(){
     (chain,[url,source])=>chain.then(result=>result || fetchCboeDataWithSource(url, source)),
     Promise.resolve(null)
   );
-}
-function fetchOpenCboeData(){
-  const sources = isGithubPagesHost()
-    ? [repoOpenDataUrl('data'), openDataUrl(), repoOpenDataUrl('main')]
-    : [openDataUrl(), repoOpenDataUrl('data'), repoOpenDataUrl('main')];
-  return sources.reduce(
-    (chain,url)=>chain.then(result=>result || fetchLiveData(url).then(d=>validOpenCboeData(d) ? d : null)),
-    Promise.resolve(null)
-  );
-}
-function renderHistoryDays(){
-  const select=byId('historyDate');
-  if(!select) return;
-  const current=select.value || 'live';
-  const days=(EXPOSURE_HISTORY_INDEX?.days || []).slice().reverse();
-  select.innerHTML='<option value="live">Live</option>'+days.map(day=>`<option value="${day}">${day}</option>`).join('');
-  select.value=days.includes(current) ? current : 'live';
-}
-function loadExposureHistoryIndex(){
-  return fetchLiveData(exposureHistoryUrl('index.json')).then(data=>{
-    if(data && Array.isArray(data.days)) EXPOSURE_HISTORY_INDEX=data;
-    renderHistoryDays();
-  });
-}
-function historySnapshotTimeLabel(snapshot){
-  const ms=dataAsofToMs(snapshot?.asof);
-  return ms ? new Date(ms).toLocaleTimeString('en-US',{timeZone:'America/New_York',hour:'2-digit',minute:'2-digit'})+' ET' : (snapshot?.asof || '--');
-}
-function updateHistoryTimelineLabel(){
-  const timeline=byId('historyTimeline');
-  const snapshots=EXPOSURE_HISTORY_DAY?.snapshots || [];
-  const index=Math.max(0,Math.min(snapshots.length-1,Number(timeline?.value)||0));
-  const label=byId('historyTimeLabel');
-  if(label) label.textContent=snapshots.length ? historySnapshotTimeLabel(snapshots[index]) : 'Now';
-  const prev=byId('historyPrev'); if(prev) prev.disabled=!snapshots.length || index<=0;
-  const next=byId('historyNext'); if(next) next.disabled=!snapshots.length || index>=snapshots.length-1;
-}
-function renderHistoryTimes(){
-  const timeline=byId('historyTimeline');
-  const note=byId('historyNote');
-  const snapshots=EXPOSURE_HISTORY_DAY?.snapshots || [];
-  if(!timeline) return;
-  timeline.min='0';
-  timeline.max=String(Math.max(0,snapshots.length-1));
-  timeline.value=String(Math.max(0,snapshots.length-1));
-  timeline.disabled=!snapshots.length;
-  const start=byId('historyStartTime'); if(start) start.textContent=snapshots.length ? historySnapshotTimeLabel(snapshots[0]).replace(' ET','') : '--';
-  const end=byId('historyEndTime'); if(end) end.textContent=snapshots.length ? historySnapshotTimeLabel(snapshots[snapshots.length-1]).replace(' ET','') : '--';
-  updateHistoryTimelineLabel();
-  if(note){
-    note.textContent=snapshots.length ? `${snapshots.length} snapshots · drag the timeline · all expirations · 5 min` : 'No snapshots for this symbol';
-    note.classList.toggle('active',!!snapshots.length);
-  }
-}
-function stepHistoryTimeline(delta){
-  const timeline=byId('historyTimeline');
-  if(!timeline || timeline.disabled) return;
-  timeline.value=String(Math.max(Number(timeline.min),Math.min(Number(timeline.max),Number(timeline.value)+delta)));
-  updateHistoryTimelineLabel();
-  run();
-}
-function loadExposureHistoryDay(){
-  const day=byId('historyDate')?.value;
-  const symbol=byId('symbol')?.value;
-  if(!day || day==='live'){
-    EXPOSURE_HISTORY_DAY=null;
-    const timeline=byId('historyTimeline'); if(timeline){timeline.min='0';timeline.max='0';timeline.value='0';timeline.disabled=true;}
-    ['historyPrev','historyNext'].forEach(id=>{const button=byId(id);if(button)button.disabled=true;});
-    const label=byId('historyTimeLabel'); if(label) label.textContent='Now';
-    const start=byId('historyStartTime'); if(start) start.textContent='--';
-    const end=byId('historyEndTime'); if(end) end.textContent='--';
-    const note=byId('historyNote'); if(note){note.textContent='Live expirations';note.classList.remove('active');}
-    document.querySelectorAll('#expirationPicker input').forEach(input=>input.disabled=false);
-    run();
-    return Promise.resolve();
-  }
-  return fetchLiveData(exposureHistoryUrl(`${day}/${symbol}.json`)).then(data=>{
-    EXPOSURE_HISTORY_DAY=data && Array.isArray(data.snapshots) ? data : null;
-    document.querySelectorAll('#expirationPicker input').forEach(input=>input.disabled=!!EXPOSURE_HISTORY_DAY);
-    renderHistoryTimes();
-    run();
-  });
-}
-function selectedHistorySnapshot(){
-  const snapshots=EXPOSURE_HISTORY_DAY?.snapshots || [];
-  const index=Number(byId('historyTimeline')?.value);
-  return snapshots[Number.isInteger(index) ? index : snapshots.length-1] || null;
-}
-function applyHistorySnapshot(R,snapshot,firstSnapshot){
-  if(!snapshot) return R;
-  const unpack=row=>({strike:row[0],callGex:row[1],putGex:row[2],netGex:row[1]+row[2],
-    callDex:row[3],putDex:row[4],netDex:row[3]+row[4],callVex:0,putVex:0,netVex:0,
-    callCharm:0,putCharm:0,netCharm:0,callOI:0,putOI:0,callVol:0,putVol:0,totalOI:0,totalVol:0,powerZone:0});
-  const strikes=(snapshot.rows || []).map(unpack);
-  const baseline=new Map((firstSnapshot?.rows || []).map(row=>[String(row[0]),unpack(row)]));
-  const rows=strikes.map(s=>{
-    const start=baseline.get(String(s.strike)) || {netGex:0,netDex:0};
-    return {...s,baselineNetGex:start.netGex,netGexChange:s.netGex-start.netGex,
-      baselineNetDex:start.netDex,netDexChange:s.netDex-start.netDex};
-  });
-  const exposureChange={source:'history',sessionDate:EXPOSURE_HISTORY_DAY?.date,createdAt:dataAsofToMs(firstSnapshot?.asof),
-    totalChange:rows.reduce((sum,s)=>sum+s.netGexChange,0),totalDexChange:rows.reduce((sum,s)=>sum+s.netDexChange,0),rows};
-  const historical={...R,spot:Number(snapshot.spot),asof:snapshot.asof,fetchTs:dataAsofToMs(snapshot.asof),strikes,
-    totalCallGex:strikes.reduce((sum,s)=>sum+s.callGex,0),totalPutGex:strikes.reduce((sum,s)=>sum+s.putGex,0),
-    totalCallDex:strikes.reduce((sum,s)=>sum+s.callDex,0),totalPutDex:strikes.reduce((sum,s)=>sum+s.putDex,0),live:true,historical:true};
-  historical.totalGex=historical.totalCallGex+historical.totalPutGex;
-  historical.totalDex=historical.totalCallDex+historical.totalPutDex;
-  historical.netGexChangeR={...historical,netGexChange:exposureChange};
-  historical.netDexChangeR={...historical,netGexChange:exposureChange};
-  return historical;
 }
 function getRefreshSeconds(){
   return Math.max(0,+document.getElementById('autorefresh').value || 0);
@@ -3481,9 +3299,6 @@ function loadData(thenRun){
       _lastLoadOk=!!result || validCboeData(REAL);
       if(result){ REAL=result.data; _lastDataSource=result.source; _lastFileLoadedAt=Date.now(); }
     })
-    .then(()=>fetchOpenCboeData().then(openData=>{
-      if(openData) OPEN_REAL=openData;
-    }))
     .then(()=>fetchMatrixSpXQuote())
     .finally(()=>{
       if(_firstLoad){
@@ -3516,4 +3331,4 @@ document.getElementById('source').value = 'live';
 document.getElementById('autorefresh').value = '30';
 document.getElementById('forceTripityRefresh').addEventListener('click',()=>loadData(true));
 _timerUiTimer=setInterval(updateDataTimer,1000);
-loadData(true).then(loadExposureHistoryIndex).then(setupAutoRefresh);
+loadData(true).then(setupAutoRefresh);
