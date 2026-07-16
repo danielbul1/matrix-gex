@@ -13,14 +13,14 @@
   };
 </script>
 <script src="https://unpkg.com/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js" onerror="window.__loadMatrixChartLib && window.__loadMatrixChartLib()"></script>
-<link rel="stylesheet" href="assets/dashboard.css?v=20260716-market-structure3">
+<link rel="stylesheet" href="assets/dashboard.css?v=20260716-avg-power1">
 </head>
 <body>
 <header>
   <nav class="side-nav">
-    <a href="#" class="active" data-view="market-structure">Market Structure</a>
-    <a href="#" data-view="gex">GEX</a>
+    <a href="#" class="active" data-view="gex">GEX</a>
     <a href="#" data-view="dex">DEX</a>
+    <a href="#" data-view="market-structure">Market Structure</a>
     <a href="#" data-view="exposure-lab">Exposure Lab</a>
     <a href="#" data-view="matrix-gex">Matrix GEX</a>
     <a href="#" data-view="shock-engine">Shock Engine</a>
@@ -105,7 +105,7 @@
 <div class="stale-data-banner" id="staleDataBanner" role="status" aria-live="polite" hidden></div>
 
 <main>
-  <section class="app-view" id="view-gex">
+  <section class="app-view active" id="view-gex">
     <div class="params">
       <div class="range-control" role="group" aria-label="Strike display range">
         <span class="range-label">Range</span>
@@ -122,6 +122,7 @@
       <button class="pbtn"        data-metric="call_vol" style="--c:#2f73ff">Call Volume</button>
       <button class="pbtn"        data-metric="put_vol"  style="--c:#ff8a3d">Put Volume</button>
       <button class="pbtn"        data-metric="power"    style="--c:#ffc107">Power Zone</button>
+      <button class="pbtn active" data-metric="avg_power" style="--c:#00cdb7">AVG Power Zone</button>
     </div>
 
     <div class="card chartcard">
@@ -166,7 +167,7 @@
     </div>
   </section>
 
-  <section class="app-view active" id="view-market-structure">
+  <section class="app-view" id="view-market-structure">
     <div class="market-structure-head">
       <div>
         <span class="command-panel-tag">Live structure</span>
@@ -494,6 +495,6 @@
   Synthetic data is generated in-browser when live CBOE data is unavailable. Original demo: gex.kctradings.com
 </footer>
 
-<script src="assets/dashboard.js?v=20260716-market-structure3"></script>
+<script src="assets/dashboard.js?v=20260716-avg-power1"></script>
 </body>
 </html>

@@ -1829,7 +1829,7 @@ function renderImpl(R){
 
 // ---------- Metric definitions (Quant-Power style param buttons) ----------
 // net_gex = bars. Other metrics are stacked area layers.
-let ACTIVE = new Set(["net_gex"]);
+let ACTIVE = new Set(["net_gex","avg_power"]);
 let DISPLAY_SIGMA = 2;
 const METRICS = {
   net_gex:  {label:"Net GEX",     color:"#22b8ff", kind:"bar",  signed:true,  val:s=>s.netGex},
@@ -1840,6 +1840,7 @@ const METRICS = {
   call_vol: {label:"Call Volume", color:"#2f73ff", kind:"area", val:s=>s.callVol},
   put_vol:  {label:"Put Volume",  color:"#ff8a3d", kind:"area", val:s=>s.putVol},
   power:    {label:"Power Zone",  color:"#fff200", kind:"area", val:s=>s.powerZone || 0},
+  avg_power:{label:"AVG Power Zone",color:"#00cdb7",kind:"reference",val:s=>s.powerZone || 0},
 };
 function hexA(hex,a){const n=parseInt(hex.slice(1),16);return `rgba(${n>>16&255},${n>>8&255},${n&255},${a})`;}
 
@@ -1868,6 +1869,13 @@ function visibleStrikeData(R){
   const data=visibleStrikes.sort((a,b)=>a.strike-b.strike);
   return data;
 }
+function avgPowerZoneStrike(data){
+  const weighted=(data||[]).reduce((acc,row)=>{
+    const weight=Math.max(0,Number(row.powerZone)||0);
+    acc.weight+=weight;acc.total+=(Number(row.strike)||0)*weight;return acc;
+  },{weight:0,total:0});
+  return weighted.weight>0?weighted.total/weighted.weight:null;
+}
 function drawChart(R,chartId='gexChart'){
   const targets=chartTargets(chartId);
   const isDex=chartId==='dexChart';
@@ -1885,7 +1893,7 @@ function drawChart(R,chartId='gexChart'){
   if(!data.length) return;
 
   const order = Object.keys(METRICS).filter(m=>m!=='net_dex');
-  const active = isDex ? ['net_dex'] : order.filter(m=>ACTIVE.has(m));
+  const active = isDex ? ['net_dex',...(ACTIVE.has('avg_power')?['avg_power']:[])] : order.filter(m=>ACTIVE.has(m));
   const hasBar = isDex || ACTIVE.has("net_gex");
   const barMetric = isDex ? METRICS.net_dex : METRICS.net_gex;
   const areas = active.filter(m=>METRICS[m].kind==="area");
@@ -1898,7 +1906,9 @@ function drawChart(R,chartId='gexChart'){
     const M=METRICS[m];
     const sw = M.kind==="bar"
       ? `<span class="sq" style="background:${M.color}"></span>`
-      : `<span class="sq" style="background:${hexA(M.color,.5)};border-top:2px solid ${M.color}"></span>`;
+      : M.kind==="reference"
+        ? `<span class="sq" style="height:2px;background:${M.color};border-radius:0"></span>`
+        : `<span class="sq" style="background:${hexA(M.color,.5)};border-top:2px solid ${M.color}"></span>`;
     return sw+M.label;
   }).join('&nbsp;&nbsp;') || '<span style="color:#7d8799">Choose a parameter</span>';
 
@@ -2006,6 +2016,21 @@ function drawChart(R,chartId='gexChart'){
   const alignRight = px>W-labelWidth-12;
   ctx.textAlign = alignRight?"right":"left";
   ctx.fillText(priceLabel, px+(alignRight?-6:6), padT-9);
+
+  // ----- weighted average Power Zone strike -----
+  if(active.includes('avg_power')){
+    const avgStrike=avgPowerZoneStrike(data);
+    if(Number.isFinite(avgStrike)){
+      const avgX=xAt(avgStrike),color=METRICS.avg_power.color;
+      ctx.save();ctx.strokeStyle=color;ctx.lineWidth=2;ctx.setLineDash([7,5]);
+      ctx.beginPath();ctx.moveTo(avgX,padT-6);ctx.lineTo(avgX,bottom);ctx.stroke();ctx.restore();
+      const avgLabel=`AVG Power Zone: ${fmtPrice(avgStrike)}`;
+      ctx.font=(mobile?"bold 10px Segoe UI":"bold 12px Segoe UI");
+      const avgWidth=ctx.measureText(avgLabel).width,avgRight=avgX>W-avgWidth-12;
+      ctx.fillStyle=color;ctx.textAlign=avgRight?'right':'left';ctx.textBaseline='alphabetic';
+      ctx.fillText(avgLabel,avgX+(avgRight?-6:6),padT+12);
+    }
+  }
 
   // ----- axis titles -----
   if(hasBar){ ctx.save(); ctx.translate(14,padT+plotH/2); ctx.rotate(-Math.PI/2);
@@ -2150,7 +2175,7 @@ function showChartTooltip(ev){
   const s=hit.s;
   const R=window._lastR;
   const isDex=cv.id==='dexChart';
-  const active = isDex ? ['net_dex'] : Object.keys(METRICS).filter(m=>m!=='net_dex' && ACTIVE.has(m));
+  const active = isDex ? ['net_dex',...(ACTIVE.has('avg_power')?['avg_power']:[])] : Object.keys(METRICS).filter(m=>m!=='net_dex' && ACTIVE.has(m));
   const row = (label,value,cls='') => `<div class="tt-row"><span>${label}</span><span class="${cls}">${value}</span></div>`;
   const metricRows = active.map(m=>{
     if(m==='net_gex') return row('Net GEX',fmtNum(s.netGex),s.netGex>=0?'pos':'neg');
@@ -2165,6 +2190,7 @@ function showChartTooltip(ev){
     if(m==='call_vol') return row('Call Volume',fmtNum(s.callVol),'pos');
     if(m==='put_vol') return row('Put Volume',fmtNum(s.putVol),'neg');
     if(m==='power') return row('Power Zone',fmtNum(s.powerZone || 0));
+    if(m==='avg_power') return row('AVG Power Zone',fmtPrice(avgPowerZoneStrike(visibleStrikeData(R))));
     return '';
   }).join('');
   const linkedStrike = linkedMarketPrice(s.strike,R);
@@ -2906,7 +2932,7 @@ function hideEdgeTooltip(){
 }
 
 // ---------- Wiring ----------
-let activeView = 'market-structure';
+let activeView = 'gex';
 const selectedExpirationsByView = {gex:null,dex:null,'market-structure':null,'exposure-lab':null,'matrix-gex':null,'shock-engine':null,'max-pain':null};
 function currentExpirationValues(){
   return [...document.querySelectorAll('#expirationPicker input:checked')].map(input=>input.value);
