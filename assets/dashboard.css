@@ -398,8 +398,7 @@
   .market-symbol-row{margin:10px 0 -3px}.market-symbol-row .symlabel{margin-left:46px}
   .market-price-panel{padding-bottom:16px}
   .market-price-stage{position:relative;height:560px;overflow:hidden;background:#191919;border-radius:6px}
-  .market-price-chart{position:absolute;inset:0;width:100%;height:100%}
-  .market-power-profile{position:absolute;inset:0;z-index:3;width:100%;height:100%;pointer-events:none}
+  .market-price-canvas{position:absolute;inset:0;z-index:1;width:100%;height:100%;display:block}
   .market-watermark{z-index:2;font-size:62px;opacity:.09;pointer-events:none}
   .market-price-tooltip{position:absolute;z-index:6;display:none;gap:8px;flex-wrap:wrap;max-width:245px;padding:9px 10px;
                         background:rgba(18,18,18,.95);border:1px solid #555;border-radius:6px;color:#d9dde0;

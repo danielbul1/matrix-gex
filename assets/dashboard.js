@@ -2458,23 +2458,21 @@ function renderMatrixPriceChart(R){
 }
 
 // ---------- Market Structure: GEX followed by intraday candles ----------
-function fetchMarketStructureCandles(symbol,spot){
+function fetchMarketStructureCandles(symbol){
   const safeSymbol=encodeURIComponent(String(symbol || 'SPY').toUpperCase());
-  return fetchLiveData(`${MATRIX_CANDLES_URL}?symbol=${safeSymbol}&interval=5m&range=1d&t=${Date.now()}`)
-    .then(d=>{
-      const direct=d && d.ok && Array.isArray(d.candles) ? d.candles : [];
-      if(direct.length || symbol!=='SPX') return {raw:direct,source:symbol,proxy:false};
-      return fetchLiveData(`${MATRIX_CANDLES_URL}?symbol=SPY&interval=5m&range=1d&t=${Date.now()}`)
-        .then(spy=>{
-          const raw=spy && spy.ok && Array.isArray(spy.candles) ? spy.candles : [];
-          const lastClose=Number(raw[raw.length-1]?.close);
-          const ratio=Number.isFinite(lastClose)&&lastClose>0&&Number.isFinite(Number(spot)) ? Number(spot)/lastClose : SPX_SPY_RATIO;
-          return {raw:raw.map(c=>({
-            ...c,open:Number(c.open)*ratio,high:Number(c.high)*ratio,
-            low:Number(c.low)*ratio,close:Number(c.close)*ratio,
-          })),source:'SPY',proxy:true,ratio};
-        });
+  const feed=database=>{
+    const record=database?.[symbol];
+    return Array.isArray(record?.candles)&&record.candles.length
+      ? {raw:record.candles,source:record.source||'Market data',asof:record.asof,proxy:false} : null;
+  };
+  return fetchLiveData(`candles_data.json?t=${Date.now()}`).then(local=>{
+    const bundled=feed(local);if(bundled)return bundled;
+    return fetchLiveData(`${MATRIX_CANDLES_DATA_URL}?t=${Date.now()}`).then(remote=>{
+      const published=feed(remote);if(published)return published;
+      return fetchLiveData(`${MATRIX_CANDLES_URL}?symbol=${safeSymbol}&interval=5m&range=1d&t=${Date.now()}`)
+        .then(d=>({raw:d&&d.ok&&Array.isArray(d.candles)?d.candles:[],source:'Tripity',asof:d?.asof,proxy:false}));
     });
+  });
 }
 function setMarketStructureStatus(text,state='loading'){
   const el=document.getElementById('marketStructureStatus');
@@ -2497,10 +2495,10 @@ function marketStructureLevels(R){
     {price:R.putWall,label:'Put Wall',color:'#ff2a17',width:2},
     {price:callVol?.strike,label:'Call Vol Strike',color:'#147eea',width:1},
     {price:putVol?.strike,label:'Put Vol Strike',color:'#ff8a3d',width:1},
-    {price:power?.strike,label:'Quant Power',color:'#ffe600',width:2},
+    {price:power?.strike,label:'Matrix Power',color:'#ffe600',width:2},
     {price:ag?.strike,label:'AG Strike',color:'#b26cf2',width:1},
     {price:R.flip,label:'Gamma Flip',color:'#21c75a',width:2,dashed:true},
-  ].filter(level=>Number.isFinite(Number(level.price)));
+  ].filter(level=>Number.isFinite(level.price) && level.price>0);
   const byPrice=new Map();
   raw.forEach(level=>{
     const key=Number(level.price).toFixed(6);
@@ -2607,23 +2605,76 @@ function renderMarketLevelLegend(levels){
   if(!host) return;
   host.innerHTML=levels.map(level=>`<span><i style="background:${level.color}"></i>${esc(level.label)} ${fmtPrice(level.price)}</span>`).join('');
 }
+function drawMarketPriceCanvas(R,candles,meta={}){
+  const cv=document.getElementById('marketPriceCanvas');
+  if(!cv || !candles.length) return;
+  const stage=cv.parentElement,W=stage.clientWidth,H=stage.clientHeight,dpr=window.devicePixelRatio||1;
+  cv.width=Math.max(1,W*dpr);cv.height=Math.max(1,H*dpr);cv.style.width=W+'px';cv.style.height=H+'px';
+  const ctx=cv.getContext('2d');ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,W,H);
+  const mobile=W<700,padL=mobile?48:68,padR=mobile?58:154,padT=28,padB=45;
+  const plotW=W-padL-padR,plotH=H-padT-padB;
+  const levels=marketStructureLevels(R);
+  const profile=visibleStrikeData(R).map(s=>({strike:Number(s.strike),power:Number(s.powerZone)||0}));
+  const prices=[...candles.flatMap(c=>[c.low,c.high]),...levels.map(l=>l.price),...profile.map(p=>p.strike)].filter(Number.isFinite);
+  let minPrice=Math.min(...prices),maxPrice=Math.max(...prices);
+  const pricePad=Math.max((maxPrice-minPrice)*.045,R.spot*.0015,1);minPrice-=pricePad;maxPrice+=pricePad;
+  const y=price=>padT+(maxPrice-price)/(maxPrice-minPrice)*plotH;
+  const tMin=candles[0].time,tMax=candles[candles.length-1].time||tMin+1;
+  const x=time=>padL+(time-tMin)/Math.max(1,tMax-tMin)*plotW;
+  ctx.fillStyle='#191919';ctx.fillRect(0,0,W,H);
+  ctx.font=(mobile?'700 9px':'700 10px')+' Segoe UI';ctx.textBaseline='middle';
+  for(let i=0;i<=6;i++){
+    const yy=padT+plotH*i/6,price=maxPrice-(maxPrice-minPrice)*i/6;
+    ctx.strokeStyle='rgba(255,255,255,.075)';ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(padL,yy);ctx.lineTo(W-padR,yy);ctx.stroke();
+    ctx.fillStyle='#c8cdd1';ctx.textAlign='right';ctx.fillText(fmtPrice(price),padL-7,yy);
+  }
+  for(let i=0;i<=7;i++){
+    const time=tMin+(tMax-tMin)*i/7,xx=x(time);
+    ctx.strokeStyle='rgba(255,255,255,.05)';ctx.beginPath();ctx.moveTo(xx,padT);ctx.lineTo(xx,H-padB);ctx.stroke();
+    const label=new Date(time*1000).toLocaleTimeString('en-US',{timeZone:'America/New_York',hour:'2-digit',minute:'2-digit',hour12:false});
+    ctx.fillStyle='#b9c0c5';ctx.textAlign='center';ctx.textBaseline='top';ctx.fillText(label,xx,H-padB+9);
+  }
+  const maxPower=Math.max(...profile.map(p=>p.power),1),profileWidth=Math.min(250,Math.max(100,plotW*.19));
+  const profilePoints=profile.map(p=>({x:padL+(p.power/maxPower)*profileWidth,y:y(p.strike)})).filter(p=>p.y>=padT&&p.y<=H-padB);
+  if(profilePoints.length>1){
+    ctx.beginPath();ctx.moveTo(padL,profilePoints[0].y);profilePoints.forEach(p=>ctx.lineTo(p.x,p.y));ctx.lineTo(padL,profilePoints[profilePoints.length-1].y);ctx.closePath();
+    const gradient=ctx.createLinearGradient(padL,0,padL+profileWidth,0);gradient.addColorStop(0,'rgba(255,230,0,.31)');gradient.addColorStop(1,'rgba(255,230,0,.07)');
+    ctx.fillStyle=gradient;ctx.fill();ctx.beginPath();profilePoints.forEach((p,i)=>i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y));ctx.strokeStyle='#ffe600';ctx.lineWidth=1.8;ctx.stroke();
+  }
+  levels.forEach(level=>{
+    const yy=y(level.price);if(yy<padT||yy>H-padB)return;
+    ctx.save();ctx.strokeStyle=level.color;ctx.lineWidth=level.width;ctx.setLineDash(level.dashed?[8,5]:[]);ctx.beginPath();ctx.moveTo(padL,yy);ctx.lineTo(W-padR,yy);ctx.stroke();ctx.restore();
+    if(!mobile){
+      ctx.font='800 10px Segoe UI';const label=`${level.label} ${fmtPrice(level.price)}`;const tw=ctx.measureText(label).width;
+      ctx.fillStyle='rgba(25,25,25,.92)';ctx.fillRect(W-padR+5,yy-8,Math.min(padR-8,tw+8),16);ctx.fillStyle=level.color;ctx.textAlign='left';ctx.textBaseline='middle';ctx.fillText(label,W-padR+9,yy);
+    }
+  });
+  const candleSlot=plotW/Math.max(candles.length,1),bodyW=Math.max(2,Math.min(9,candleSlot*.62));
+  candles.forEach(c=>{
+    const xx=x(c.time),color=c.close>=c.open?'#26a69a':'#ef5350';ctx.strokeStyle=color;ctx.lineWidth=1;
+    ctx.beginPath();ctx.moveTo(xx,y(c.high));ctx.lineTo(xx,y(c.low));ctx.stroke();
+    const top=Math.min(y(c.open),y(c.close)),height=Math.max(1.5,Math.abs(y(c.close)-y(c.open)));ctx.fillStyle=color;ctx.fillRect(xx-bodyW/2,top,bodyW,height);
+  });
+  const last=candles[candles.length-1],lastY=y(last.close);ctx.save();ctx.strokeStyle='rgba(255,255,255,.55)';ctx.setLineDash([3,4]);ctx.beginPath();ctx.moveTo(padL,lastY);ctx.lineTo(W-padR,lastY);ctx.stroke();ctx.restore();
+  ctx.fillStyle='#ffe600';ctx.font='900 10px Segoe UI';ctx.textAlign='left';ctx.textBaseline='top';ctx.fillText('POWER ZONE',padL+5,padT+5);
+  ctx.fillStyle='#d9dde0';ctx.textAlign='center';ctx.fillText('Time',padL+plotW/2,H-13);ctx.save();ctx.translate(13,padT+plotH/2);ctx.rotate(-Math.PI/2);ctx.fillText('Price',0,0);ctx.restore();
+  _marketCanvasHit={cv,candles,padL,padR,padT,padB,plotW,plotH,symbol:R.symbol,meta};
+}
+function showMarketCanvasTooltip(ev){
+  const h=_marketCanvasHit,tt=document.getElementById('marketPriceTooltip');if(!h||!tt)return;
+  const rect=h.cv.getBoundingClientRect(),mx=(ev.touches?.[0]?.clientX??ev.clientX)-rect.left,my=(ev.touches?.[0]?.clientY??ev.clientY)-rect.top;
+  if(mx<h.padL||mx>rect.width-h.padR||my<h.padT||my>rect.height-h.padB){tt.style.display='none';return;}
+  const index=Math.max(0,Math.min(h.candles.length-1,Math.round((mx-h.padL)/h.plotW*(h.candles.length-1)))),c=h.candles[index];
+  const time=new Date(c.time*1000).toLocaleString('en-US',{timeZone:'America/New_York',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
+  tt.innerHTML=`<strong>${esc(h.symbol)} · ${time}</strong><span>O ${fmtPrice(c.open)}</span><span>H ${fmtPrice(c.high)}</span><span>L ${fmtPrice(c.low)}</span><span>C ${fmtPrice(c.close)}</span>`;
+  tt.style.display='flex';tt.style.left=Math.max(8,Math.min(mx+14,rect.width-tt.offsetWidth-8))+'px';tt.style.top=Math.max(8,Math.min(my+14,rect.height-tt.offsetHeight-8))+'px';
+}
+function hideMarketCanvasTooltip(){const tt=document.getElementById('marketPriceTooltip');if(tt)tt.style.display='none';}
 function renderMarketPriceChart(R){
-  const kit=ensureMarketPriceChart();
-  if(!kit){setTimeout(()=>activeView==='market-structure'&&renderMarketPriceChart(R),450);return;}
-  const {chart,series}=kit;
   const symbol=String(R.symbol||'SPY').toUpperCase();
   _marketPriceSymbol=symbol;
   document.getElementById('marketPriceTitle').textContent=`${symbol} Price + Options Power Profile`;
   const levels=marketStructureLevels(R);
-  clearMarketPriceLines();
-  levels.forEach(level=>{
-    const line=series.createPriceLine({
-      price:level.price,color:level.color,lineWidth:level.width,
-      lineStyle:level.dashed?(LightweightCharts.LineStyle.Dashed||2):LightweightCharts.LineStyle.Solid,
-      axisLabelVisible:true,title:`${level.label} ${fmtPrice(level.price)}`,
-    });
-    _marketPriceLines.push(line);
-  });
   renderMarketLevelLegend(levels);
   const cached=_marketCandlesBySymbol.get(symbol);
   const needsLoad=!cached || Date.now()-cached.loadedAt>60000;
@@ -2633,24 +2684,21 @@ function renderMarketPriceChart(R){
       setMarketStructureStatus('Options live · candles unavailable','warning');
       return;
     }
-    series.setData(candles);chart.timeScale().fitContent();
-    document.getElementById('marketPriceNote').textContent=meta.proxy
-      ? `SPX proxy candles converted from SPY at ${Number(meta.ratio).toFixed(4)}×. Options levels remain native SPX.`
-      : `${symbol} 5-minute candles. The yellow profile and colored levels come from the selected option expirations.`;
-    setMarketStructureStatus(`${symbol}${meta.proxy?' proxy':''} · ${candles.length} candles · ${levels.length} levels`,'ready');
-    setTimeout(()=>drawMarketPowerProfile(R),80);
+    drawMarketPriceCanvas(R,candles,meta);
+    document.getElementById('marketPriceNote').textContent=`${symbol} 5-minute OHLC · ${meta.source||'market feed'}${meta.asof?' · as of '+new Date(meta.asof).toLocaleString('en-US'):''}. Yellow profile and colored levels use the selected option expirations.`;
+    setMarketStructureStatus(`${symbol} · ${candles.length} candles · ${levels.length} levels`,'ready');
   };
   if(!needsLoad){draw(cached.candles,cached);return;}
   setMarketStructureStatus(`Loading ${symbol} candles…`);
   document.getElementById('marketPriceNote').textContent=`Loading ${symbol} intraday candles…`;
-  fetchMarketStructureCandles(symbol,R.spot).then(feed=>{
+  fetchMarketStructureCandles(symbol).then(feed=>{
     const raw=feed.raw || [];
     const byTime=new Map();
     raw.map(c=>({time:Number(c.time),open:Number(c.open),high:Number(c.high),low:Number(c.low),close:Number(c.close)}))
       .filter(c=>Number.isFinite(c.time)&&Number.isFinite(c.open)&&Number.isFinite(c.high)&&Number.isFinite(c.low)&&Number.isFinite(c.close))
       .forEach(c=>byTime.set(c.time,c));
     const candles=[...byTime.values()].sort((a,b)=>a.time-b.time);
-    _marketCandlesBySymbol.set(symbol,{candles,loadedAt:Date.now(),proxy:feed.proxy,source:feed.source,ratio:feed.ratio});
+    _marketCandlesBySymbol.set(symbol,{candles,loadedAt:Date.now(),source:feed.source,asof:feed.asof});
     draw(candles,feed);
   }).catch(err=>{
     document.getElementById('marketPriceNote').textContent=`Could not load ${symbol} candles: ${err?.message || 'request failed'}.`;
@@ -3021,6 +3069,11 @@ bind('marketGexChart','mouseleave',hideChartTooltip);
 bind('marketGexChart','touchstart',showChartTooltip,{passive:true});
 bind('marketGexChart','touchmove',showChartTooltip,{passive:true});
 bind('marketGexChart','touchend',()=>setTimeout(hideChartTooltip,1200),{passive:true});
+bind('marketPriceCanvas','mousemove',showMarketCanvasTooltip);
+bind('marketPriceCanvas','mouseleave',hideMarketCanvasTooltip);
+bind('marketPriceCanvas','touchstart',showMarketCanvasTooltip,{passive:true});
+bind('marketPriceCanvas','touchmove',showMarketCanvasTooltip,{passive:true});
+bind('marketPriceCanvas','touchend',()=>setTimeout(hideMarketCanvasTooltip,1200),{passive:true});
 bind('matrixGexChart','mousemove',showChartTooltip);
 bind('matrixGexChart','mouseleave',hideChartTooltip);
 bind('matrixGexChart','touchstart',showChartTooltip,{passive:true});
@@ -3129,10 +3182,11 @@ let _lastFileLoadedAt=null, _lastLoadOk=false, _lastTripityRetryAt=0;
 let _lastDataSource='Waiting';
 let _matrixChart=null, _matrixCandleSeries=null, _matrixPriceLines=[], _matrixCandles=[], _matrixCandlesLoadedAt=0;
 let _marketPriceChart=null,_marketCandleSeries=null,_marketPriceLines=[],_marketChartElement=null,_marketResizeObserver=null;
-let _marketPriceSymbol='',_marketCandlesBySymbol=new Map();
+let _marketPriceSymbol='',_marketCandlesBySymbol=new Map(),_marketCanvasHit=null;
 const MATRIX_SPX_QUOTE_URL = 'https://api.trytripity.site/api/matrix/spx-quote';
 const MATRIX_CBOE_DATA_URL = 'https://api.trytripity.site/api/matrix/cboe-data';
 const MATRIX_CANDLES_URL = 'https://api.trytripity.site/api/matrix/candles';
+const MATRIX_CANDLES_DATA_URL = 'https://raw.githubusercontent.com/danielbul1/matrix-gex/data/candles_data.json';
 const MATRIX_REPO_RAW_BASE = 'https://raw.githubusercontent.com/danielbul1/matrix-gex';
 const TRIPITY_RETRY_MS = 15000;
 const MARKET_FRESHNESS_MAX_MS = 75 * 60 * 1000;

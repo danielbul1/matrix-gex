@@ -13,7 +13,7 @@
   };
 </script>
 <script src="https://unpkg.com/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js" onerror="window.__loadMatrixChartLib && window.__loadMatrixChartLib()"></script>
-<link rel="stylesheet" href="assets/dashboard.css?v=20260716-market-structure1">
+<link rel="stylesheet" href="assets/dashboard.css?v=20260716-market-structure2">
 </head>
 <body>
 <header>
@@ -208,8 +208,7 @@
           <div class="market-level-legend" id="marketLevelLegend"></div>
         </div>
         <div class="market-price-stage">
-          <div class="market-price-chart" id="marketPriceChart"></div>
-          <canvas class="market-power-profile" id="marketPowerProfile"></canvas>
+          <canvas class="market-price-canvas" id="marketPriceCanvas"></canvas>
           <div class="market-price-tooltip" id="marketPriceTooltip"></div>
           <div class="watermark market-watermark">Matrix</div>
         </div>
@@ -495,6 +494,6 @@
   Synthetic data is generated in-browser when live CBOE data is unavailable. Original demo: gex.kctradings.com
 </footer>
 
-<script src="assets/dashboard.js?v=20260716-market-structure1"></script>
+<script src="assets/dashboard.js?v=20260716-market-structure2"></script>
 </body>
 </html>
