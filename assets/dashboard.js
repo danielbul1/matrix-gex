@@ -1829,7 +1829,7 @@ function renderImpl(R){
 
 // ---------- Metric definitions (Quant-Power style param buttons) ----------
 // net_gex = bars. Other metrics are stacked area layers.
-let ACTIVE = new Set(["net_gex","avg_power"]);
+let ACTIVE = new Set(["net_gex"]);
 let DISPLAY_SIGMA = 2;
 const METRICS = {
   net_gex:  {label:"Net GEX",     color:"#22b8ff", kind:"bar",  signed:true,  val:s=>s.netGex},
