@@ -69,7 +69,7 @@ const SYMBOLS = {
   NDX:{spot:30570,  step:25, mult:100, baseIV:0.170, market:"US"},
   SPX:{spot:7550,   step:5,  mult:100, baseIV:0.140, market:"US"},
   SPY:{spot:580.50, step:5,  mult:100, baseIV:0.135, market:"US"},
-  QQQ:{spot:525.50, step:5,  mult:100, baseIV:0.165, market:"US"},
+  QQQ:{spot:525.50, step:1,  mult:100, baseIV:0.165, market:"US"},
   IWM:{spot:228.0,  step:2,  mult:100, baseIV:0.200, market:"US"},
   NVDA:{spot:145.80,step:2.5,mult:100, baseIV:0.520, market:"US"},
   AAPL:{spot:228.0, step:5,  mult:100, baseIV:0.260, market:"US"},
