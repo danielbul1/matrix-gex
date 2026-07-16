@@ -2484,31 +2484,29 @@ function marketStrongest(rows,value){
   if(!rows?.length) return null;
   return rows.reduce((best,row)=>value(row)>value(best)?row:best,rows[0]);
 }
+function marketStructureRows(R){
+  const expected=Number(R.expectedMove)||0;
+  const radius=Math.max(R.spot*.02,Math.min(R.spot*.035,expected*2||R.spot*.02));
+  const rows=(R.strikes||[]).filter(s=>Math.abs(Number(s.strike)-R.spot)<=radius);
+  return rows.length?rows:(R.strikes||[]).slice().sort((a,b)=>Math.abs(a.strike-R.spot)-Math.abs(b.strike-R.spot)).slice(0,6).sort((a,b)=>a.strike-b.strike);
+}
 function marketStructureLevels(R){
-  const rows=R.strikes || [];
+  const rows=marketStructureRows(R);
+  const above=rows.filter(s=>s.strike>=R.spot),below=rows.filter(s=>s.strike<=R.spot);
+  const p1=marketStrongest(above.length?above:rows,s=>Number(s.netGex)||0);
+  const n1=marketStrongest(below.length?below:rows,s=>-(Number(s.netGex)||0));
   const callVol=marketStrongest(rows,s=>Number(s.callVol)||0);
   const putVol=marketStrongest(rows,s=>Number(s.putVol)||0);
   const power=marketStrongest(rows,s=>Number(s.powerZone)||0);
   const ag=marketStrongest(rows,s=>Math.abs(Number(s.callGex)||0)+Math.abs(Number(s.putGex)||0));
-  const raw=[
-    {price:R.callWall,label:'Call Wall',color:'#22aaf2',width:2},
-    {price:R.putWall,label:'Put Wall',color:'#ff2a17',width:2},
-    {price:callVol?.strike,label:'Call Vol Strike',color:'#147eea',width:1},
-    {price:putVol?.strike,label:'Put Vol Strike',color:'#ff8a3d',width:1},
-    {price:power?.strike,label:'Matrix Power',color:'#ffe600',width:2},
-    {price:ag?.strike,label:'AG Strike',color:'#b26cf2',width:1},
-    {price:R.flip,label:'Gamma Flip',color:'#21c75a',width:2,dashed:true},
+  return [
+    {price:p1?.strike,label:'P1 Strike',color:'#20c941',width:3},
+    {price:n1?.strike,label:'N1 Strike',color:'#ff2417',width:3},
+    {price:callVol?.strike,label:'Call Vol Strike',color:'#16a9f4',width:2},
+    {price:putVol?.strike,label:'Put Vol Strike',color:'#b8733e',width:2},
+    {price:power?.strike,label:'Matrix Power',color:'#f2d51b',width:2},
+    {price:ag?.strike,label:'AG Strike',color:'#b85ac7',width:2,dashed:true},
   ].filter(level=>Number.isFinite(level.price) && level.price>0);
-  const byPrice=new Map();
-  raw.forEach(level=>{
-    const key=Number(level.price).toFixed(6);
-    const existing=byPrice.get(key);
-    if(existing){
-      existing.label+=` / ${level.label}`;
-      existing.width=Math.max(existing.width,level.width);
-    }else byPrice.set(key,{...level,price:Number(level.price)});
-  });
-  return [...byPrice.values()];
 }
 function updateMarketPriceTooltip(param){
   const tt=document.getElementById('marketPriceTooltip');
@@ -2611,10 +2609,10 @@ function drawMarketPriceCanvas(R,candles,meta={}){
   const stage=cv.parentElement,W=stage.clientWidth,H=stage.clientHeight,dpr=window.devicePixelRatio||1;
   cv.width=Math.max(1,W*dpr);cv.height=Math.max(1,H*dpr);cv.style.width=W+'px';cv.style.height=H+'px';
   const ctx=cv.getContext('2d');ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,W,H);
-  const mobile=W<700,padL=mobile?48:68,padR=mobile?58:154,padT=28,padB=45;
+  const mobile=W<700,padL=mobile?48:68,padR=mobile?24:48,padT=28,padB=45;
   const plotW=W-padL-padR,plotH=H-padT-padB;
   const levels=marketStructureLevels(R);
-  const profile=visibleStrikeData(R).map(s=>({strike:Number(s.strike),power:Number(s.powerZone)||0}));
+  const profile=marketStructureRows(R).map(s=>({strike:Number(s.strike),power:Number(s.powerZone)||0}));
   const prices=[...candles.flatMap(c=>[c.low,c.high]),...levels.map(l=>l.price),...profile.map(p=>p.strike)].filter(Number.isFinite);
   let minPrice=Math.min(...prices),maxPrice=Math.max(...prices);
   const pricePad=Math.max((maxPrice-minPrice)*.045,R.spot*.0015,1);minPrice-=pricePad;maxPrice+=pricePad;
@@ -2644,10 +2642,6 @@ function drawMarketPriceCanvas(R,candles,meta={}){
   levels.forEach(level=>{
     const yy=y(level.price);if(yy<padT||yy>H-padB)return;
     ctx.save();ctx.strokeStyle=level.color;ctx.lineWidth=level.width;ctx.setLineDash(level.dashed?[8,5]:[]);ctx.beginPath();ctx.moveTo(padL,yy);ctx.lineTo(W-padR,yy);ctx.stroke();ctx.restore();
-    if(!mobile){
-      ctx.font='800 10px Segoe UI';const label=`${level.label} ${fmtPrice(level.price)}`;const tw=ctx.measureText(label).width;
-      ctx.fillStyle='rgba(25,25,25,.92)';ctx.fillRect(W-padR+5,yy-8,Math.min(padR-8,tw+8),16);ctx.fillStyle=level.color;ctx.textAlign='left';ctx.textBaseline='middle';ctx.fillText(label,W-padR+9,yy);
-    }
   });
   const candleSlot=plotW/Math.max(candles.length,1),bodyW=Math.max(2,Math.min(9,candleSlot*.62));
   candles.forEach(c=>{
