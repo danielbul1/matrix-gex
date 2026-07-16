@@ -226,7 +226,21 @@ function calcGEX(chain, mode){
     s.netCharm = s.callCharm + s.putCharm;
     s.ts = Math.max(s.ts, q.ts);
   }
-  const strikes = Object.values(byStrike).sort((a,b)=>a.strike-b.strike);
+  let strikes = Object.values(byStrike).sort((a,b)=>a.strike-b.strike);
+  // QQQ weeklies can publish OI only at $5 strikes. Keep the x-axis truthful at
+  // $1 resolution by inserting explicit zero-exposure rows between quoted strikes.
+  // Totals are unchanged because no exposure is interpolated or invented.
+  if(chain.symbol==='QQQ' && strikes.length>1){
+    const existing=new Set(strikes.map(s=>Number(s.strike).toFixed(4)));
+    const first=Math.ceil(strikes[0].strike),last=Math.floor(strikes[strikes.length-1].strike);
+    for(let strike=first;strike<=last;strike+=1){
+      if(existing.has(Number(strike).toFixed(4))) continue;
+      strikes.push({strike,callGex:0,putGex:0,netGex:0,callDex:0,putDex:0,netDex:0,
+        callVex:0,putVex:0,netVex:0,callCharm:0,putCharm:0,netCharm:0,
+        callOI:0,putOI:0,callVol:0,putVol:0,callIV:0,putIV:0,gamma:0,ts:chain.fetchTs});
+    }
+    strikes.sort((a,b)=>a.strike-b.strike);
+  }
   strikes.forEach(s=>{ s.totalOI=s.callOI+s.putOI; s.totalVol=s.callVol+s.putVol;
                        s.pcr=s.callOI>0?s.putOI/s.callOI:0; });
   const maxAG = Math.max(...strikes.map(s=>Math.abs(s.callGex)+Math.abs(s.putGex)), 1);
