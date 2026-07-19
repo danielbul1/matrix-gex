@@ -1,0 +1,5 @@
+# build/lib is a stale setuptools copy of src/ — never upload it.
+build/
+__pycache__/
+*.pyc
+.pytest_cache/

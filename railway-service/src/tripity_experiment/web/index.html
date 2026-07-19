@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tripity — חבר API ל-AI</title>
+  <style>
+    :root { color-scheme: dark; --bg:#0b1020; --panel:#121a2f; --line:#293451; --text:#f5f7ff; --muted:#9eabc9; --accent:#73e6b1; --accent2:#67a8ff; --danger:#ff8794; }
+    * { box-sizing:border-box; }
+    body { margin:0; min-height:100vh; font-family:Arial,sans-serif; background:radial-gradient(circle at 80% 0,#183459 0,transparent 38%),var(--bg); color:var(--text); }
+    main { width:min(980px,calc(100% - 32px)); margin:auto; padding:64px 0; }
+    header { margin-bottom:30px; }
+    .eyebrow { color:var(--accent); font-weight:700; letter-spacing:.08em; }
+    h1 { font-size:clamp(34px,6vw,64px); line-height:1.03; margin:10px 0; max-width:760px; }
+    header p { color:var(--muted); font-size:18px; }
+    .card { background:rgba(18,26,47,.93); border:1px solid var(--line); border-radius:20px; padding:24px; margin-top:18px; box-shadow:0 20px 60px #0005; }
+    label { display:block; font-weight:700; margin-bottom:9px; }
+    input,textarea,select { width:100%; border:1px solid var(--line); background:#0d1427; color:var(--text); border-radius:12px; padding:13px; font:inherit; }
+    textarea { min-height:110px; resize:vertical; direction:ltr; text-align:left; }
+    button { border:0; border-radius:12px; padding:13px 20px; font-weight:800; cursor:pointer; background:linear-gradient(135deg,var(--accent),var(--accent2)); color:#07101c; }
+    button:disabled { opacity:.45; cursor:not-allowed; }
+    .row { display:grid; grid-template-columns:150px 1fr auto; gap:12px; align-items:end; }
+    .hidden { display:none; }
+    .summary { display:flex; gap:18px; flex-wrap:wrap; color:var(--muted); margin-bottom:15px; }
+    .operations { display:grid; gap:9px; max-height:360px; overflow:auto; }
+    .operation { display:grid; grid-template-columns:auto 70px 1fr; gap:10px; align-items:center; border:1px solid var(--line); border-radius:12px; padding:11px; }
+    .method { color:var(--accent); font-weight:900; direction:ltr; }
+    .badge { display:inline-block; margin-inline-start:8px; padding:3px 7px; border-radius:999px; font-size:12px; background:#24314d; color:var(--muted); }
+    .badge.write { color:#ffd88a; }.badge.delete { color:var(--danger); }
+    .fields { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; margin:14px 0; }
+    .field small { color:var(--muted); display:block; margin-top:5px; }
+    code { direction:ltr; unicode-bidi:embed; color:#dce5ff; }
+    .issues { color:#ffd88a; margin-top:14px; }
+    .status { margin-top:14px; color:var(--muted); white-space:pre-wrap; }
+    .error { color:var(--danger); }
+    pre { direction:ltr; text-align:left; overflow:auto; padding:16px; border-radius:12px; background:#080d19; border:1px solid var(--line); }
+    @media(max-width:700px){ main{padding:30px 0}.row{grid-template-columns:1fr}.operation{grid-template-columns:auto 60px 1fr} }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="eyebrow">TRIPITY · LOOP 3</div>
+    <h1>הופכים API לכלי שה-AI יכול להפעיל.</h1>
+    <p>מדביקים OpenAPI, בוחרים פעולה ובודקים אותה — בלי לכתוב חיבור ידני.</p>
+  </header>
+
+  <section class="card">
+    <div class="row">
+      <div><label for="sourceType">מקור</label><select id="sourceType"><option value="url">קישור OpenAPI</option><option value="text">JSON / YAML</option></select></div>
+      <div><label for="source">OpenAPI</label><input id="source" value="https://petstore3.swagger.io/api/v3/openapi.json"></div>
+      <button id="previewBtn">הצג פעולות</button>
+    </div>
+    <div id="sourceStatus" class="status"></div>
+  </section>
+
+  <section id="previewCard" class="card hidden">
+    <h2 id="apiTitle"></h2>
+    <div id="summary" class="summary"></div>
+    <div id="operations" class="operations"></div>
+    <div id="issues" class="issues"></div>
+  </section>
+
+  <section id="testCard" class="card hidden">
+    <h2>בדיקת פעולה דרך MCP</h2>
+    <label for="operationSelect">פעולה לבדיקה</label>
+    <select id="operationSelect"></select>
+    <div id="riskNotice" class="issues"></div>
+    <div id="fields" class="fields"></div>
+    <button id="testBtn">הפעל Test</button>
+    <div id="testStatus" class="status"></div>
+    <pre id="result" class="hidden"></pre>
+  </section>
+  <section id="connectCard" class="card hidden">
+    <h2>חבר ל-AI שלך</h2>
+    <p style="color:var(--muted)">קבל את הפקודה להרצת החיבור ואת הצעדים לחבר אותו ל-AI — בלי לכתוב כלום ביד.</p>
+    <div class="row" style="grid-template-columns:150px 1fr auto">
+      <div><label for="authMode">אבטחה</label><select id="authMode">
+        <option value="oauth">OAuth (מומלץ לענן)</option>
+        <option value="bearer">טוקן</option>
+        <option value="none">ללא</option>
+      </select></div>
+      <div></div>
+      <button id="connectBtn">צור חיבור</button>
+    </div>
+    <div id="connectStatus" class="status"></div>
+    <div id="kit" class="hidden">
+      <label style="margin-top:14px">1. הרץ את החיבור על השרת שלך</label>
+      <pre id="dockerRun"></pre>
+      <label>2. חבר את ה-AI שלך</label>
+      <div id="connectSteps" class="status"></div>
+    </div>
+  </section>
+</main>
+<script>
+  const $ = id => document.getElementById(id);
+  let operations = [];
+  const esc = value => String(value ?? "").replace(/[&<>"']/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+  const payload = () => ({source_type:$("sourceType").value, source:$("source").value});
+  $("sourceType").onchange = () => {
+    const isText = $("sourceType").value === "text";
+    const old = $("source"); const next = document.createElement(isText ? "textarea" : "input");
+    next.id="source"; next.value=""; next.placeholder=isText ? "הדביקו JSON או YAML" : "https://example.com/openapi.json";
+    old.replaceWith(next);
+  };
+  async function post(url, body) {
+    const res = await fetch(url,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+    const data = await res.json(); if(!res.ok) throw new Error(data.detail || "הבקשה נכשלה"); return data;
+  }
+  $("previewBtn").onclick = async () => {
+    $("sourceStatus").textContent="קורא ומנתח את המפרט…"; $("sourceStatus").className="status";
+    try {
+      const data=await post("/api/preview",payload()); operations=data.operations;
+      $("apiTitle").textContent=data.title;
+      $("summary").innerHTML=`<span>OpenAPI ${data.openapi_version}</span><span>${operations.length} פעולות</span><span>${data.auth_schemes.length} סוגי אימות</span>`;
+      $("operations").innerHTML=operations.map((o,i)=>`<label class="operation"><input type="checkbox" data-index="${i}" ${o.operation_id?(o.risk==="read"?"checked":""):"disabled"}><span class="method">${esc(o.method)}</span><span><code>${esc(o.path)}</code><span class="badge ${o.risk}">${o.risk==="read"?"קריאה":o.risk==="delete"?"מחיקה":"כתיבה"}</span><br>${esc(o.summary||o.operation_id||"חסר operationId")}</span></label>`).join("");
+      $("issues").textContent=data.issues.length ? `${data.issues.length} בעיות: `+data.issues.map(x=>x.message).join(" · ") : "לא נמצאו בעיות במפרט.";
+      $("operationSelect").innerHTML=operations.map((o,i)=>o.operation_id?`<option value="${i}">${esc(o.operation_id)} — ${esc(o.method)} ${esc(o.path)}</option>`:"").join("");
+      const firstRead=operations.findIndex(o=>o.operation_id&&o.risk==="read"); if(firstRead>=0)$("operationSelect").value=String(firstRead);
+      renderFields();
+      $("previewCard").classList.remove("hidden"); $("testCard").classList.remove("hidden"); $("connectCard").classList.remove("hidden"); $("sourceStatus").textContent="ה-preview מוכן.";
+    } catch(e){ $("sourceStatus").textContent=e.message; $("sourceStatus").className="status error"; }
+  };
+  function renderFields(){
+    const op=operations[Number($("operationSelect").value)]||operations.find(o=>o.operation_id);
+    $("riskNotice").textContent=op?.risk==="read"?"פעולת קריאה — אינה אמורה לשנות נתונים.":op?.risk==="delete"?"אזהרה: הפעולה מוחקת נתונים.":"אזהרה: הפעולה עשויה לשנות נתונים.";
+    $("riskNotice").className=op?.risk==="read"?"status":"issues";
+    $("fields").innerHTML=(op?.input_fields||[]).map((f,i)=>{
+      const id=`field-${i}`, required=f.required?"required":"", label=`${esc(f.name)}${f.required?" *":""}`;
+      if(f.enum?.length) return `<div class="field"><label for="${id}">${label}</label><select id="${id}" data-name="${esc(f.name)}" data-type="${esc(f.type)}">${f.enum.map(v=>`<option value="${esc(v)}">${esc(v)}</option>`).join("")}</select><small>${esc(f.location)} · ${esc(f.type)}</small></div>`;
+      const inputType=["integer","number"].includes(f.type)?"number":f.type==="boolean"?"checkbox":"text";
+      return `<div class="field"><label for="${id}">${label}</label><input id="${id}" data-name="${esc(f.name)}" data-type="${esc(f.type)}" type="${inputType}" ${required} value="${esc(f.default??"")}"><small>${esc(f.location)} · ${esc(f.type)}</small></div>`;
+    }).join("") || "<p>הפעולה אינה דורשת פרמטרים.</p>";
+  }
+  $("operationSelect").onchange=renderFields;
+  function collectArguments(){
+    const args={};
+    document.querySelectorAll("#fields [data-name]").forEach(el=>{
+      let value=el.type==="checkbox"?el.checked:el.value;
+      if(value===""&&!el.required)return;
+      if(el.dataset.type==="integer")value=parseInt(value,10);
+      else if(el.dataset.type==="number")value=parseFloat(value);
+      else if(el.dataset.type==="boolean")value=Boolean(value);
+      else if(["object","array"].includes(el.dataset.type))value=JSON.parse(value);
+      args[el.dataset.name]=value;
+    });
+    return args;
+  }
+  $("testBtn").onclick = async () => {
+    $("testStatus").textContent="מקים MCP זמני ומפעיל את הכלי…"; $("result").classList.add("hidden");
+    try {
+      const selected=[...document.querySelectorAll(".operation input:checked")].map(x=>operations[Number(x.dataset.index)].operation_id);
+      const op=operations[Number($("operationSelect").value)];
+      if(!selected.includes(op.operation_id)) throw new Error("יש לסמן את הפעולה לפני הבדיקה.");
+      const data=await post("/api/test",{...payload(),selected_operation_ids:selected,operation_id:op.operation_id,arguments:collectArguments()});
+      $("testStatus").textContent=data.ok ? "הפעולה הצליחה דרך MCP." : "ה-API החזיר שגיאה.";
+      $("testStatus").className=data.ok?"status":"status error"; $("result").textContent=JSON.stringify(data.structured_content ?? data.content,null,2); $("result").classList.remove("hidden");
+    } catch(e){ $("testStatus").textContent=e.message; $("testStatus").className="status error"; }
+  };
+  $("connectBtn").onclick = async () => {
+    $("connectStatus").textContent="בונה את החיבור…"; $("connectStatus").className="status"; $("kit").classList.add("hidden");
+    try {
+      const selected=[...document.querySelectorAll(".operation input:checked")].map(x=>operations[Number(x.dataset.index)].operation_id);
+      if(!selected.length) throw new Error("יש לבחור לפחות פעולה אחת.");
+      const data=await post("/api/connection-kit",{...payload(),selected_operation_ids:selected,auth:$("authMode").value});
+      $("dockerRun").textContent=data.docker_run;
+      const steps=data.connect_steps.chatgpt.map((s,i)=>`${i+1}. ${s}`).join("\n");
+      $("connectSteps").textContent=steps;
+      $("connectStatus").textContent="החיבור מוכן — העתק את הפקודה ועקוב אחר הצעדים.";
+      $("kit").classList.remove("hidden");
+    } catch(e){ $("connectStatus").textContent=e.message; $("connectStatus").className="status error"; }
+  };
+</script>
+</body>
+</html>

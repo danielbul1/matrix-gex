@@ -1,0 +1,2 @@
+[deploy]
+startCommand = "pip install . && python -m tripity_experiment.public_company_host"

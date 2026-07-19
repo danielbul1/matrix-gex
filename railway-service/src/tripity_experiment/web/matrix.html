@@ -1,0 +1,523 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GEX Analytics Dashboard</title>
+<script>
+  window.__loadMatrixChartLib=function(){
+    if(window.LightweightCharts) return;
+    const fallback=document.createElement('script');
+    fallback.src='https://cdn.jsdelivr.net/npm/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js';
+    document.head.appendChild(fallback);
+  };
+</script>
+<script src="https://unpkg.com/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js" onerror="window.__loadMatrixChartLib && window.__loadMatrixChartLib()"></script>
+<link rel="stylesheet" href="matrix.css?v=20260719-line-hit5">
+</head>
+<body>
+<header>
+  <nav class="side-nav">
+    <a href="#" class="active" data-view="gex">GEX</a>
+    <a href="#" data-view="dex">DEX</a>
+    <a href="#" data-view="market-structure">Market Structure</a>
+    <a href="#" data-view="exposure-lab">Exposure Lab</a>
+    <a href="#" data-view="net-flow">Net Drift &amp; Flow</a>
+    <a href="#" data-view="matrix-gex">Matrix GEX</a>
+    <a href="#" data-view="shock-engine">Shock Engine</a>
+    <a href="#" data-view="max-pain">Max Pain</a>
+    <a href="#" data-view="review">Review</a>
+  </nav>
+  <div class="side-disclaimer">Disclaimer</div>
+  <h1>GEX Analytics</h1>
+  <span class="sub">Gamma Exposure &amp; Options Flow Engine - local implementation based on KaranChavan21/GEX_Dashboard documentation</span>
+  <span class="badge-demo" id="srcBadge">DEMO - synthetic data</span>
+</header>
+
+<div class="controls">
+  <div class="ctrl">
+    <label>Symbol</label>
+    <select id="symbol"></select>
+  </div>
+  <div class="ctrl">
+    <label>Expirations</label>
+    <div id="expirationPicker" class="expiry-picker" aria-label="Choose expiration dates"></div>
+  </div>
+  <div class="ctrl">
+    <label>Market</label>
+    <select id="market">
+      <option value="US">US (Tripity / CBOE / LSE)</option>
+    </select>
+  </div>
+  <div class="ctrl">
+    <label>Data Source</label>
+    <select id="source">
+      <option value="live">LIVE - Tripity hybrid</option>
+      <option value="synthetic">Synthetic</option>
+    </select>
+  </div>
+  <div class="ctrl">
+    <label>Auto-Refresh</label>
+    <select id="autorefresh">
+      <option value="60">Every 60 seconds</option>
+      <option value="30">Every 30 seconds</option>
+      <option value="5">Every 5 seconds</option>
+      <option value="300">Every 5 minutes</option>
+      <option value="0">Off</option>
+    </select>
+  </div>
+  <div class="ctrl">
+    <label>Mode</label>
+    <select id="mode">
+      <option value="intraday">intraday (+/-20%, <=7 DTE)</option>
+      <option value="0dte">0DTE (+/-15%)</option>
+      <option value="full">full (entire chain)</option>
+    </select>
+  </div>
+  <div class="ctrl">
+    <label>Strike Count (+/-N)</label>
+    <input id="strikeCount" type="number" value="20" min="5" max="40">
+  </div>
+  <div class="ctrl">
+    <label>Spot Override</label>
+    <input id="spotOverride" type="number" placeholder="auto" step="0.01">
+  </div>
+  <button id="run">Calculate GEX</button>
+  <div class="data-health" id="dataHealth" aria-live="polite">
+    <div class="data-health-top">
+      <span class="data-health-title">Live Data Health</span>
+      <div class="data-health-actions">
+        <button type="button" class="data-refresh-btn" id="forceTripityRefresh" title="Force refresh from Tripity">Refresh</button>
+        <span class="data-health-state" id="dataHealthState">Waiting</span>
+      </div>
+    </div>
+    <div class="data-health-meta">
+      <span>Symbol <b id="dataHealthSymbol">--</b></span>
+      <span>Live feed <b id="dataHealthSource">--</b></span>
+      <span>Live age <b id="dataHealthAge">--</b></span>
+      <span>Price as of <b id="dataHealthAsof">--</b></span>
+      <span>OI feed <b id="dataHealthOiSource">Cboe daily</b></span>
+      <span>OI snapshot <b id="dataHealthOiAsof">--</b></span>
+      <span>Contracts <b id="dataHealthContracts">--</b></span>
+      <span>Live spot <b id="dataHealthSpot">--</b></span>
+      <span>Checked <b id="dataHealthLoaded">--</b></span>
+    </div>
+  </div>
+</div>
+
+<div class="stale-data-banner" id="staleDataBanner" role="status" aria-live="polite" hidden></div>
+
+<div class="gex-replay-bar" id="gexReplayBar" style="display:flex;align-items:center;gap:10px;margin:8px 0;flex-wrap:wrap;">
+  <label for="gexReplaySession" style="font-weight:700;">GEX Replay</label>
+  <select id="gexReplaySession" aria-label="GEX replay session">
+    <option value="">Live</option>
+  </select>
+  <input type="range" id="gexReplaySlider" min="0" max="0" step="1" value="0" style="display:none;flex:1;min-width:220px;" aria-label="Replay minute">
+</div>
+<div class="gex-replay-banner" id="gexReplayBanner" role="status" aria-live="polite" hidden style="margin:6px 0;padding:8px 12px;border:1px solid #b8860b;border-radius:10px;font-weight:600;"></div>
+
+<main>
+  <section class="app-view active" id="view-gex">
+    <div class="params">
+      <div class="range-control" role="group" aria-label="Strike display range">
+        <span class="range-label">Range</span>
+        <button type="button" class="range-btn" data-sigma="1">1&sigma;</button>
+        <button type="button" class="range-btn active" data-sigma="2">2&sigma;</button>
+        <button type="button" class="range-btn" data-sigma="3">3&sigma;</button>
+        <button type="button" class="range-btn" data-sigma="all">All</button>
+      </div>
+      <span class="plabel">Parameters:</span>
+      <button class="pbtn active" data-metric="net_gex"  style="--c:#22b8ff">Net GEX</button>
+      <button class="pbtn"        data-metric="ag"       style="--c:#ab7df6">AG</button>
+      <button class="pbtn"        data-metric="call_oi"  style="--c:#26c281">Call OI</button>
+      <button class="pbtn"        data-metric="put_oi"   style="--c:#ef5350">Put OI</button>
+      <button class="pbtn"        data-metric="call_vol" style="--c:#2f73ff">Call Volume</button>
+      <button class="pbtn"        data-metric="put_vol"  style="--c:#ff8a3d">Put Volume</button>
+      <button class="pbtn"        data-metric="power"    style="--c:#ffc107">Power Zone</button>
+      <button class="pbtn"        data-metric="avg_power" style="--c:#00cdb7" title="Equal-weighted average of the Power Zone for each selected expiration day">AVG Power Zone</button>
+    </div>
+
+    <div class="card chartcard">
+      <div class="charttop">
+        <span class="symlabel" id="symLabel"></span>
+        <span class="chartlegend" id="chartLegend"></span>
+      </div>
+      <div class="chartwrap">
+        <div class="watermark">Matrix</div>
+        <div class="chart-crosshair-x" id="chartCrosshairX"></div>
+        <div class="chart-tooltip" id="chartTooltip"></div>
+        <canvas id="gexChart" height="540"></canvas>
+      </div>
+    </div>
+
+    <div class="grid row-top" id="topCards"></div>
+  </section>
+
+  <section class="app-view" id="view-dex">
+    <div class="params">
+      <div class="range-control" role="group" aria-label="DEX strike display range">
+        <span class="range-label">Range</span>
+        <button type="button" class="range-btn" data-sigma="1">1&sigma;</button>
+        <button type="button" class="range-btn active" data-sigma="2">2&sigma;</button>
+        <button type="button" class="range-btn" data-sigma="3">3&sigma;</button>
+        <button type="button" class="range-btn" data-sigma="all">All</button>
+      </div>
+      <span class="plabel">Delta Exposure:</span>
+      <span class="pbtn active" style="--c:#22b8ff">Net DEX</span>
+    </div>
+    <div class="card chartcard dex-page-card">
+      <div class="charttop">
+        <span class="symlabel" id="dexSymLabel"></span>
+        <span class="chartlegend" id="dexChartLegend"></span>
+      </div>
+      <div class="chartwrap">
+        <div class="watermark">Matrix</div>
+        <div class="chart-crosshair-x" id="dexCrosshairX"></div>
+        <div class="chart-tooltip" id="dexTooltip"></div>
+        <canvas id="dexChart" height="540"></canvas>
+      </div>
+    </div>
+  </section>
+
+  <section class="app-view" id="view-market-structure">
+    <div class="market-structure-head">
+      <div>
+        <span class="command-panel-tag">Live structure</span>
+        <h2>Market Structure</h2>
+        <p>Gamma exposure first, then intraday price action aligned with the strongest options levels.</p>
+      </div>
+      <div class="market-structure-status" id="marketStructureStatus">Waiting for price candles</div>
+    </div>
+
+    <div class="params market-structure-params">
+      <div class="range-control" role="group" aria-label="Market Structure strike display range">
+        <span class="range-label">GEX Range</span>
+        <button type="button" class="range-btn" data-sigma="1">1&sigma;</button>
+        <button type="button" class="range-btn active" data-sigma="2">2&sigma;</button>
+        <button type="button" class="range-btn" data-sigma="3">3&sigma;</button>
+        <button type="button" class="range-btn" data-sigma="all">All</button>
+      </div>
+      <span class="plabel">Net GEX + Price</span>
+    </div>
+
+    <div class="card market-structure-card">
+      <section class="market-structure-panel">
+        <div class="market-panel-title">
+          <div><span>Options positioning</span><h3>Net Gamma Exposure by Strike</h3></div>
+          <span class="chartlegend" id="marketGexLegend"></span>
+        </div>
+        <div class="charttop market-symbol-row"><span class="symlabel" id="marketGexSymLabel"></span></div>
+        <div class="chartwrap">
+          <div class="watermark">Matrix</div>
+          <div class="chart-crosshair-x" id="marketGexCrosshairX"></div>
+          <div class="chart-tooltip" id="marketGexTooltip"></div>
+          <canvas id="marketGexChart" height="540"></canvas>
+        </div>
+      </section>
+
+      <section class="market-structure-panel market-price-panel">
+        <div class="market-panel-title">
+          <div><span>Intraday price action</span><h3 id="marketPriceTitle">Price + Options Power Profile</h3></div>
+          <div class="market-level-legend" id="marketLevelLegend"></div>
+        </div>
+        <div class="market-price-stage">
+          <canvas class="market-price-canvas" id="marketPriceCanvas"></canvas>
+          <div class="market-price-tooltip" id="marketPriceTooltip"></div>
+          <div class="watermark market-watermark">Matrix</div>
+        </div>
+        <div class="market-price-note" id="marketPriceNote">Loading candles and options levels...</div>
+      </section>
+    </div>
+  </section>
+
+  <section class="app-view" id="view-exposure-lab">
+    <div class="lab-shell">
+      <div class="lab-header">
+        <div>
+          <span class="lab-eyebrow"><i></i> Live exposure workspace</span>
+          <h2>Exposure Lab</h2>
+          <p>Dealer positioning across Gamma, Delta, Vanna and Charm â€” synchronized to the global symbol and expiration selection.</p>
+        </div>
+        <div class="lab-range" role="group" aria-label="Exposure Lab strike range">
+          <span>Strike range</span>
+          <button type="button" data-lab-sigma="1">1&sigma;</button>
+          <button type="button" class="active" data-lab-sigma="2">2&sigma;</button>
+          <button type="button" data-lab-sigma="3">3&sigma;</button>
+          <button type="button" data-lab-sigma="all">All</button>
+        </div>
+      </div>
+
+      <div class="lab-kpis" id="labKpis" aria-live="polite"></div>
+
+      <div class="lab-grid">
+        <article class="lab-panel">
+          <div class="lab-panel-head">
+            <div><span>Exposure by strike</span><h3 id="labGexTitle">Net Gamma Exposure</h3></div>
+            <div class="lab-pills"><b>Gamma</b><b>Per 1% Move</b></div>
+          </div>
+          <div class="lab-chart-wrap"><canvas id="labGexChart" height="420"></canvas></div>
+        </article>
+
+        <article class="lab-panel">
+          <div class="lab-panel-head">
+            <div><span>Exposure by strike</span><h3 id="labDexTitle">Net Delta Exposure</h3></div>
+            <div class="lab-pills"><b>Delta</b><b>Per 1% Move</b></div>
+          </div>
+          <div class="lab-chart-wrap"><canvas id="labDexChart" height="420"></canvas></div>
+        </article>
+
+        <article class="lab-panel lab-map-panel">
+          <div class="lab-panel-head">
+            <div><span>Cross-Greek structure</span><h3>Exposure Concentration Map</h3></div>
+            <div class="lab-legend"><span><i class="positive"></i>Positive</span><span><i class="negative"></i>Negative</span><span><i class="price"></i>Spot</span></div>
+          </div>
+          <div class="lab-chart-wrap"><canvas id="labMapChart" height="470"></canvas></div>
+        </article>
+
+        <article class="lab-panel lab-heat-panel">
+          <div class="lab-panel-head">
+            <div><span>Normalized by metric</span><h3>Greek Heat Map</h3></div>
+            <div class="lab-pills"><b>GEX</b><b>DEX</b><b>VEX</b><b>CHEX</b></div>
+          </div>
+          <div class="lab-heatmap" id="labHeatMap"></div>
+        </article>
+      </div>
+      <div class="lab-tooltip" id="labTooltip"></div>
+    </div>
+  </section>
+
+  <section class="app-view" id="view-matrix-gex">
+    <div class="matrix-header">
+      <div>
+        <span class="command-panel-tag">Experimental</span>
+        <h2>Matrix GEX Command Center</h2>
+        <p>Same SPY GEX baseline, with a decision layer, key levels, scenario ladder, and saved review snapshots.</p>
+      </div>
+      <div class="snapshot-controls" id="snapshotControls">
+        <input id="snapshotNote" type="text" placeholder="Optional note before saving">
+        <button type="button" id="saveSnapshot">Save Snapshot</button>
+      </div>
+    </div>
+
+    <div class="command-center" aria-label="Command Center">
+      <section class="command-panel market-read-panel" id="marketReadPanel" aria-live="polite">
+        <div class="command-panel-head">
+          <h2>Market Read</h2>
+          <span class="command-panel-tag">Pending</span>
+        </div>
+        <div class="command-panel-body"></div>
+      </section>
+      <section class="command-panel key-levels-panel" id="keyLevelsPanel" aria-live="polite">
+        <div class="command-panel-head">
+          <h2>Key Levels</h2>
+          <span class="command-panel-tag">Pending</span>
+        </div>
+        <div class="command-panel-body"></div>
+      </section>
+      <section class="command-panel scenario-ladder-panel" id="scenarioLadderPanel" aria-live="polite">
+        <div class="command-panel-head">
+          <h2>Scenario Ladder</h2>
+          <span class="command-panel-tag">Pending</span>
+        </div>
+        <div class="command-panel-body"></div>
+      </section>
+      <section class="command-panel signal-quality-panel" id="signalQualityPanel" aria-live="polite">
+        <div class="command-panel-head">
+          <h2>Signal Quality</h2>
+          <span class="command-panel-tag">Pending</span>
+        </div>
+        <div class="command-panel-body"></div>
+      </section>
+    </div>
+
+    <div class="card chartcard">
+      <div class="charttop">
+        <span class="symlabel" id="matrixSymLabel"></span>
+        <span class="chartlegend" id="matrixChartLegend"></span>
+      </div>
+      <div class="chartwrap">
+        <div class="watermark">Matrix</div>
+        <div class="chart-crosshair-x" id="matrixGexCrosshairX"></div>
+        <div class="chart-tooltip" id="matrixGexTooltip"></div>
+        <canvas id="matrixGexChart" height="540"></canvas>
+      </div>
+    </div>
+  </section>
+
+  <section class="app-view" id="view-shock-engine">
+    <div class="shock-grid">
+      <section class="shock-panel shock-state" id="shockStatePanel" aria-live="polite"></section>
+      <section class="shock-panel shock-up" id="shockUpsidePanel" aria-live="polite"></section>
+      <section class="shock-panel shock-down" id="shockDownsidePanel" aria-live="polite"></section>
+    </div>
+    <div class="card shock-card">
+      <div class="shock-head">
+        <div>
+          <span class="command-panel-tag">Live Structure</span>
+          <h2>Matrix Shock Engine</h2>
+          <p>Price-path simulation from current options positioning. It maps compression, acceleration pockets, fade zones, and force balance around spot.</p>
+        </div>
+        <div class="shock-legend">
+          <span><i style="background:#22b8ff"></i>Upside force</span>
+          <span><i style="background:#ff453a"></i>Downside force</span>
+          <span><i style="background:#ffc107"></i>Spot / levels</span>
+        </div>
+      </div>
+      <div class="shock-wrap">
+        <div class="shock-tooltip" id="shockTooltip"></div>
+        <canvas id="shockEngineChart" height="700"></canvas>
+      </div>
+    </div>
+  </section>
+
+  <section class="app-view" id="view-options-heat-map">
+    <article class="feature-card heatmap-card">
+      <h2>What is the Options Heat Map?</h2>
+      <p>The Options Heat Map shows where call/put premium is concentrated across strike prices and expiration dates. Blue cells show call premium leading, red cells show put premium leading, and brighter cells mark stronger relative activity.</p>
+      <div class="options-heatmap" id="optionsHeatMap"></div>
+    </article>
+  </section>
+
+  <section class="app-view" id="view-net-flow">
+    <div class="flow-workspace">
+      <div class="flow-workspace-head">
+        <div>
+          <span class="command-panel-tag">LSE Options Prints</span>
+          <h2>Net Drift &amp; Flow</h2>
+          <p>Intraday option prints for SPY and QQQ. Drift classifies premium at bid/ask; ambiguous midpoint trades remain unclassified.</p>
+        </div>
+        <div class="flow-workspace-controls">
+          <label for="flowInterval">Session</label>
+          <select id="flowInterval" disabled><option value="1m">09:30–16:00 · 1 minute</option></select>
+          <select id="flowSession" aria-label="Flow trading session">
+            <option value="">Loading exact session dates…</option>
+          </select>
+          <button type="button" class="flow-reset-btn" id="flowStartFresh">Start Fresh</button>
+          <span class="flow-quality" id="flowQuality">Awaiting market</span>
+          <span class="flow-status" id="flowDataStatus">Waiting</span>
+        </div>
+      </div>
+      <div class="flow-analysis-grid">
+        <article class="flow-analysis-card">
+          <div class="flow-panel-head"><div><span>Net Flow (Volume)</span><strong id="flowVolumeTotal">--</strong></div><div class="netflow-legend"><span><i class="netflow-dot" style="background:#22b8ff"></i>Price</span><span><i class="netflow-dot" style="background:#26d36b"></i>Calls</span><span><i class="netflow-dot" style="background:#ff3545"></i>Puts</span></div></div>
+          <div class="netflow-wrap"><div class="watermark flow-watermark">Matrix</div><div class="chart-hover-line" id="netFlowCrosshair"></div><div class="chart-hover-line-y" id="netFlowCrosshairY"></div><div class="netflow-tooltip" id="netFlowTooltip"></div><canvas id="netFlowChart" height="620"></canvas></div>
+        </article>
+        <article class="flow-analysis-card">
+          <div class="flow-panel-head"><div><span>Net Drift (Premium) <em>Estimated</em></span><strong id="driftPremiumTotal">--</strong><small id="flowCoverage">-- classified</small></div><div class="netflow-legend"><span><i class="netflow-dot" style="background:#22b8ff"></i>Price</span><span><i class="netflow-dot" style="background:#26d36b"></i>Call drift</span><span><i class="netflow-dot" style="background:#ff3545"></i>Put drift</span></div></div>
+          <div class="netflow-wrap"><div class="watermark flow-watermark">Matrix</div><div class="chart-hover-line" id="netDriftCrosshair"></div><div class="chart-hover-line-y" id="netDriftCrosshairY"></div><div class="netflow-tooltip" id="netDriftTooltip"></div><canvas id="netDriftChart" height="620"></canvas></div>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <section class="app-view" id="view-dark-pool-levels">
+    <article class="feature-card darkpool-card">
+      <div class="darkpool-top">
+        <div class="darkpool-title">
+          <h2>Dark Pool Levels</h2>
+          <p>Estimated support/resistance levels from option-chain liquidity concentration.</p>
+        </div>
+        <div class="darkpool-badge">Estimated from options chain</div>
+      </div>
+      <div class="darkpool-table" id="darkPoolLevels"></div>
+    </article>
+  </section>
+
+  <section class="app-view" id="view-max-pain">
+    <article class="feature-card maxpain-card">
+      <div class="maxpain-tabs" role="group" aria-label="Max Pain view">
+        <button type="button" class="maxpain-tab active" data-maxpain-view="chart">Max Pain</button>
+        <button type="button" class="maxpain-tab" data-maxpain-view="time">Max Pain / Time</button>
+      </div>
+      <div class="maxpain-top">
+        <div class="maxpain-title">
+          <h2 id="maxPainTitle">Max Pain</h2>
+          <p>Max Pain estimates the strike where option-holder payout is lowest at expiration. Use it as a reference zone, especially when current price is far from the Max Pain strike.</p>
+          <div class="maxpain-values" id="maxPainValues" aria-live="polite"></div>
+        </div>
+        <div class="maxpain-legend" id="maxPainLegend">
+          <span><i class="maxpain-dot" style="background:#ff2a17"></i>Below Max Pain</span>
+          <span><i class="maxpain-dot" style="background:#17b65f"></i>Above Max Pain</span>
+          <span><i class="maxpain-dot" style="background:#ffc107"></i>Max Pain</span>
+          <span><i class="maxpain-dot" style="background:#f5f5f5"></i>Price</span>
+        </div>
+      </div>
+      <div class="maxpain-wrap">
+        <div class="chart-hover-line" id="maxPainCrosshair"></div>
+        <div class="maxpain-tooltip" id="maxPainTooltip"></div>
+        <canvas id="maxPainChart" height="640"></canvas>
+      </div>
+    </article>
+  </section>
+
+  <section class="app-view" id="view-review">
+    <article class="feature-card review-card">
+      <div class="review-top">
+        <div>
+          <h2>Market Review</h2>
+          <p>Saved Matrix GEX reads. Mark outcomes after the session to learn when the model helped, failed, or was just noise.</p>
+        </div>
+        <button type="button" class="review-danger" id="clearSnapshots">Clear Snapshots</button>
+      </div>
+      <div class="review-filters">
+        <select id="reviewOutcomeFilter" aria-label="Filter by outcome">
+          <option value="">All outcomes</option>
+          <option value="Worked">Worked</option>
+          <option value="Failed">Failed</option>
+          <option value="Early">Early</option>
+          <option value="Late">Late</option>
+          <option value="No Trade">No Trade</option>
+          <option value="Noise">Noise</option>
+        </select>
+      </div>
+      <div class="review-stats" id="reviewStatsPanel" aria-live="polite"></div>
+      <div class="review-list" id="reviewSnapshotList" aria-live="polite"></div>
+    </article>
+  </section>
+
+  <section class="app-view" id="view-edge">
+    <article class="feature-card edge-card">
+      <div class="edge-top">
+        <div class="edge-title">
+          <h2>Dealer Pressure</h2>
+          <p>Dynamic pressure map from GEX, Vanna and Charm. It highlights pin zones, support/resistance pressure and acceleration pockets around spot.</p>
+        </div>
+        <div class="range-control edge-range" role="group" aria-label="Dealer pressure strike display range">
+          <span class="range-label">Range</span>
+          <button type="button" class="range-btn edge-range-btn" data-edge-sigma="1">1&sigma;</button>
+          <button type="button" class="range-btn edge-range-btn active" data-edge-sigma="2">2&sigma;</button>
+          <button type="button" class="range-btn edge-range-btn" data-edge-sigma="3">3&sigma;</button>
+          <button type="button" class="range-btn edge-range-btn" data-edge-sigma="all">All</button>
+        </div>
+      </div>
+      <div class="dealer-chart-grid">
+        <div class="tv-card">
+          <div class="matrix-price-chart" id="matrixPriceChart"></div>
+          <div class="matrix-price-note" id="matrixPriceNote">SPY candles with SPX pressure levels converted to SPY</div>
+        </div>
+        <aside class="market-read-card" id="marketReadCard" aria-live="polite"></aside>
+      </div>
+      <div class="scenario-panel" id="dealerScenarioPanel" aria-live="polite"></div>
+      <div class="flow-map" id="dealerFlowMap" aria-live="polite"></div>
+      <div class="edge-wrap">
+        <div class="edge-crosshair" id="edgeCrosshair0"></div>
+        <div class="edge-crosshair" id="edgeCrosshair1"></div>
+        <div class="edge-crosshair" id="edgeCrosshair2"></div>
+        <div class="edge-tooltip" id="edgeTooltip"></div>
+        <canvas id="edgeChart" height="760"></canvas>
+      </div>
+    </article>
+  </section>
+</main>
+
+<div class="heatmap-tip" id="heatMapTooltip"></div>
+
+<footer>
+  Implementation based on the documented model: Black-Scholes Greeks Â· GEX = Gamma x OI x Multiplier x Spot^2 Â·
+  Regime Detection Â· Zero-Gamma Flip interpolation Â· Call/Put Walls.
+  Synthetic data is generated in-browser when live CBOE data is unavailable. Original demo: gex.kctradings.com
+</footer>
+
+<script src="matrix.js?v=20260719-line-hit5"></script>
+</body>
+</html>

@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tripity — Give your app an AI link</title>
+  <style>
+    :root{font-family:Inter,system-ui,-apple-system,Segoe UI,sans-serif;color:#eaf2ff;background:#08111f;line-height:1.45}
+    body{margin:0;background:radial-gradient(circle at top,#17345d 0,#08111f 48%);min-height:100vh}
+    main{max-width:1100px;margin:0 auto;padding:42px 18px 70px}
+    h1{font-size:44px;line-height:1.05;margin:0 0 10px} h2{margin-top:0;color:#fff}
+    p{color:#aebbd0}.hero{margin-bottom:24px}.tag{color:#7dd3fc;font-weight:700;text-transform:uppercase;letter-spacing:.08em;font-size:13px}
+    .grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}@media(max-width:850px){.grid{grid-template-columns:1fr}}
+    .card{background:rgba(12,24,42,.84);border:1px solid rgba(148,163,184,.22);border-radius:18px;padding:20px;box-shadow:0 20px 60px rgba(0,0,0,.25)}
+    label{display:block;font-weight:700;margin:12px 0 6px} input,textarea{box-sizing:border-box;width:100%;background:#07111f;color:#eaf2ff;border:1px solid #314158;border-radius:12px;padding:11px;font:inherit} textarea{min-height:260px;font-family:ui-monospace,Consolas,monospace;font-size:13px}
+    button{border:0;border-radius:12px;padding:12px 16px;margin-top:14px;background:#38bdf8;color:#06111f;font-weight:800;cursor:pointer}button.secondary{background:#1f334d;color:#dbeafe;margin-left:8px}button:disabled{opacity:.55;cursor:wait}
+    code,pre{font-family:ui-monospace,Consolas,monospace} pre{white-space:pre-wrap;word-break:break-word;background:#050b14;border:1px solid #26364c;border-radius:12px;padding:12px;max-height:360px;overflow:auto;color:#dbeafe}
+    .tool{border:1px solid #26364c;border-radius:12px;padding:10px;margin:8px 0;background:#09182a}.enabled{border-color:#166534}.disabled{border-color:#7f1d1d}.muted{color:#94a3b8}.ok{color:#86efac}.danger{color:#fca5a5}.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.pill{font-size:12px;padding:3px 8px;border-radius:999px;background:#1f334d;color:#dbeafe}.status{min-height:22px;color:#fde68a}
+  </style>
+</head>
+<body>
+<main>
+  <section class="hero">
+    <div class="tag">Tripity Connector Machine</div>
+    <h1>Give your app an AI link.</h1>
+    <p>Paste a company-owned OpenAPI spec. Tripity returns a protected MCP link, enables read tools by default, disables writes, and shows metadata-only AI activity logs.</p>
+  </section>
+
+  <div class="grid">
+    <section class="card">
+      <h2>Create AI Link</h2>
+      <label>Company name</label>
+      <input id="company" value="Acme CRM">
+      <label>OpenAPI URL <span class="muted">paste only a public spec URL — base URL is inferred</span></label>
+      <div class="row">
+        <input id="specUrl" placeholder="https://api.company.com/openapi.json" style="flex:1">
+        <button id="createFromUrl" type="button">Create from OpenAPI URL</button>
+      </div>
+      <label>API base URL <span class="muted">optional when using a URL above</span></label>
+      <input id="base" value="http://fixture.test">
+      <label>Upstream bearer token <span class="muted">optional/server-side</span></label>
+      <input id="token" placeholder="API token (optional)" type="password">
+      <label>OpenAPI JSON</label>
+      <textarea id="spec" placeholder='{"openapi":"3.0.0",...}'></textarea>
+      <div class="row">
+        <button id="create">Create AI Link</button>
+        <button class="secondary" id="createSample" type="button">Create sample AI link</button>
+        <button class="secondary" id="createPetstore" type="button">Create Petstore AI link</button>
+        <button class="secondary" id="loadExample" type="button">Load tiny example</button>
+      </div>
+      <p class="status" id="status"></p>
+    </section>
+
+    <section class="card">
+      <h2>Your AI link</h2>
+      <div id="empty" class="muted">No connector yet.</div>
+      <div id="result" style="display:none">
+        <label>MCP URL</label><pre id="mcpUrl"></pre>
+        <label>Client bearer token</label><pre id="clientToken"></pre>
+        <div class="row"><button class="secondary" id="testRead" type="button">Test read tool</button><button class="secondary" id="refresh" type="button">Refresh logs</button><button class="secondary" id="exportPacket" type="button">Export demo packet</button></div>
+        <label>Test read result</label><pre id="testResult">No read test yet.</pre>
+        <label>Company-facing export</label><pre id="exportText">No export yet.</pre>
+      </div>
+    </section>
+  </div>
+
+  <div class="grid" style="margin-top:18px">
+    <section class="card"><h2 class="ok">Enabled read tools</h2><div id="enabled" class="muted">Create a connector first.</div></section>
+    <section class="card"><h2 class="danger">Disabled write tools</h2><div id="disabled" class="muted">Create a connector first.</div></section>
+  </div>
+
+  <div class="grid" style="margin-top:18px">
+    <section class="card"><h2>Metadata-only logs</h2><div id="logs" class="muted">No AI calls yet.</div></section>
+    <section class="card"><h2>tripity.connector.v0 manifest</h2><pre id="manifest">Create a connector first.</pre></section>
+  </div>
+
+  <div class="grid" style="margin-top:18px">
+    <section class="card">
+      <h2 class="danger">Pending write approvals</h2>
+      <p class="muted">When AI calls an approved write tool, it is held here — nothing changes in the company API until a human operator approves it.</p>
+      <label>Operator token <span class="muted">printed by the launcher; required to view/approve</span></label>
+      <input id="operatorToken" placeholder="operator token" type="password">
+      <div class="row"><button class="secondary" id="refreshApprovals" type="button">Refresh approvals</button></div>
+      <div id="approvals" class="muted">Enter the operator token to manage write approvals.</div>
+    </section>
+  </div>
+</main>
+<script>
+let currentSlug=null;
+const $=id=>document.getElementById(id);
+function tinySpec(){return JSON.stringify({openapi:"3.0.0",info:{title:"Tiny CRM",version:"1.0"},paths:{"/customers/{id}":{get:{operationId:"get_customer",summary:"Get customer",parameters:[{name:"id",in:"path",required:true,schema:{type:"integer"}}],responses:{"200":{description:"OK"}}}},"/customers":{post:{operationId:"create_customer",summary:"Create customer",requestBody:{content:{"application/json":{schema:{type:"object",properties:{name:{type:"string"}}}}}},responses:{"200":{description:"OK"}}}}}},null,2)}
+$('loadExample').onclick=()=>{$('spec').value=tinySpec()};
+function toolHtml(t, enabled){const title=t.display_name?`${t.display_name} <span class="muted">(${t.name})</span>`:t.name;const hint=t.usage_hint?`<div class="ok" style="margin-top:4px">${t.usage_hint}</div>`:'';return `<div class="tool ${enabled?'enabled':'disabled'}"><div class="row"><b>${title}</b><span class="pill">${t.method}</span><span class="pill">${t.risk}</span></div><code>${t.path}</code>${hint}<br><span class="muted">${t.reason||''}</span></div>`}
+function render(packet){currentSlug=packet.slug;$('empty').style.display='none';$('result').style.display='block';$('mcpUrl').textContent=packet.mcp_url;$('clientToken').textContent=packet.client_auth.token;$('enabled').innerHTML=packet.enabled_tools.length?packet.enabled_tools.map(t=>toolHtml(t,true)).join(''):'No enabled tools';$('disabled').innerHTML=packet.disabled_tools.length?packet.disabled_tools.map(t=>toolHtml(t,false)).join(''):'No disabled tools';$('manifest').textContent=JSON.stringify(JSON.parse(packet.manifest_json),null,2);$('logs').innerHTML=packet.logs.length?packet.logs.map(l=>`<div class="tool"><b>${l.tool_name}</b> <span class="pill">${l.status_code}</span> <span class="pill">${l.latency_ms}ms</span> <span class="muted">${new Date(l.timestamp*1000).toLocaleTimeString()}</span></div>`).join(''):'No AI calls yet.'}
+$('create').onclick=async()=>{try{$('create').disabled=true;$('status').textContent='Creating connector...';const spec=JSON.parse($('spec').value);const body={company_name:$('company').value,api_base_url:$('base').value,openapi_spec:spec,upstream_bearer_token:$('token').value||null};const r=await fetch('/api/company-connectors',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});const data=await r.json();if(!r.ok)throw new Error(data.detail||'Create failed');render(data);$('status').textContent='AI link ready.'}catch(e){$('status').textContent=e.message}finally{$('create').disabled=false}};
+$('createSample').onclick=async()=>{try{$('createSample').disabled=true;$('status').textContent='Creating sample connector...';const r=await fetch('/api/company-connectors/sample',{method:'POST'});const data=await r.json();if(!r.ok)throw new Error(data.detail||'Sample failed');render(data);$('company').value=data.company_name;$('base').value='http://fixture.test';$('status').textContent='Sample AI link ready — use the MCP URL and token on the right.'}catch(e){$('status').textContent=e.message}finally{$('createSample').disabled=false}};
+$('createPetstore').onclick=async()=>{try{$('createPetstore').disabled=true;$('status').textContent='Creating Petstore connector from real public OpenAPI...';const r=await fetch('/api/company-connectors/sample-petstore',{method:'POST'});const data=await r.json();if(!r.ok)throw new Error(data.detail||'Petstore failed');render(data);$('company').value=data.company_name;$('base').value='https://petstore3.swagger.io/api/v3';$('status').textContent='Petstore AI link ready — use Test read tool to call getPetById(10).'}catch(e){$('status').textContent=e.message}finally{$('createPetstore').disabled=false}};
+$('createFromUrl').onclick=async()=>{const url=$('specUrl').value.trim();if(!url){$('status').textContent='Paste an OpenAPI URL first.';return}try{$('createFromUrl').disabled=true;$('status').textContent='Fetching OpenAPI spec from URL...';const body={company_name:$('company').value,openapi_url:url,api_base_url:$('base').value||null,upstream_bearer_token:$('token').value||null};const r=await fetch('/api/company-connectors/from-url',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});const data=await r.json();if(!r.ok)throw new Error(data.detail||'Create from URL failed');render(data);$('status').textContent='AI link ready from URL — writes disabled by default.'}catch(e){$('status').textContent=e.message}finally{$('createFromUrl').disabled=false}};
+$('testRead').onclick=async()=>{if(!currentSlug)return;try{$('testRead').disabled=true;const isPetstore=currentSlug==='swagger-petstore-demo';const body=isPetstore?{tool_name:'getPetById',arguments:{petId:10}}:{};$('status').textContent=`Calling safe read tool ${isPetstore?'getPetById':'get_item'}...`;const r=await fetch(`/api/company-connectors/${encodeURIComponent(currentSlug)}/test-read`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});const data=await r.json();if(!r.ok)throw new Error(data.detail||'Read test failed');$('testResult').textContent=JSON.stringify(data.result,null,2);const refreshed=await fetch(`/api/company-connectors/${encodeURIComponent(currentSlug)}`);render(await refreshed.json());$('testResult').textContent=JSON.stringify(data.result,null,2);$('status').textContent='Read tool worked and logs refreshed.'}catch(e){$('status').textContent=e.message}finally{$('testRead').disabled=false}};
+$('exportPacket').onclick=async()=>{if(!currentSlug)return;try{$('status').textContent='Building clean export...';const r=await fetch(`/api/company-connectors/${encodeURIComponent(currentSlug)}/export`);const text=await r.text();if(!r.ok)throw new Error(text||'Export failed');$('exportText').textContent=text;$('status').textContent='Export ready.'}catch(e){$('status').textContent=e.message}};
+$('refresh').onclick=async()=>{if(!currentSlug)return;const r=await fetch(`/api/company-connectors/${encodeURIComponent(currentSlug)}`);render(await r.json())};
+function operatorHeaders(){const t=$('operatorToken').value.trim();return t?{'authorization':`Bearer ${t}`}:{}}
+async function loadApprovals(){if(!currentSlug){return}const t=$('operatorToken').value.trim();if(!t){$('approvals').textContent='Enter the operator token to manage write approvals.';return}try{const r=await fetch(`/api/company-connectors/${encodeURIComponent(currentSlug)}/approvals`,{headers:operatorHeaders()});if(r.status===401){$('approvals').textContent='Operator token rejected.';return}const data=await r.json();const list=data.pending||[];$('approvals').innerHTML=list.length?list.map(a=>`<div class="tool disabled"><div class="row"><b>${a.tool_name}</b><span class="pill">${a.method}</span><code>${a.path}</code></div><button class="secondary approveBtn" data-id="${a.approval_id}" type="button">Approve &amp; run</button></div>`).join(''):'No pending writes.'}catch(e){$('approvals').textContent=e.message}}
+$('refreshApprovals').onclick=loadApprovals;
+$('approvals').addEventListener('click',async ev=>{const btn=ev.target.closest('.approveBtn');if(!btn||!currentSlug)return;try{btn.disabled=true;$('status').textContent='Approving write...';const r=await fetch(`/api/company-connectors/${encodeURIComponent(currentSlug)}/approvals/${encodeURIComponent(btn.dataset.id)}/approve`,{method:'POST',headers:operatorHeaders()});const data=await r.json();if(!r.ok)throw new Error(data.detail||'Approve failed');$('status').textContent=`Write approved and executed (status ${data.status_code}).`;await loadApprovals();const rr=await fetch(`/api/company-connectors/${encodeURIComponent(currentSlug)}`);render(await rr.json())}catch(e){$('status').textContent=e.message}});
+const _render=render;render=function(p){_render(p);loadApprovals()};
+$('spec').value=tinySpec();
+</script>
+</body>
+</html>

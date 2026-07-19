@@ -8,3 +8,4 @@ spy.json
 .env
 lse.js
 
+*.egg-info/

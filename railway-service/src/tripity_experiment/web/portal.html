@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Tripity — החיבורים שלי</title>
+  <style>
+    :root{--bg:#07111f;--card:#101e31;--line:#263951;--text:#f7fbff;--muted:#9eb0c7;--mint:#64e6b2;--blue:#72a8ff}
+    *{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 80% 0,#17375a,transparent 40%),var(--bg);color:var(--text);font-family:Arial,sans-serif}
+    main{width:min(900px,calc(100% - 28px));margin:auto;padding:48px 0}h1{font-size:clamp(38px,7vw,70px);margin:8px 0}.tag{color:var(--mint);font-weight:800}
+    p{color:var(--muted)}.card{background:#101e31ee;border:1px solid var(--line);border-radius:22px;padding:22px;margin-top:18px}
+    .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}label{display:block;font-weight:700;margin:10px 0 6px}
+    input,select{width:100%;padding:13px;border-radius:12px;border:1px solid var(--line);background:#091525;color:var(--text)}
+    button{margin-top:14px;padding:13px 20px;border:0;border-radius:12px;background:linear-gradient(135deg,var(--mint),var(--blue));font-weight:900;cursor:pointer}
+    code{direction:ltr;display:block;background:#07111f;padding:13px;border-radius:12px;overflow:auto}.hidden{display:none}.connection{border-top:1px solid var(--line);padding:13px 0}
+    @media(max-width:650px){.grid{grid-template-columns:1fr}}
+  </style>
+</head>
+<body><main>
+  <div class="tag">TRIPITY</div><h1>כל החיבורים שלך.<br>בכל AI.</h1>
+  <p>מחברים פעם אחת את Tripity, ואז מוסיפים אליה כל דבר שרוצים.</p>
+  <section id="auth" class="card">
+    <h2>כניסה או הרשמה</h2><div class="grid"><div><label>שם משתמש</label><input id="username"></div><div><label>סיסמה</label><input id="password" type="password"></div></div>
+    <button id="register">הרשמה</button> <button id="login">כניסה</button><p id="authStatus"></p>
+  </section>
+  <section id="home" class="hidden">
+    <div class="card"><h2>כתובת ה-MCP שלך</h2><p>את הכתובת הזאת מחברים פעם אחת ל-AI.</p><code id="mcpUrl"></code></div>
+    <div class="card"><h2>חבר אתר שאתה כבר מחובר אליו</h2>
+      <p>הריצו פעם אחת את מפעיל Tripity (קובץ <code style="display:inline">Tripity.cmd</code>), התחברו לאתר כרגיל, ואז חברו אותו כאן. ה-AI יראה אותו דרך הדפדפן שלכם — בלי API ובלי קוד.</p>
+      <div class="grid">
+        <div><label>שם</label><input id="siteName" placeholder="למשל: ה-CRM שלי"></div>
+        <div><label>כתובת האתר</label><input id="siteOrigin" placeholder="https://crm.example.com" dir="ltr"></div>
+      </div><button id="connectSite">חבר את האתר הזה</button><p id="siteStatus"></p></div>
+    <div class="card"><h2>חיבור מתקדם (API / MCP)</h2><div class="grid">
+      <div><label>שם</label><input id="name" placeholder="למשל: מזג אוויר"></div>
+      <div><label>סוג חיבור</label><select id="kind"><option value="openapi">OpenAPI</option><option value="mcp">MCP קיים</option></select></div>
+      <div><label>OpenAPI URL</label><input id="openapi" placeholder="https://.../openapi.json"></div>
+      <div><label>API base URL</label><input id="base" placeholder="https://api.example.com"></div>
+      <div><label>פעולות</label><input id="operations" placeholder="getWeather, search"></div>
+      <div><label>MCP URL</label><input id="remoteMcp" placeholder="https://.../mcp"></div>
+    </div><label>API token — אופציונלי</label><input id="apiToken" type="password"><button id="add">הוסף לחיבורים שלי</button><p id="addStatus"></p></div>
+    <div class="card"><h2>החיבורים שלי</h2><div id="connections"></div>
+      <p style="margin-top:18px;border-top:1px solid var(--line);padding-top:14px">מחיקה נעשית רק כאן, ביוזמתך. ניתוק Tripity מ-AI לא מוחק כלום.</p>
+      <button id="deleteAccount" style="background:#3a1420;color:#ff9db0">מחק את המשתמש שלי וכל הנתונים</button><p id="accountStatus"></p></div>
+  </section>
+<script>
+let token="";const $=x=>document.getElementById(x);
+async function req(path,method="GET",body){const r=await fetch(path,{method,headers:{"Content-Type":"application/json",...(token?{Authorization:`Bearer ${token}`}:{})},body:body?JSON.stringify(body):undefined});const d=await r.json();if(!r.ok)throw Error(d.detail||"הבקשה נכשלה");return d}
+async function enter(data){token=data.access_token;$("mcpUrl").textContent=data.mcp_url;$("auth").classList.add("hidden");$("home").classList.remove("hidden");await refresh()}
+$("register").onclick=async()=>{try{await req("/api/register","POST",{username:$("username").value,password:$("password").value});$("authStatus").textContent="נרשמת. עכשיו אפשר להיכנס."}catch(e){$("authStatus").textContent=e.message}}
+$("login").onclick=async()=>{try{await enter(await req("/api/login","POST",{username:$("username").value,password:$("password").value}))}catch(e){$("authStatus").textContent=e.message}}
+async function refresh(){const rows=await req("/api/connections");$("connections").innerHTML=rows.length?rows.map(x=>`<div class="connection" style="display:flex;justify-content:space-between;align-items:center;gap:10px"><div><b>${x.name}</b><p>${x.kind} · ${x.kind==="browser"?x.source:x.operations.join(", ")}</p></div><button class="del" data-name="${encodeURIComponent(x.name)}" style="margin:0;padding:8px 12px;background:#26323f;color:#ff9db0">מחק</button></div>`).join(""):"<p>עוד אין חיבורים.</p>";document.querySelectorAll(".del").forEach(b=>b.onclick=async()=>{const name=decodeURIComponent(b.dataset.name);if(!confirm(`למחוק את החיבור "${name}"?`))return;try{await req(`/api/connections/${encodeURIComponent(name)}`,"DELETE");await refresh()}catch(e){alert(e.message)}})}
+$("deleteAccount").onclick=async()=>{if(!confirm("למחוק את המשתמש שלך ואת כל החיבורים והנתונים? אי אפשר לבטל."))return;try{await req("/api/account","DELETE");token="";$("home").classList.add("hidden");$("auth").classList.remove("hidden");$("authStatus").textContent="המשתמש נמחק. כל הנתונים הוסרו."}catch(e){$("accountStatus").textContent=e.message}}
+$("connectSite").onclick=async()=>{try{await req("/api/connections","POST",{name:$("siteName").value,kind:"browser",origin:$("siteOrigin").value});$("siteStatus").textContent="האתר חובר. שאל את ה-AI שלך כל דבר מתוכו.";await refresh()}catch(e){$("siteStatus").textContent=e.message}}
+$("add").onclick=async()=>{try{await req("/api/connections","POST",{name:$("name").value,kind:$("kind").value,openapi_url:$("openapi").value,base_url:$("base").value,operations:$("operations").value.split(",").map(x=>x.trim()).filter(Boolean),mcp_url:$("remoteMcp").value||null,api_bearer_token:$("apiToken").value||null});$("addStatus").textContent="החיבור נוסף לאותה כתובת MCP.";await refresh()}catch(e){$("addStatus").textContent=e.message}}
+</script></main></body></html>
