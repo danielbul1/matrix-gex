@@ -24,11 +24,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Prepare publish artifact (exclude data files, logs, server code)
+        run: |
+          mkdir public
+          rsync -a --exclude 'public' \
+            --exclude '.git' --exclude '.github' --exclude '.claude' \
+            --exclude '__pycache__' --exclude '*.pyc' --exclude '*.log' \
+            --exclude 'cboe_data.json' --exclude 'spy.json' \
+            --exclude 'candles_data.json' --exclude 'cboe_open_data.json' \
+            --exclude 'matrix_remote.js' --exclude 'exposure_history' \
+            --exclude '*.py' --exclude '*.ps1' --exclude 'requirements.txt' \
+            --exclude '.env*' --exclude 'functions' \
+            ./ public/
+
       - uses: actions/configure-pages@v5
 
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: .
+          path: public
 
       - id: deployment
         uses: actions/deploy-pages@v4

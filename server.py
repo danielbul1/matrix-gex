@@ -3,28 +3,71 @@ from flask_cors import CORS
 import requests
 import numpy as np
 from scipy.stats import norm
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
+import threading
 import time
 import re
 import json
 from pathlib import Path
 
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv(Path(__file__).resolve().with_name(".env"))
+except Exception:
+    pass
+
 app = Flask(__name__)
+# CORS is intentionally open: this is a public read-only dashboard backend.
+# Tradeoff: any origin can call these endpoints, which means third parties
+# could indirectly consume our LSE fetch budget via /gex and /raw. Accepted
+# for now (personal project, low traffic); revisit if traffic grows.
 CORS(app)
 
+ET = ZoneInfo('America/New_York')
+
 TICKER  = 'SPY'
-URL     = f'https://cdn.cboe.com/api/global/delayed_quotes/options/{TICKER}.json'
-CACHE_S = 5
+BASE_URL = 'https://api.londonstrategicedge.com'
+URL     = f'{BASE_URL}/x_options_snapshot?underlying=eq.{TICKER}&order=ticker.asc&limit=30000'
+CACHE_S = 60  # seconds; keeps LSE snapshot fetches well under free-plan limits
 STATUS_PATH = Path(__file__).resolve().with_name('data_status.json')
 
 _cache = {'data': None, 'ts': 0}
+_cache_lock = threading.Lock()  # guards _cache reads/writes
+_fetch_lock = threading.Lock()  # serializes upstream revalidation (no stampede)
+
+# In-process counter for upstream LSE snapshot fetches (free-plan awareness:
+# ~10 historical downloads/hour). Warns past 8/hour but never blocks.
+_lse_counter = {'hour_start': time.time(), 'count': 0}
+_lse_counter_lock = threading.Lock()
+
+
+def _record_lse_fetch():
+    with _lse_counter_lock:
+        now = time.time()
+        if now - _lse_counter['hour_start'] >= 3600:
+            _lse_counter['hour_start'] = now
+            _lse_counter['count'] = 0
+        _lse_counter['count'] += 1
+        count = _lse_counter['count']
+    if count > 8:
+        print(f'WARNING: {count} LSE snapshot fetches in the last hour; '
+              f'LSE free plan allows ~10 historical downloads/hour.')
+
+
+def get_lse_api_key():
+    import os
+    key = os.environ.get('LSE_API_KEY', '').strip()
+    if not key:
+        raise RuntimeError('LSE_API_KEY environment variable is not set')
+    return key
+
 
 HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+    'x-api-key':  get_lse_api_key,
     'Accept':     'application/json',
-    'Referer':    'https://www.cboe.com/',
-    'Origin':     'https://www.cboe.com',
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
 }
 
 OPT_RE = re.compile(r'^([A-Z]{1,6})(\d{6})([CP])(\d{8,})$')
@@ -35,7 +78,7 @@ def parse_sym(sym):
         return None
     _, date_s, kind, strike_s = m.groups()
     try:
-        exp = datetime.strptime(date_s, '%y%m%d').replace(hour=16)
+        exp = datetime.strptime(date_s, '%y%m%d').replace(hour=16, tzinfo=ET)
     except:
         return None
     strike = int(strike_s[:8]) / 1000.0
@@ -56,7 +99,7 @@ def is_third_friday(d):
     return d.weekday() == 4 and 15 <= d.day <= 21
 
 def minutes_to_market_close():
-    now_et = datetime.now(ZoneInfo('America/New_York'))
+    now_et = datetime.now(ET)
     close_et = now_et.replace(hour=16, minute=0, second=0, microsecond=0)
     open_et = now_et.replace(hour=9, minute=30, second=0, microsecond=0)
     if now_et.weekday() >= 5:
@@ -66,6 +109,18 @@ def minutes_to_market_close():
     if now_et >= close_et:
         return 0
     return int((close_et - now_et).total_seconds() // 60)
+
+
+def time_to_expiry_years(exp, now_et):
+    """Time to expiry in years. 0DTE contracts use actual intraday time
+    remaining until 16:00 ET with a 1-minute floor (matching the JS port);
+    longer-dated contracts use business days / 262."""
+    bd = int(np.busday_count(now_et.date(), exp.date()))
+    if bd > 0:
+        return bd / 262.0, False
+    minutes = (exp - now_et).total_seconds() / 60.0
+    minutes = max(minutes, 1.0)  # 1-minute floor
+    return minutes / (365.25 * 24 * 60), True
 
 # Black-Scholes greeks
 def bs_d1d2(S, K, vol, T):
@@ -123,34 +178,52 @@ def make_np(opts, exclude_exp=None):
 # Main computation
 def compute():
     now = time.time()
-    if _cache['data'] and now - _cache['ts'] < CACHE_S:
-        return _cache['data']
+    with _cache_lock:
+        if _cache['data'] is not None and now - _cache['ts'] < CACHE_S:
+            return _cache['data']
 
-    r = requests.get(URL, headers=HEADERS, timeout=15)
+    # Serialize upstream revalidation: only one thread fetches from LSE;
+    # waiters re-check the cache after acquiring the lock.
+    with _fetch_lock:
+        now = time.time()
+        with _cache_lock:
+            if _cache['data'] is not None and now - _cache['ts'] < CACHE_S:
+                return _cache['data']
+        result = _compute_fresh(now)
+        with _cache_lock:
+            _cache['data'] = result
+            _cache['ts'] = time.time()
+        return result
+
+
+def _compute_fresh(now):
+    _record_lse_fetch()
+    headers = {k: (v() if callable(v) else v) for k, v in HEADERS.items()}
+    r = requests.get(URL, headers=headers, timeout=30)
     r.raise_for_status()
     raw = r.json()
 
-    spot   = safe(raw['data']['current_price'])
-    ts     = str(raw.get('timestamp', datetime.now().isoformat()))
-    today  = datetime.now().replace(hour=0,minute=0,second=0,microsecond=0)
-    lo, hi = 0.8*spot, 1.2*spot
+    if not isinstance(raw, list):
+        raise RuntimeError(f'Unexpected LSE response type: {type(raw)}')
+
+    spot   = None
+    now_et = datetime.now(ET)
+    ts     = now_et.isoformat()
+    today  = now_et.replace(hour=0,minute=0,second=0,microsecond=0)
 
     # Parse
     pairs = {}
-    for o in raw['data']['options']:
-        parsed = parse_sym(o.get('option',''))
+    for o in raw:
+        parsed = parse_sym(o.get('ticker',''))
         if not parsed: continue
         strike = parsed['strike']
-        if not (lo <= strike <= hi): continue
 
         exp  = parsed['exp']
         kind = parsed['kind']
         key  = (exp, strike)
 
         if key not in pairs:
-            bd = int(np.busday_count(today.date(), exp.date()))
-            T  = max(bd, 1) / 262.0
-            is_0dte = (bd == 0)
+            T, is_0dte = time_to_expiry_years(exp, now_et)
             pairs[key] = {'exp':exp,'strike':strike,'T':T,'is_0dte':is_0dte,'C':{},'P':{}}
 
         iv  = norm_iv(safe(o.get('iv',0)))
@@ -159,8 +232,14 @@ def compute():
         dlt = safe(o.get('delta',0))
         pairs[key][kind] = {'iv':iv,'gamma':gam,'oi':oi,'delta':dlt}
 
-    if not pairs:
-        raise RuntimeError('No options parsed. See /raw to inspect CBOE response.')
+        if spot is None:
+            spot = safe(o.get('underlying_price',0))
+
+    if not pairs or spot is None or spot <= 0:
+        raise RuntimeError('No options parsed. See /raw to inspect LSE response.')
+
+    lo, hi = 0.8*spot, 1.2*spot
+    pairs = {k: v for k, v in pairs.items() if lo <= v['strike'] <= hi}
 
     opts = list(pairs.values())
 
@@ -346,8 +425,7 @@ def compute():
 
     # GEX heatmap (strikes x expiries within 60 days)
     hm_lo, hm_hi = 0.9*spot, 1.1*spot    # tighter range for readability
-    cutoff = today.replace(hour=0,minute=0,second=0,microsecond=0)
-    from datetime import timedelta
+    cutoff = today  # already midnight ET
     cutoff60 = cutoff + timedelta(days=60)
 
     hm_opts = [o for o in opts if hm_lo <= o['strike'] <= hm_hi and o['exp'].replace(tzinfo=None) <= cutoff60.replace(tzinfo=None)]
@@ -430,8 +508,6 @@ def compute():
         },
         'count': len(opts),
     }
-    _cache['data'] = result
-    _cache['ts']   = now
     return result
 
 # Routes
@@ -442,28 +518,37 @@ def gex():
     except Exception as e:
         import traceback
         print(traceback.format_exc())
-        return jsonify({'error': str(e)}), 500
+        # Stale-while-revalidate: serve the last good payload rather than 500.
+        with _cache_lock:
+            cached = _cache['data']
+        if cached is not None:
+            body = dict(cached)
+            body['stale'] = True
+            body['stale_reason'] = str(e)
+            return jsonify(body)
+        return jsonify({'error': str(e)}), 503
 
 @app.route('/raw')
 def raw_view():
     try:
-        r = requests.get(URL, headers=HEADERS, timeout=15)
+        _record_lse_fetch()
+        headers = {k: (v() if callable(v) else v) for k, v in HEADERS.items()}
+        r = requests.get(URL, headers=headers, timeout=30)
         r.raise_for_status()
         data = r.json()
-        opts = data.get('data',{}).get('options',[])
+        opts = data if isinstance(data, list) else []
         return jsonify({
-            'top_keys':    list(data.keys()),
-            'data_keys':   list(data.get('data',{}).keys()),
+            'type':        type(data).__name__,
             'options_len': len(opts),
-            'first_5':     opts[:5] if isinstance(opts,list) else [],
-            'spot':        data.get('data',{}).get('current_price'),
+            'first_5':     opts[:5],
+            'spot':        opts[0].get('underlying_price') if opts else None,
         })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
 @app.route('/health')
 def health():
-    return jsonify({'ok': True, 'time': datetime.now().isoformat()})
+    return jsonify({'ok': True, 'time': datetime.now(ET).isoformat()})
 
 @app.route('/status')
 def status():
@@ -479,6 +564,6 @@ def status():
     return jsonify(data), 200 if ok else 503
 
 if __name__ == '__main__':
-    print('GEX Live Server - SPY v2')
+    print('GEX Live Server - SPY v2 (LSE)')
     print('http://localhost:5000/gex')
     app.run(host='127.0.0.1', port=5000, debug=False)

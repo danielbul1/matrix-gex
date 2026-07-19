@@ -7,35 +7,17 @@
   },
   "reference_symbol": "SPX",
   "schema_version": 1,
-  "source": "CBOE delayed quotes",
-  "state": "off_hours",
+  "source": "LSE options snapshot",
+  "state": "fresh",
   "summary": {
     "latest_asof_et": "2026-07-08T16:14:59-04:00",
     "latest_symbol": "NDX",
     "oldest_asof_et": "2026-07-08T15:59:59-04:00",
     "oldest_symbol": "QQQ",
-    "symbols": 8,
-    "total_contracts": 43120
+    "symbols": 4,
+    "total_contracts": 36386
   },
   "symbols": {
-    "AAPL": {
-      "asof": "2026-07-08T15:59:59",
-      "asof_et": "2026-07-08T15:59:59-04:00",
-      "contracts": 1293,
-      "expiries": 24,
-      "first_expiry": "2026-07-10",
-      "last_expiry": "2028-12-15",
-      "spot": 312.3
-    },
-    "IWM": {
-      "asof": "2026-07-08T15:59:59",
-      "asof_et": "2026-07-08T15:59:59-04:00",
-      "contracts": 2585,
-      "expiries": 32,
-      "first_expiry": "2026-07-09",
-      "last_expiry": "2028-12-15",
-      "spot": 294.01
-    },
     "NDX": {
       "asof": "2026-07-08T16:14:59",
       "asof_et": "2026-07-08T16:14:59-04:00",
@@ -44,15 +26,6 @@
       "first_expiry": "2026-07-09",
       "last_expiry": "2029-12-21",
       "spot": 29252.56
-    },
-    "NVDA": {
-      "asof": "2026-07-08T15:59:59",
-      "asof_et": "2026-07-08T15:59:59-04:00",
-      "contracts": 1194,
-      "expiries": 24,
-      "first_expiry": "2026-07-10",
-      "last_expiry": "2028-12-15",
-      "spot": 204.6
     },
     "QQQ": {
       "asof": "2026-07-08T15:59:59",
@@ -80,15 +53,6 @@
       "first_expiry": "2026-07-09",
       "last_expiry": "2028-12-15",
       "spot": 746.58
-    },
-    "TSLA": {
-      "asof": "2026-07-08T15:59:59",
-      "asof_et": "2026-07-08T15:59:59-04:00",
-      "contracts": 1662,
-      "expiries": 22,
-      "first_expiry": "2026-07-10",
-      "last_expiry": "2028-12-15",
-      "spot": 395.34
     }
   }
 }

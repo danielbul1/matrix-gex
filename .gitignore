@@ -5,3 +5,6 @@ __pycache__/
 .wrangler/
 .DS_Store
 spy.json
+.env
+lse.js
+

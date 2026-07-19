@@ -1,3 +1,9 @@
+# ============================================================================
+# DEPRECATED (2026-07-19)
+# This local collector loop is superseded by the GitHub Actions pipeline
+# (.github/workflows/update-cboe.yml) and the Railway backend service at
+# https://api.trytripity.site. Do not run in production; kept for reference.
+# ============================================================================
 $ErrorActionPreference = "Continue"
 
 Set-Location -LiteralPath $PSScriptRoot

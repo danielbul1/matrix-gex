@@ -1,24 +1,29 @@
-name: Update CBOE Data
+name: Update LSE Data
 
 on:
   workflow_dispatch:
   push:
     branches: [main]
     paths:
-      - "fetch_cboe.py"
-      - "fetch_candles.py"
+      - "fetch_lse.py"
       - "tools/build_data_status.py"
       - "tools/build_exposure_history.py"
       - "tools/smoke_check.py"
       - ".github/workflows/update-cboe.yml"
   schedule:
-    - cron: "2,17,32,47 13-20 * * 1-5"
+    # Once per hour during US market hours (13-20 UTC, Mon-Fri).
+    # The LSE key's plan tier is unverified; the free plan allows ~10
+    # historical downloads/hour and one full refresh uses ~8 downloads
+    # (4 options + 4 candles), so hourly cadence stays within the free tier.
+    # If the key is on a registered/paid plan, restore 15-minute cadence:
+    #   - cron: "2,17,32,47 13-20 * * 1-5"
+    - cron: "13 13-20 * * 1-5"
 
 permissions:
   contents: write
 
 concurrency:
-  group: update-cboe-data
+  group: update-lse-data
   cancel-in-progress: true
 
 jobs:
@@ -35,9 +40,11 @@ jobs:
           python-version: "3.12"
 
       - name: Compile validation scripts
-        run: python -m py_compile fetch_cboe.py fetch_candles.py tools/build_data_status.py tools/build_exposure_history.py tools/smoke_check.py
+        run: python -m py_compile fetch_lse.py tools/build_data_status.py tools/build_exposure_history.py tools/smoke_check.py
 
-      - name: Fetch CBOE data
+      - name: Fetch LSE data
+        env:
+          LSE_API_KEY: ${{ secrets.LSE_API_KEY }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -45,15 +52,12 @@ jobs:
           while [ "$SECONDS" -lt "$end" ]; do
             now_utc=$(date -u +%H%M)
             git fetch origin data || true
-            git show origin/data:cboe_open_data.json > cboe_open_data.json 2>/dev/null || rm -f cboe_open_data.json
-            if python fetch_cboe.py && python fetch_candles.py && python tools/build_data_status.py && MATRIX_REQUIRE_FRESH_DATA=1 python tools/smoke_check.py; then
+            if python fetch_lse.py && python tools/build_data_status.py && MATRIX_REQUIRE_FRESH_DATA=1 python tools/smoke_check.py; then
               rm -rf /tmp/matrix-gex-data
               mkdir -p /tmp/matrix-gex-data
               cp cboe_data.json candles_data.json data_status.json /tmp/matrix-gex-data/
               cp tools/build_exposure_history.py /tmp/matrix-gex-data/
-              if [ -f cboe_open_data.json ]; then cp cboe_open_data.json /tmp/matrix-gex-data/; fi
               git restore -- cboe_data.json data_status.json
-              rm -f cboe_open_data.json
               if git show-ref --verify --quiet refs/remotes/origin/data; then
                 git switch --force-create data origin/data
               else
@@ -61,12 +65,10 @@ jobs:
                 git rm -rf .
               fi
               cp /tmp/matrix-gex-data/cboe_data.json /tmp/matrix-gex-data/candles_data.json /tmp/matrix-gex-data/data_status.json .
-              if [ -f /tmp/matrix-gex-data/cboe_open_data.json ]; then cp /tmp/matrix-gex-data/cboe_open_data.json .; fi
               python /tmp/matrix-gex-data/build_exposure_history.py --input cboe_data.json --root exposure_history --retain 7
               git add cboe_data.json candles_data.json data_status.json exposure_history
-              if [ -f cboe_open_data.json ]; then git add cboe_open_data.json; fi
               if ! git diff --cached --quiet; then
-                git commit -m "Update CBOE data"
+                git commit -m "Update LSE data"
                 git push origin data
               fi
               git switch main
@@ -74,7 +76,7 @@ jobs:
               echo "Fetch or validation failed; skipping commit for this interval"
               git restore -- cboe_data.json data_status.json
             fi
-            if [ "$now_utc" -lt 1325 ] || [ "$now_utc" -gt 2015 ]; then
+            if [ "$now_utc" -lt "1325" ] || [ "$now_utc" -gt "2015" ]; then
               break
             fi
             sleep 300

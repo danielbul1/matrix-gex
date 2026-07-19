@@ -1,3 +1,9 @@
+"""Exploratory/dev script: SPY GEX charts from a QuoteData CSV export.
+
+NOT part of the production pipeline. The CSV path below is hardcoded to the
+author's local machine — edit `filename` before running. Requires pandas,
+scipy, and matplotlib.
+"""
 import pandas as pd
 import numpy as np
 from scipy.stats import norm

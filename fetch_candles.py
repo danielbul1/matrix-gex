@@ -1,4 +1,10 @@
-"""Fetch compact 5-minute OHLC candles for the dashboard data branch."""
+"""Fetch compact 5-minute OHLC candles for the dashboard data branch.
+
+DEPRECATED (2026-07-19): part of the retired local collector pipeline,
+superseded by the GitHub Actions pipeline (.github/workflows/update-cboe.yml),
+which fetches 15m candles from LSE via fetch_lse.py, and by the Railway
+backend service at https://api.trytripity.site. Kept for reference only.
+"""
 
 import datetime as dt
 import json

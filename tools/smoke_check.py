@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 
 ROOT = Path(__file__).resolve().parents[1]
 STATUS_PATH = ROOT / "data_status.json"
-REQUIRED_SYMBOLS = ("NDX", "SPX", "SPY", "QQQ", "IWM", "AAPL", "NVDA", "TSLA")
+REQUIRED_SYMBOLS = ("NDX", "SPX", "SPY", "QQQ")
 FRESHNESS_SYMBOL = "SPX"
 FRESHNESS_MAX_AGE = timedelta(minutes=75)
 FRESHNESS_FUTURE_TOLERANCE = timedelta(minutes=5)
@@ -209,7 +209,7 @@ def validate_status_file():
         return fail("data_status.json has unsupported schema_version")
     if status.get("reference_symbol") != FRESHNESS_SYMBOL:
         return fail("data_status.json has unexpected reference_symbol")
-    if status.get("source") != "CBOE delayed quotes":
+    if status.get("source") != "LSE options snapshot":
         return fail("data_status.json has unexpected source")
     if status.get("state") not in {"fresh", "stale", "future", "off_hours", "unknown"}:
         return fail("data_status.json has invalid state")

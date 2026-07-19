@@ -70,13 +70,6 @@ const SYMBOLS = {
   SPX:{spot:7550,   step:5,  mult:100, baseIV:0.140, market:"US"},
   SPY:{spot:580.50, step:5,  mult:100, baseIV:0.135, market:"US"},
   QQQ:{spot:525.50, step:1,  mult:100, baseIV:0.165, market:"US"},
-  IWM:{spot:228.0,  step:2,  mult:100, baseIV:0.200, market:"US"},
-  NVDA:{spot:145.80,step:2.5,mult:100, baseIV:0.520, market:"US"},
-  AAPL:{spot:228.0, step:5,  mult:100, baseIV:0.260, market:"US"},
-  TSLA:{spot:352.0, step:10, mult:100, baseIV:0.620, market:"US"},
-  NIFTY:{spot:23450,step:50, mult:50,  baseIV:0.155, market:"IN"},
-  BANKNIFTY:{spot:51250,step:100,mult:15,baseIV:0.175,market:"IN"},
-  FINNIFTY:{spot:23100,step:50, mult:40, baseIV:0.165,market:"IN"},
 };
 // Real delayed CBOE data is loaded from cboe_data.json. Empty data falls back to synthetic chains.
 let REAL = {};

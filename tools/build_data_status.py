@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 ROOT = Path(__file__).resolve().parents[1]
 DATA_PATH = ROOT / "cboe_data.json"
 STATUS_PATH = ROOT / "data_status.json"
-REQUIRED_SYMBOLS = ("NDX", "SPX", "SPY", "QQQ", "IWM", "AAPL", "NVDA", "TSLA")
+REQUIRED_SYMBOLS = ("NDX", "SPX", "SPY", "QQQ")
 FRESHNESS_SYMBOL = "SPX"
 FRESHNESS_MAX_AGE = timedelta(minutes=75)
 FRESHNESS_FUTURE_TOLERANCE = timedelta(minutes=5)
@@ -93,7 +93,7 @@ def build_status(data, now_et=None):
 
     return {
         "schema_version": 1,
-        "source": "CBOE delayed quotes",
+        "source": "LSE options snapshot",
         "reference_symbol": FRESHNESS_SYMBOL,
         "state": state,
         "market_window": {

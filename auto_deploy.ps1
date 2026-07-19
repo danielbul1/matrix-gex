@@ -1,3 +1,11 @@
+# ============================================================================
+# DEPRECATED (2026-07-19)
+# This auto-commit watcher belongs to the retired local collector pipeline,
+# superseded by the GitHub Actions pipeline (.github/workflows/update-cboe.yml)
+# and the Railway backend service at https://api.trytripity.site.
+# It auto-commits whatever local collectors write without any smoke check.
+# Do not run in production; kept for reference.
+# ============================================================================
 $ErrorActionPreference = "Stop"
 
 $repo = Split-Path -Parent $MyInvocation.MyCommand.Path

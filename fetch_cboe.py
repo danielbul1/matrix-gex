@@ -50,7 +50,8 @@ def parse_symbol(s):
 
 
 def main():
-    today = datetime.date.today()
+    # Use US Eastern date for expiry filtering, not the machine's local date.
+    today = datetime.datetime.now(ET).date()
     out = {}
     for cboe_sym, display_sym in SYMBOLS:
         try:
@@ -92,6 +93,12 @@ def main():
             "opts": opts,
         }
         print(f"  {display_sym}: spot={spot}  kept={len(opts)} options")
+
+    if not out:
+        # Mirror fetch_lse.py: never clobber cboe_data.json with an empty
+        # payload when every symbol fetch failed.
+        print("ERROR: no option data fetched from CBOE; keeping existing cboe_data.json", file=sys.stderr)
+        sys.exit(1)
 
     with open("cboe_data.json", "w") as f:
         json.dump(out, f, separators=(",", ":"))
