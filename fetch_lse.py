@@ -3,7 +3,17 @@ Fetch options chains and candles from London Strategic Edge (LSE).
 
 This is the PRIMARY data source for Matrix. It does NOT fall back to CBOE or Yahoo.
 Set LSE_API_KEY in your environment or in a .env file.
+
+Modes:
+  (no flags)        fetch options chains AND candles (backward compatible)
+  --options-only    fetch only the options chains; touches cboe_data.json only
+  --candles-only    fetch only the candles; touches candles_data.json only
+
+The split modes let the scheduler refresh GEX options data more often than
+candles without one mode ever overwriting the other mode's file. LSE free
+plan budget: ~10 historical downloads/hour total.
 """
+import argparse
 import datetime as dt
 import json
 import os
@@ -47,7 +57,8 @@ OUTPUT_OPTIONS = Path("cboe_data.json")
 OUTPUT_CANDLES = Path("candles_data.json")
 
 # LSE Registered plan limits from /keys/plans (adjust if your plan differs).
-# We stay well under these: one full refresh is ~10 requests.
+# The historical-download budget (free plan: ~10 downloads/hour) is enforced
+# by the scheduler cadence, not here; this limiter only smooths request rate.
 REQ_PER_MIN = 60
 REQ_PER_DAY = 15000
 
@@ -309,15 +320,31 @@ def fetch_all_candles() -> dict:
 # Main
 # -----------------------------------------------------------------------------
 def main():
-    print("Fetching options from LSE...")
-    options_data = fetch_all_options()
-    OUTPUT_OPTIONS.write_text(json.dumps(options_data, separators=(",", ":")), encoding="utf-8")
-    print(f"wrote {OUTPUT_OPTIONS} ({len(options_data)} symbols)")
+    parser = argparse.ArgumentParser(
+        description="Fetch options chains and/or candles from London Strategic Edge.")
+    parser.add_argument("--options-only", action="store_true",
+                        help="fetch only the options chains (writes cboe_data.json only)")
+    parser.add_argument("--candles-only", action="store_true",
+                        help="fetch only the candles (writes candles_data.json only)")
+    args = parser.parse_args()
+    if args.options_only and args.candles_only:
+        parser.error("--options-only and --candles-only are mutually exclusive")
 
-    print("Fetching candles from LSE...")
-    candles_data = fetch_all_candles()
-    OUTPUT_CANDLES.write_text(json.dumps(candles_data, separators=(",", ":")), encoding="utf-8")
-    print(f"wrote {OUTPUT_CANDLES} ({len(candles_data)} symbols)")
+    # Default (no flags) keeps backward-compatible behavior: fetch both.
+    want_options = not args.candles_only
+    want_candles = not args.options_only
+
+    if want_options:
+        print("Fetching options from LSE...")
+        options_data = fetch_all_options()
+        OUTPUT_OPTIONS.write_text(json.dumps(options_data, separators=(",", ":")), encoding="utf-8")
+        print(f"wrote {OUTPUT_OPTIONS} ({len(options_data)} symbols)")
+
+    if want_candles:
+        print("Fetching candles from LSE...")
+        candles_data = fetch_all_candles()
+        OUTPUT_CANDLES.write_text(json.dumps(candles_data, separators=(",", ":")), encoding="utf-8")
+        print(f"wrote {OUTPUT_CANDLES} ({len(candles_data)} symbols)")
 
 
 if __name__ == "__main__":

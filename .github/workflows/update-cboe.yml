@@ -11,13 +11,17 @@ on:
       - "tools/smoke_check.py"
       - ".github/workflows/update-cboe.yml"
   schedule:
-    # Once per hour during US market hours (13-20 UTC, Mon-Fri).
-    # The LSE key's plan tier is unverified; the free plan allows ~10
-    # historical downloads/hour and one full refresh uses ~8 downloads
-    # (4 options + 4 candles), so hourly cadence stays within the free tier.
-    # If the key is on a registered/paid plan, restore 15-minute cadence:
-    #   - cron: "2,17,32,47 13-20 * * 1-5"
-    - cron: "13 13-20 * * 1-5"
+    # Every 30 minutes during US market hours (13-20 UTC, Mon-Fri).
+    # LSE FREE plan budget: ~10 historical downloads/hour total.
+    #   - minute 13 of every hour: options-only run   (4 downloads)
+    #   - minute 43 of most hours: options-only run   (4 downloads)
+    #   - minute 43 of hours 13/16/19 UTC: candles-only run (4 downloads),
+    #     REPLACING that slot's options run so no rolling 60-minute window
+    #     ever exceeds 8 downloads — safely under the 10/hour ceiling.
+    # Result: options (GEX) refresh every 30 min (with three 60-min gaps per
+    # day), candles every 3 hours. Manual workflow_dispatch runs BOTH kinds
+    # (full refresh, 8 downloads).
+    - cron: "13,43 13-20 * * 1-5"
 
 permissions:
   contents: write
@@ -29,7 +33,7 @@ concurrency:
 jobs:
   update:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
@@ -42,42 +46,88 @@ jobs:
       - name: Compile validation scripts
         run: python -m py_compile fetch_lse.py tools/build_data_status.py tools/build_exposure_history.py tools/smoke_check.py
 
+      - name: Decide fetch mode
+        id: mode
+        run: |
+          # Manual runs: full refresh. Scheduled runs: split by minute/hour.
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "flags=" >> "$GITHUB_OUTPUT"
+            echo "kind=full" >> "$GITHUB_OUTPUT"
+          else
+            minute=$(date -u +%M); hour=$(date -u +%H)
+            if [ "$minute" = "43" ] && { [ "$hour" = "13" ] || [ "$hour" = "16" ] || [ "$hour" = "19" ]; }; then
+              echo "flags=--candles-only" >> "$GITHUB_OUTPUT"
+              echo "kind=candles" >> "$GITHUB_OUTPUT"
+            else
+              echo "flags=--options-only" >> "$GITHUB_OUTPUT"
+              echo "kind=options" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+
       - name: Fetch LSE data
         env:
           LSE_API_KEY: ${{ secrets.LSE_API_KEY }}
+          MODE_FLAGS: ${{ steps.mode.outputs.flags }}
+          MODE_KIND: ${{ steps.mode.outputs.kind }}
         run: |
+          set -u
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          end=$((SECONDS + 2100))
-          while [ "$SECONDS" -lt "$end" ]; do
-            now_utc=$(date -u +%H%M)
-            git fetch origin data || true
-            if python fetch_lse.py && python tools/build_data_status.py && MATRIX_REQUIRE_FRESH_DATA=1 python tools/smoke_check.py; then
-              rm -rf /tmp/matrix-gex-data
-              mkdir -p /tmp/matrix-gex-data
-              cp cboe_data.json candles_data.json data_status.json /tmp/matrix-gex-data/
-              cp tools/build_exposure_history.py /tmp/matrix-gex-data/
-              git restore -- cboe_data.json data_status.json
-              if git show-ref --verify --quiet refs/remotes/origin/data; then
-                git switch --force-create data origin/data
-              else
-                git switch --orphan data
-                git rm -rf .
-              fi
-              cp /tmp/matrix-gex-data/cboe_data.json /tmp/matrix-gex-data/candles_data.json /tmp/matrix-gex-data/data_status.json .
-              python /tmp/matrix-gex-data/build_exposure_history.py --input cboe_data.json --root exposure_history --retain 7
-              git add cboe_data.json candles_data.json data_status.json exposure_history
-              if ! git diff --cached --quiet; then
-                git commit -m "Update LSE data"
-                git push origin data
-              fi
-              git switch main
+          echo "Fetch mode: $MODE_KIND (flags: '${MODE_FLAGS:-<none, full refresh>}')"
+          git fetch origin data || true
+
+          # For candles-only runs, validate against the DATA branch's latest
+          # options snapshot (main's committed cboe_data.json may be old and
+          # would fail the strict freshness gate).
+          if [ "$MODE_KIND" = "candles" ]; then
+            git checkout origin/data -- cboe_data.json data_status.json || true
+          fi
+
+          # Options/full runs rebuild data_status.json from the fresh chain;
+          # candles-only runs keep the data branch's existing status file.
+          run_status() {
+            if [ "$MODE_KIND" = "candles" ]; then return 0; fi
+            python tools/build_data_status.py
+          }
+
+          if python fetch_lse.py $MODE_FLAGS && run_status && MATRIX_REQUIRE_FRESH_DATA=1 python tools/smoke_check.py; then
+            rm -rf /tmp/matrix-gex-data
+            mkdir -p /tmp/matrix-gex-data
+            cp tools/build_exposure_history.py /tmp/matrix-gex-data/
+            # Stage ONLY the file(s) this mode fetched — never clobber the
+            # other mode's file on the data branch.
+            if [ "$MODE_KIND" = "candles" ]; then
+              cp candles_data.json /tmp/matrix-gex-data/
             else
-              echo "Fetch or validation failed; skipping commit for this interval"
-              git restore -- cboe_data.json data_status.json
+              cp cboe_data.json data_status.json /tmp/matrix-gex-data/
+              if [ "$MODE_KIND" = "full" ]; then
+                cp candles_data.json /tmp/matrix-gex-data/
+              fi
             fi
-            if [ "$now_utc" -lt "1325" ] || [ "$now_utc" -gt "2015" ]; then
-              break
+            git restore -- cboe_data.json data_status.json candles_data.json 2>/dev/null || true
+            if git show-ref --verify --quiet refs/remotes/origin/data; then
+              git switch --force-create data origin/data
+            else
+              git switch --orphan data
+              git rm -rf .
             fi
-            sleep 300
-          done
+            cp /tmp/matrix-gex-data/*.json . 2>/dev/null || true
+            if [ "$MODE_KIND" = "candles" ]; then
+              git add candles_data.json
+            else
+              python /tmp/matrix-gex-data/build_exposure_history.py --input cboe_data.json --root exposure_history --retain 7
+              if [ "$MODE_KIND" = "full" ]; then
+                git add cboe_data.json candles_data.json data_status.json exposure_history
+              else
+                git add cboe_data.json data_status.json exposure_history
+              fi
+            fi
+            if ! git diff --cached --quiet; then
+              git commit -m "Update LSE data ($MODE_KIND)"
+              git push origin data
+            fi
+            git switch main
+          else
+            echo "Fetch or validation failed; skipping commit for this interval"
+            git restore -- cboe_data.json data_status.json candles_data.json 2>/dev/null || true
+          fi
