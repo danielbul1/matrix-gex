@@ -81,3 +81,21 @@ Gotchas learned the hard way (2026-07-19):
 2. Never commit secrets; `.env` is gitignored, keys come from env only.
 3. Plan first, get owner approval, then implement. Owner speaks Hebrew.
 4. After any Railway deploy, run the health check routine above and report.
+5. **MANDATORY: before every commit, update this HANDOFF.md** —
+   a. If architecture/endpoints/env vars/deploy steps changed → update the relevant section.
+   b. Always append an entry to the Session Log below (newest on top).
+
+## Session Log (every agent MUST append — newest first)
+
+### 2026-07-19 — Live GEX + history + repo unification (machine: owner's main PC)
+- Added `/api/matrix/spots` (live spots, websocket-backed for all 4 symbols) and
+  `/api/matrix/gex-history` (1-min GEX/DEX snapshots, 3 prior sessions).
+- Backend: `matrix_gex_snapshot` SQLite table + minute capture task; websocket extended
+  to SPX500/USD + NAS100/USD. Safety switches: TRIPITY_MATRIX_STREAM_INDICES, TRIPITY_MATRIX_GEX_SNAPSHOTS.
+- Frontend: 5s live spot poller + GEX replay bar (day select + minute slider).
+- railway-service/ committed to this repo for the first time; railway.toml created
+  (startCommand: `pip install . && python -m tripity_experiment.public_company_host`).
+- Actions workflow: options every 30 min / candles every 3 h; removed retry loop
+  that could burn ~56 downloads/run; fetch_lse.py gained --options-only/--candles-only.
+- Local server.py hardened (60s locked cache, stale fallback, ET timezones, 0DTE fix).
+- Verified live 2026-07-19 22:53 UTC+3: dashboard 200, spots + gex-history OK.
