@@ -2107,6 +2107,27 @@ const METRICS = {
 // Charts whose bars are a fixed Greek metric instead of the GEX param buttons.
 const BAR_METRIC_BY_CHART = {dexChart:'net_dex', vexChart:'net_vex', chexChart:'net_charm'};
 const BAR_METRIC_KEYS = Object.values(BAR_METRIC_BY_CHART);
+// Primary bar metric of the main GEX chart, switched by the DEX|GEX|VEX|CHEX
+// segmented control in the chart card. Module-level so it survives re-renders
+// (symbol/expiration changes, live spot poller). Default: Net GEX.
+let GEX_CHART_BAR_METRIC = 'net_gex';
+function chartBarMetricKey(chartId){
+  return chartId==='gexChart' ? GEX_CHART_BAR_METRIC : (BAR_METRIC_BY_CHART[chartId] || null);
+}
+// Active metric list for a chart: bar metric first (unless the user toggled the
+// Net GEX pbtn off while GEX is the selected bar metric), then non-bar overlays.
+function chartActiveMetrics(chartId){
+  const barKey=chartBarMetricKey(chartId);
+  const order=Object.keys(METRICS).filter(m=>!BAR_METRIC_KEYS.includes(m));
+  if(chartId==='gexChart'){
+    const barOn = GEX_CHART_BAR_METRIC!=='net_gex' || ACTIVE.has('net_gex');
+    return {active:[...(barOn?[barKey]:[]), ...order.filter(m=>ACTIVE.has(m) && METRICS[m].kind!=='bar')], hasBar:barOn};
+  }
+  if(barKey){
+    return {active:[barKey,...(ACTIVE.has('avg_power')?['avg_power']:[])], hasBar:true};
+  }
+  return {active:order.filter(m=>ACTIVE.has(m)), hasBar:ACTIVE.has('net_gex')};
+}
 // OI-weighted average strikes over the currently selected expirations.
 function oiWeightedStrikes(R){
   const rows=R?.strikes||[];
@@ -2120,8 +2141,6 @@ function oiWeightedStrikes(R){
   return {call:div(callSum,callOI), put:div(putSum,putOI), total:div(callSum+putSum,callOI+putOI)};
 }
 const WEIGHTED_LINES = [
-  {key:'call',  name:'Call W',  color:'#26c281'},
-  {key:'put',   name:'Put W',   color:'#ef5350'},
   {key:'total', name:'Total W', color:'#ab7df6'},
 ];
 function hexA(hex,a){const n=parseInt(hex.slice(1),16);return `rgba(${n>>16&255},${n>>8&255},${n&255},${a})`;}
@@ -2190,7 +2209,7 @@ function avgPowerZoneChartLabel(R){
 }
 function drawChart(R,chartId='gexChart'){
   const targets=chartTargets(chartId);
-  const chartBarKey=BAR_METRIC_BY_CHART[chartId] || null;
+  const chartBarKey=chartBarMetricKey(chartId);
   const cv = document.getElementById(targets.canvasId);
   if(!cv) return;
   const dpr = window.devicePixelRatio||1;
@@ -2204,10 +2223,10 @@ function drawChart(R,chartId='gexChart'){
   const data=visibleStrikeData(R);
   if(!data.length) return;
 
-  const order = Object.keys(METRICS).filter(m=>!BAR_METRIC_KEYS.includes(m));
-  const active = chartBarKey ? [chartBarKey,...(ACTIVE.has('avg_power')?['avg_power']:[])] : order.filter(m=>ACTIVE.has(m));
-  const hasBar = !!chartBarKey || ACTIVE.has("net_gex");
-  const barMetric = chartBarKey ? METRICS[chartBarKey] : METRICS.net_gex;
+  const metricsState=chartActiveMetrics(chartId);
+  const active=metricsState.active;
+  const hasBar=metricsState.hasBar;
+  const barMetric=METRICS[chartBarKey] || METRICS.net_gex;
   const areas = active.filter(m=>METRICS[m].kind==="area");
 
   // header symbol + legend
@@ -2509,8 +2528,8 @@ function showChartTooltip(ev){
 
   const s=hit.s;
   const R=window._lastR;
-  const chartBarKey=BAR_METRIC_BY_CHART[cv.id] || null;
-  const active = chartBarKey ? [chartBarKey,...(ACTIVE.has('avg_power')?['avg_power']:[])] : Object.keys(METRICS).filter(m=>!BAR_METRIC_KEYS.includes(m) && ACTIVE.has(m));
+  const chartBarKey=chartBarMetricKey(cv.id);
+  const active=chartActiveMetrics(cv.id).active;
   const row = (label,value,cls='') => `<div class="tt-row"><span>${label}</span><span class="${cls}">${value}</span></div>`;
   const metricRows = active.map(m=>{
     if(m==='net_gex') return row('Net GEX',fmtNum(s.netGex),s.netGex>=0?'pos':'neg');
@@ -3598,6 +3617,17 @@ document.querySelectorAll('.pbtn').forEach(btn=>{
 // expiration quick-select buttons (0DTE / Week / All)
 document.querySelectorAll('.expiry-quick-btn').forEach(btn=>{
   btn.addEventListener('click',()=>applyExpirationQuickSelect(btn.dataset.expquick));
+});
+
+// DEX | GEX | VEX | CHEX segmented switcher on the main GEX chart
+document.querySelectorAll('[data-gexbar]').forEach(btn=>{
+  btn.addEventListener('click',()=>{
+    const key=btn.dataset.gexbar;
+    if(!METRICS[key]) return;
+    GEX_CHART_BAR_METRIC=key;
+    document.querySelectorAll('[data-gexbar]').forEach(b=>b.classList.toggle('active',b===btn));
+    if(window._lastR && activeView === 'gex') drawChart(window._lastR);
+  });
 });
 
 function syncSigmaButtons(){

@@ -118,6 +118,16 @@ Gotchas learned the hard way (2026-07-19):
 - Validation: `node --check` OK; `py_compile` OK; new `tools/smoke_matrix_frontend.js`
   (DOM-stubbed Node harness, real CBOE `_VIX.json`) — all checks PASS; backend VIX parsing +
   AM-settled mirror verified via AST extraction (fastmcp not installed locally).
+- **Owner corrections (same day, review of the above):**
+  - Weighted overlay now shows ONLY the Total Weighted Strike line (Call W / Put W lines
+    and legend entries removed; `WEIGHTED_LINES` reduced to the total entry).
+  - New DEX | GEX | VEX | CHEX segmented switcher inside the GEX chart card (bottom-right,
+    Range-button styling, GEX default). It swaps the main gexChart's primary bars via
+    `GEX_CHART_BAR_METRIC` + `chartBarMetricKey()`/`chartActiveMetrics()` (gexChart entry is
+    dynamic; sidebar DEX/VEX/CHEX pages unchanged). Axis title/legend/tooltips follow the
+    active metric; param overlays (AG/OI/Vol/Power/AVG Power/Weighted) work on any metric;
+    the Net GEX pbtn still hides bars when GEX is the selected metric. State is module-level,
+    so it survives symbol/expiration changes and the 5s spot poller.
 - NOT deployed to Railway, no commit, no keys touched. Browser check of the new views pending.
 
 ### 2026-07-19 — Live GEX + history + repo unification (machine: owner's main PC)

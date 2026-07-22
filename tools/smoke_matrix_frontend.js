@@ -96,6 +96,26 @@ check('net_vex/net_charm bar metrics exist', METRICS.net_vex.kind === 'bar' && M
 check('weighted is overlay kind', METRICS.weighted.kind === 'overlay');
 check('BAR_METRIC_BY_CHART maps vex/chex', BAR_METRIC_BY_CHART.vexChart === 'net_vex' && BAR_METRIC_BY_CHART.chexChart === 'net_charm');
 check('chartTargets vex/chex ids', chartTargets('vexChart').tooltipId === 'vexTooltip' && chartTargets('chexChart').legendId === 'chexChartLegend');
+check('Weighted overlay keeps only Total W', WEIGHTED_LINES.length === 1 && WEIGHTED_LINES[0].key === 'total');
+
+// --- 5b. DEX|GEX|VEX|CHEX switcher on the main gexChart ---
+check('gexChart bar metric defaults to net_gex', chartBarMetricKey('gexChart') === 'net_gex' && GEX_CHART_BAR_METRIC === 'net_gex');
+check('fixed charts unchanged', chartBarMetricKey('dexChart') === 'net_dex' && chartBarMetricKey('matrixGexChart') === null);
+let switchOk = true;
+try {
+  for (const key of ['net_dex', 'net_vex', 'net_charm', 'net_gex']) {
+    GEX_CHART_BAR_METRIC = key;
+    const st = chartActiveMetrics('gexChart');
+    if (!st.hasBar || st.active[0] !== key) throw new Error(`bad active state for ${key}`);
+    if (st.active.some(m => BAR_METRIC_KEYS.includes(m) && m !== key)) throw new Error(`foreign bar metric leaked for ${key}`);
+    drawChart(R, 'gexChart');
+  }
+} catch (e) { switchOk = false; console.log('switcher error:', e.message); }
+check('switcher swaps gexChart bars (all 4 metrics, no-throw)', switchOk);
+GEX_CHART_BAR_METRIC = 'net_gex';
+const gexOff = (ACTIVE.delete('net_gex'), chartActiveMetrics('gexChart'));
+check('Net GEX pbtn still hides bars when GEX selected', gexOff.hasBar === false && !gexOff.active.includes('net_gex'));
+ACTIVE.add('net_gex');
 
 // --- 6. VEX/CHEX draw path does not throw (absorbing canvas stub) ---
 let drawOk = true;
