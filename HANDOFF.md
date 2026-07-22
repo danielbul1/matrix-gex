@@ -5,8 +5,8 @@
 
 ## What this project is
 
-A market-analytics stack for 4 US symbols — **NDX, SPX, SPY, QQQ** — showing live prices,
-options gamma/delta exposure (GEX/DEX), options flow, and dealer positioning.
+A market-analytics stack for 5 US symbols — **NDX, SPX, SPY, QQQ, VIX** — showing live prices,
+options gamma/delta/vanna/charm exposure (GEX/DEX/VEX/CHEX), options flow, and dealer positioning.
 Owner + his father are the only users. Live dashboard: https://api.trytripity.site/matrix/
 
 ## Repository layout
@@ -41,7 +41,8 @@ Owner + his father are the only users. Live dashboard: https://api.trytripity.si
   (`matrix_gex_snapshot` table). Retention: today + 3 prior sessions.
 - Endpoints:
   - `GET /api/matrix/candles|cboe-data|flow` (original)
-  - `GET /api/matrix/spots` — live spot per symbol (websocket or 50s-cached REST)
+  - `GET /api/matrix/spots` — live spot per symbol (websocket or 50s-cached REST;
+  VIX has no LSE stream, so it comes from the cached CBOE delayed quote)
   - `GET /api/matrix/gex-history?symbol=SPY&session_offset=1..3` — 1-min GEX history,
     3 prior completed sessions (excludes today).
 - Frontend polls `/api/matrix/spots` every 5s and recomputes the in-browser GEX engine
@@ -86,6 +87,38 @@ Gotchas learned the hard way (2026-07-19):
    b. Always append an entry to the Session Log below (newest on top).
 
 ## Session Log (every agent MUST append — newest first)
+
+### 2026-07-22 — Expiration quick-select, VIX as 5th symbol, Weighted overlay, VEX/CHEX views
+- **Expiration quick-select** (matrix.html/css/js): 0DTE / Week / All buttons above
+  `#expirationPicker` (styled like the Range buttons). They set picker checkboxes
+  (checkboxes now carry `data-dte`) and run the exact manual-change flow
+  (`saveCurrentExpirationSelection` + `run()` + flow reload); active state syncs with selection.
+- **VIX** (matrix.js, public_company_host.py, fetch_cboe.py):
+  - Frontend `SYMBOLS` gained `VIX:{spot:20, step:1, mult:100, baseIV:0.80, market:"US"}`.
+  - `preciseYearsToExpiry` (JS) and `_matrix_years_to_expiry` (PY mirror) treat roots
+    VIX + VIXW as AM-settled (9:30 ET), like SPX/NDX.
+  - Backend `MATRIX_CBOE_SYMBOLS` gained `("_VIX", "VIX")`; verified live that
+    `options/_VIX.json` matches the existing parser (OCC roots VIX/VIXW, OI/iv/gamma/delta present).
+  - `/api/matrix/spots` now includes VIX via the cached CBOE delayed quote
+    (`MATRIX_VIX_QUOTE_URL`, `_fetch_matrix_cboe_quote` generalized from the SPX quote helper,
+    50s `_matrix_cboe_spot_cache`). LSE symbols untouched.
+  - Root `fetch_cboe.py` SYMBOLS gained `("_VIX", "VIX")`.
+  - Net Drift & Flow stays SPY/QQQ-only (existing auto-switch/message covers VIX).
+- **Weighted button** (matrix.html/js): new pink `Weighted` pbtn in the GEX params row.
+  It's an independent overlay toggle (pbtn metric buttons are multi-select, not exclusive).
+  When active it draws 3 dashed marker lines on the Net GEX chart — Call/Put/Total
+  OI-weighted strikes (Σ K·OI / Σ OI over the selected expirations) — with values in the legend.
+- **VEX + CHEX views** (matrix.html/css/js): sidebar reordered to DEX, GEX, VEX, CHEX, then
+  the rest (gex stays default). New views clone the DEX pattern via `BAR_METRIC_BY_CHART`
+  (`net_vex`/`net_charm` bar metrics; `chartTargets` became a lookup map): signed bars per
+  strike, 1σ/2σ/3σ/All range, tooltips with Call/Put breakdown + units note
+  (VEX = $ per 1% vol move, CHEX = $ per day), KPI cards, per-view expiration memory
+  (`selectedExpirationsByView` + both reset blocks). Axis titles show "Net VEX ($ per 1% vol
+  move)" / "Net CHEX ($ per day)".
+- Validation: `node --check` OK; `py_compile` OK; new `tools/smoke_matrix_frontend.js`
+  (DOM-stubbed Node harness, real CBOE `_VIX.json`) — all checks PASS; backend VIX parsing +
+  AM-settled mirror verified via AST extraction (fastmcp not installed locally).
+- NOT deployed to Railway, no commit, no keys touched. Browser check of the new views pending.
 
 ### 2026-07-19 — Live GEX + history + repo unification (machine: owner's main PC)
 - Added `/api/matrix/spots` (live spots, websocket-backed for all 4 symbols) and

@@ -59,6 +59,9 @@
   .expiry-option:has(input:checked){border-color:var(--accent);background:rgba(31,169,244,.16);color:#fff}
   .expiry-option input{width:14px;min-width:14px;height:14px;margin:0;padding:0;accent-color:var(--accent)}
   .expiry-empty{padding:5px 8px;color:var(--muted);font-size:12px}
+  .expiry-quick{display:flex;gap:3px;margin:0 0 6px}
+  .expiry-quick .range-btn{min-width:0;padding:5px 9px;font-size:11px}
+  .greek-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin:0 0 10px}
   select,input{background:#3a3a3a;color:var(--text);border:1px solid #262626;
                border-radius:5px;padding:8px 10px;font-size:14px;min-width:112px;max-width:100%}
   button{background:var(--accent);color:white;border:none;border-radius:5px;

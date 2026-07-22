@@ -13,13 +13,15 @@
   };
 </script>
 <script src="https://unpkg.com/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js" onerror="window.__loadMatrixChartLib && window.__loadMatrixChartLib()"></script>
-<link rel="stylesheet" href="matrix.css?v=20260719-line-hit5">
+<link rel="stylesheet" href="matrix.css?v=20260722-vex-chex1">
 </head>
 <body>
 <header>
   <nav class="side-nav">
-    <a href="#" class="active" data-view="gex">GEX</a>
     <a href="#" data-view="dex">DEX</a>
+    <a href="#" class="active" data-view="gex">GEX</a>
+    <a href="#" data-view="vex">VEX</a>
+    <a href="#" data-view="chex">CHEX</a>
     <a href="#" data-view="market-structure">Market Structure</a>
     <a href="#" data-view="exposure-lab">Exposure Lab</a>
     <a href="#" data-view="net-flow">Net Drift &amp; Flow</a>
@@ -41,6 +43,11 @@
   </div>
   <div class="ctrl">
     <label>Expirations</label>
+    <div class="expiry-quick" role="group" aria-label="Quick expiration selection">
+      <button type="button" class="range-btn expiry-quick-btn" data-expquick="0dte">0DTE</button>
+      <button type="button" class="range-btn expiry-quick-btn" data-expquick="week">Week</button>
+      <button type="button" class="range-btn expiry-quick-btn" data-expquick="all">All</button>
+    </div>
     <div id="expirationPicker" class="expiry-picker" aria-label="Choose expiration dates"></div>
   </div>
   <div class="ctrl">
@@ -135,6 +142,7 @@
       <button class="pbtn"        data-metric="put_vol"  style="--c:#ff8a3d">Put Volume</button>
       <button class="pbtn"        data-metric="power"    style="--c:#ffc107">Power Zone</button>
       <button class="pbtn"        data-metric="avg_power" style="--c:#00cdb7" title="Equal-weighted average of the Power Zone for each selected expiration day">AVG Power Zone</button>
+      <button class="pbtn"        data-metric="weighted"  style="--c:#ff5fa2" title="Overlay OI-weighted average strikes (calls / puts / total) on the Net GEX chart">Weighted</button>
     </div>
 
     <div class="card chartcard">
@@ -175,6 +183,60 @@
         <div class="chart-crosshair-x" id="dexCrosshairX"></div>
         <div class="chart-tooltip" id="dexTooltip"></div>
         <canvas id="dexChart" height="540"></canvas>
+      </div>
+    </div>
+  </section>
+
+  <section class="app-view" id="view-vex">
+    <div class="params">
+      <div class="range-control" role="group" aria-label="VEX strike display range">
+        <span class="range-label">Range</span>
+        <button type="button" class="range-btn" data-sigma="1">1&sigma;</button>
+        <button type="button" class="range-btn active" data-sigma="2">2&sigma;</button>
+        <button type="button" class="range-btn" data-sigma="3">3&sigma;</button>
+        <button type="button" class="range-btn" data-sigma="all">All</button>
+      </div>
+      <span class="plabel">Vanna Exposure:</span>
+      <span class="pbtn active" style="--c:#22b8ff">Net VEX</span>
+    </div>
+    <div class="greek-kpis" id="vexKpis"></div>
+    <div class="card chartcard dex-page-card">
+      <div class="charttop">
+        <span class="symlabel" id="vexSymLabel"></span>
+        <span class="chartlegend" id="vexChartLegend"></span>
+      </div>
+      <div class="chartwrap">
+        <div class="watermark">Matrix</div>
+        <div class="chart-crosshair-x" id="vexCrosshairX"></div>
+        <div class="chart-tooltip" id="vexTooltip"></div>
+        <canvas id="vexChart" height="540"></canvas>
+      </div>
+    </div>
+  </section>
+
+  <section class="app-view" id="view-chex">
+    <div class="params">
+      <div class="range-control" role="group" aria-label="CHEX strike display range">
+        <span class="range-label">Range</span>
+        <button type="button" class="range-btn" data-sigma="1">1&sigma;</button>
+        <button type="button" class="range-btn active" data-sigma="2">2&sigma;</button>
+        <button type="button" class="range-btn" data-sigma="3">3&sigma;</button>
+        <button type="button" class="range-btn" data-sigma="all">All</button>
+      </div>
+      <span class="plabel">Charm Exposure:</span>
+      <span class="pbtn active" style="--c:#22b8ff">Net CHEX</span>
+    </div>
+    <div class="greek-kpis" id="chexKpis"></div>
+    <div class="card chartcard dex-page-card">
+      <div class="charttop">
+        <span class="symlabel" id="chexSymLabel"></span>
+        <span class="chartlegend" id="chexChartLegend"></span>
+      </div>
+      <div class="chartwrap">
+        <div class="watermark">Matrix</div>
+        <div class="chart-crosshair-x" id="chexCrosshairX"></div>
+        <div class="chart-tooltip" id="chexTooltip"></div>
+        <canvas id="chexChart" height="540"></canvas>
       </div>
     </div>
   </section>
@@ -518,6 +580,6 @@
   Synthetic data is generated in-browser when live CBOE data is unavailable. Original demo: gex.kctradings.com
 </footer>
 
-<script src="matrix.js?v=20260719-line-hit5"></script>
+<script src="matrix.js?v=20260722-vex-chex1"></script>
 </body>
 </html>

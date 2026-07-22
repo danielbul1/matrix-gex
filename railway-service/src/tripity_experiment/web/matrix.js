@@ -59,7 +59,8 @@ function zonedDateTimeToUtc(year,month,day,hour,minute,timeZone){
 }
 function preciseYearsToExpiry(exp,root,valuationMs){
   const [year,month,day]=String(exp).split('-').map(Number);
-  const isAmSettled=root==='SPX'||root==='NDX';
+  // AM-settled index roots (9:30 AM ET expiry): SPX/NDX, plus VIX and its weeklies.
+  const isAmSettled=root==='SPX'||root==='NDX'||root==='VIX'||root==='VIXW';
   const expiryMs=zonedDateTimeToUtc(year,month,day,isAmSettled?9:16,isAmSettled?30:0,'America/New_York');
   return Math.max((expiryMs-valuationMs)/(365.25*86400000),1/(365.25*24*60));
 }
@@ -70,6 +71,7 @@ const SYMBOLS = {
   SPX:{spot:7550,   step:5,  mult:100, baseIV:0.140, market:"US"},
   SPY:{spot:580.50, step:5,  mult:100, baseIV:0.135, market:"US"},
   QQQ:{spot:525.50, step:1,  mult:100, baseIV:0.165, market:"US"},
+  VIX:{spot:20,     step:1,  mult:100, baseIV:0.80,  market:"US"},
 };
 // Real market data is served directly by Tripity. Empty data falls back to synthetic chains.
 let REAL = {};
@@ -2005,6 +2007,8 @@ function renderImpl(R){
     drawChart(R);
   }
   if(activeView === 'dex') drawChart(R,'dexChart');
+  if(activeView === 'vex'){ drawChart(R,'vexChart'); renderGreekExposureKpis(R,'vex'); }
+  if(activeView === 'chex'){ drawChart(R,'chexChart'); renderGreekExposureKpis(R,'chex'); }
   if(activeView === 'market-structure') renderMarketStructure(R);
   if(activeView === 'exposure-lab') drawExposureLab(R);
   if(activeView === 'matrix-gex') drawChart(R,'matrixGexChart');
@@ -2089,6 +2093,8 @@ let DISPLAY_SIGMA = 2;
 const METRICS = {
   net_gex:  {label:"Net GEX",     color:"#22b8ff", kind:"bar",  signed:true,  val:s=>s.netGex},
   net_dex:  {label:"Net DEX",     color:"#22b8ff", kind:"bar",  signed:true,  val:s=>s.netDex},
+  net_vex:  {label:"Net VEX",     color:"#22b8ff", kind:"bar",  signed:true,  val:s=>s.netVex,  axisLabel:"Net VEX ($ per 1% vol move)"},
+  net_charm:{label:"Net CHEX",    color:"#22b8ff", kind:"bar",  signed:true,  val:s=>s.netCharm,axisLabel:"Net CHEX ($ per day)"},
   ag:       {label:"AG",          color:"#ab7df6", kind:"area", val:s=>Math.abs(s.callGex)+Math.abs(s.putGex)},
   call_oi:  {label:"Call OI",     color:"#26c281", kind:"area", val:s=>s.callOI},
   put_oi:   {label:"Put OI",      color:"#ef5350", kind:"area", val:s=>s.putOI},
@@ -2096,21 +2102,41 @@ const METRICS = {
   put_vol:  {label:"Put Volume",  color:"#ff8a3d", kind:"area", val:s=>s.putVol},
   power:    {label:"Power Zone",  color:"#fff200", kind:"area", val:s=>s.powerZone || 0},
   avg_power:{label:"AVG Power Zone",color:"#00cdb7",kind:"reference",val:s=>s.powerZone || 0},
+  weighted: {label:"Weighted",    color:"#ff5fa2", kind:"overlay", val:()=>0},
 };
+// Charts whose bars are a fixed Greek metric instead of the GEX param buttons.
+const BAR_METRIC_BY_CHART = {dexChart:'net_dex', vexChart:'net_vex', chexChart:'net_charm'};
+const BAR_METRIC_KEYS = Object.values(BAR_METRIC_BY_CHART);
+// OI-weighted average strikes over the currently selected expirations.
+function oiWeightedStrikes(R){
+  const rows=R?.strikes||[];
+  let callOI=0,callSum=0,putOI=0,putSum=0;
+  rows.forEach(s=>{
+    const c=Number(s.callOI)||0, p=Number(s.putOI)||0;
+    callOI+=c; callSum+=(Number(s.strike)||0)*c;
+    putOI+=p;  putSum+=(Number(s.strike)||0)*p;
+  });
+  const div=(sum,w)=>w>0?sum/w:null;
+  return {call:div(callSum,callOI), put:div(putSum,putOI), total:div(callSum+putSum,callOI+putOI)};
+}
+const WEIGHTED_LINES = [
+  {key:'call',  name:'Call W',  color:'#26c281'},
+  {key:'put',   name:'Put W',   color:'#ef5350'},
+  {key:'total', name:'Total W', color:'#ab7df6'},
+];
 function hexA(hex,a){const n=parseInt(hex.slice(1),16);return `rgba(${n>>16&255},${n>>8&255},${n&255},${a})`;}
 
 // ---------- Canvas chart: vertical bars by strike + area overlays ----------
 function chartTargets(chartId){
-  const isMatrix = chartId === 'matrixGexChart';
-  const isDex = chartId === 'dexChart';
-  const isMarket = chartId === 'marketGexChart';
-  return {
-    canvasId: chartId,
-    symbolId: isMarket ? 'marketGexSymLabel' : (isMatrix ? 'matrixSymLabel' : (isDex ? 'dexSymLabel' : 'symLabel')),
-    legendId: isMarket ? 'marketGexLegend' : (isMatrix ? 'matrixChartLegend' : (isDex ? 'dexChartLegend' : 'chartLegend')),
-    tooltipId: isMarket ? 'marketGexTooltip' : (isMatrix ? 'matrixGexTooltip' : (isDex ? 'dexTooltip' : 'chartTooltip')),
-    crosshairId: isMarket ? 'marketGexCrosshairX' : (isMatrix ? 'matrixGexCrosshairX' : (isDex ? 'dexCrosshairX' : 'chartCrosshairX')),
+  const map={
+    gexChart:      {symbolId:'symLabel',        legendId:'chartLegend',      tooltipId:'chartTooltip',     crosshairId:'chartCrosshairX'},
+    dexChart:      {symbolId:'dexSymLabel',     legendId:'dexChartLegend',   tooltipId:'dexTooltip',       crosshairId:'dexCrosshairX'},
+    vexChart:      {symbolId:'vexSymLabel',     legendId:'vexChartLegend',   tooltipId:'vexTooltip',       crosshairId:'vexCrosshairX'},
+    chexChart:     {symbolId:'chexSymLabel',    legendId:'chexChartLegend',  tooltipId:'chexTooltip',      crosshairId:'chexCrosshairX'},
+    matrixGexChart:{symbolId:'matrixSymLabel',  legendId:'matrixChartLegend',tooltipId:'matrixGexTooltip', crosshairId:'matrixGexCrosshairX'},
+    marketGexChart:{symbolId:'marketGexSymLabel',legendId:'marketGexLegend', tooltipId:'marketGexTooltip', crosshairId:'marketGexCrosshairX'},
   };
+  return {canvasId:chartId, ...(map[chartId] || map.gexChart)};
 }
 function visibleStrikeData(R){
   let visibleStrikes=[...R.strikes];
@@ -2164,7 +2190,7 @@ function avgPowerZoneChartLabel(R){
 }
 function drawChart(R,chartId='gexChart'){
   const targets=chartTargets(chartId);
-  const isDex=chartId==='dexChart';
+  const chartBarKey=BAR_METRIC_BY_CHART[chartId] || null;
   const cv = document.getElementById(targets.canvasId);
   if(!cv) return;
   const dpr = window.devicePixelRatio||1;
@@ -2178,10 +2204,10 @@ function drawChart(R,chartId='gexChart'){
   const data=visibleStrikeData(R);
   if(!data.length) return;
 
-  const order = Object.keys(METRICS).filter(m=>m!=='net_dex');
-  const active = isDex ? ['net_dex',...(ACTIVE.has('avg_power')?['avg_power']:[])] : order.filter(m=>ACTIVE.has(m));
-  const hasBar = isDex || ACTIVE.has("net_gex");
-  const barMetric = isDex ? METRICS.net_dex : METRICS.net_gex;
+  const order = Object.keys(METRICS).filter(m=>!BAR_METRIC_KEYS.includes(m));
+  const active = chartBarKey ? [chartBarKey,...(ACTIVE.has('avg_power')?['avg_power']:[])] : order.filter(m=>ACTIVE.has(m));
+  const hasBar = !!chartBarKey || ACTIVE.has("net_gex");
+  const barMetric = chartBarKey ? METRICS[chartBarKey] : METRICS.net_gex;
   const areas = active.filter(m=>METRICS[m].kind==="area");
 
   // header symbol + legend
@@ -2190,6 +2216,12 @@ function drawChart(R,chartId='gexChart'){
   if(symLabel) symLabel.textContent = R.symbol;
   if(legend) legend.innerHTML = active.map(m=>{
     const M=METRICS[m];
+    if(M.kind==="overlay"){
+      const w=oiWeightedStrikes(R);
+      return WEIGHTED_LINES.map(line=>
+        `<span class="sq" style="height:2px;background:${line.color};border-radius:0"></span>${line.name} ${Number.isFinite(w[line.key])?fmtPrice(w[line.key]):'--'}`
+      ).join('&nbsp;&nbsp;');
+    }
     const sw = M.kind==="bar"
       ? `<span class="sq" style="background:${M.color}"></span>`
       : M.kind==="reference"
@@ -2318,10 +2350,27 @@ function drawChart(R,chartId='gexChart'){
     }
   }
 
+  // ----- OI-weighted average strikes overlay (GEX view "Weighted" toggle) -----
+  if(chartId==='gexChart' && ACTIVE.has('weighted')){
+    const w=oiWeightedStrikes(R);
+    WEIGHTED_LINES.forEach((line,idx)=>{
+      const val=w[line.key];
+      if(!Number.isFinite(val)) return;
+      const lx=xAt(val);
+      ctx.save();ctx.strokeStyle=line.color;ctx.lineWidth=2;ctx.setLineDash([4,4]);
+      ctx.beginPath();ctx.moveTo(lx,padT-6);ctx.lineTo(lx,bottom);ctx.stroke();ctx.restore();
+      const wLabel=`${line.name}: ${fmtPrice(val)}`;
+      ctx.font=(mobile?"bold 10px Segoe UI":"bold 12px Segoe UI");
+      const wWidth=ctx.measureText(wLabel).width,wRight=lx>W-wWidth-12;
+      ctx.fillStyle=line.color;ctx.textAlign=wRight?'right':'left';ctx.textBaseline='alphabetic';
+      ctx.fillText(wLabel,lx+(wRight?-6:6),padT+26+idx*14);
+    });
+  }
+
   // ----- axis titles -----
   if(hasBar){ ctx.save(); ctx.translate(14,padT+plotH/2); ctx.rotate(-Math.PI/2);
     ctx.fillStyle="#d0d0d0"; ctx.font=(mobile ? "bold 11px Segoe UI" : "bold 13px Segoe UI"); ctx.textAlign="center";
-    ctx.fillText(isDex ? "Net DEX" : "Net GEX",0,0); ctx.restore(); }
+    ctx.fillText(barMetric.axisLabel || barMetric.label,0,0); ctx.restore(); }
   if(areas.length){ ctx.save(); ctx.translate(W-12,padT+plotH/2); ctx.rotate(Math.PI/2);
     ctx.fillStyle="#d0d0d0"; ctx.font=(mobile ? "bold 11px Segoe UI" : "bold 13px Segoe UI"); ctx.textAlign="center";
     ctx.fillText(METRICS[dom].label,0,0); ctx.restore(); }
@@ -2460,8 +2509,8 @@ function showChartTooltip(ev){
 
   const s=hit.s;
   const R=window._lastR;
-  const isDex=cv.id==='dexChart';
-  const active = isDex ? ['net_dex',...(ACTIVE.has('avg_power')?['avg_power']:[])] : Object.keys(METRICS).filter(m=>m!=='net_dex' && ACTIVE.has(m));
+  const chartBarKey=BAR_METRIC_BY_CHART[cv.id] || null;
+  const active = chartBarKey ? [chartBarKey,...(ACTIVE.has('avg_power')?['avg_power']:[])] : Object.keys(METRICS).filter(m=>!BAR_METRIC_KEYS.includes(m) && ACTIVE.has(m));
   const row = (label,value,cls='') => `<div class="tt-row"><span>${label}</span><span class="${cls}">${value}</span></div>`;
   const metricRows = active.map(m=>{
     if(m==='net_gex') return row('Net GEX',fmtNum(s.netGex),s.netGex>=0?'pos':'neg');
@@ -2470,6 +2519,19 @@ function showChartTooltip(ev){
       row('Call DEX',fmtNum(s.callDex),'pos'),
       row('Put DEX',fmtNum(s.putDex),'neg'),
     ].join('');
+    if(m==='net_vex') return [
+      row('Net VEX',fmtNum(s.netVex),s.netVex>=0?'pos':'neg'),
+      row('Call VEX',fmtNum(s.callVex),'pos'),
+      row('Put VEX',fmtNum(s.putVex),'neg'),
+      row('Units','$ per 1% vol move'),
+    ].join('');
+    if(m==='net_charm') return [
+      row('Net CHEX',fmtNum(s.netCharm),s.netCharm>=0?'pos':'neg'),
+      row('Call CHEX',fmtNum(s.callCharm),'pos'),
+      row('Put CHEX',fmtNum(s.putCharm),'neg'),
+      row('Units','$ per day'),
+    ].join('');
+    if(m==='weighted') return '';
     if(m==='ag') return row('AG',fmtNum(Math.abs(s.callGex)+Math.abs(s.putGex)));
     if(m==='call_oi') return row('Call OI',fmtNum(s.callOI),'pos');
     if(m==='put_oi') return row('Put OI',fmtNum(s.putOI),'neg');
@@ -2497,8 +2559,34 @@ function showChartTooltip(ev){
   tt.style.top=Math.max(6,top)+'px';
 }
 function hideChartTooltip(){
-  ['chartTooltip','matrixGexTooltip','dexTooltip'].forEach(id=>{const el=byId(id); if(el) el.style.display='none';});
-  ['chartCrosshairX','matrixGexCrosshairX','dexCrosshairX'].forEach(id=>{const el=byId(id); if(el) el.style.display='none';});
+  ['chartTooltip','matrixGexTooltip','dexTooltip','vexTooltip','chexTooltip'].forEach(id=>{const el=byId(id); if(el) el.style.display='none';});
+  ['chartCrosshairX','matrixGexCrosshairX','dexCrosshairX','vexCrosshairX','chexCrosshairX'].forEach(id=>{const el=byId(id); if(el) el.style.display='none';});
+}
+// KPI cards for the VEX / CHEX views (totals over the selected expirations).
+function renderGreekExposureKpis(R,kind){
+  const host=byId(kind+'Kpis');
+  if(!host) return;
+  const isVex=kind==='vex';
+  const netKey=isVex?'netVex':'netCharm', callKey=isVex?'callVex':'callCharm', putKey=isVex?'putVex':'putCharm';
+  const label=isVex?'VEX':'CHEX';
+  const unit=isVex?'$ per 1% vol move':'$ per day';
+  const strikes=R.strikes||[];
+  const sum=key=>strikes.reduce((a,s)=>a+(Number(s[key])||0),0);
+  const total=sum(netKey), calls=sum(callKey), puts=sum(putKey);
+  const top=strikes.reduce((best,s)=>!best||Math.abs(Number(s[netKey])||0)>Math.abs(Number(best[netKey])||0)?s:best,null);
+  host.innerHTML=`
+    <div class="card"><div class="k">Total Net ${label}</div>
+      <div class="v" style="color:${total>=0?'var(--green)':'var(--red)'}">${fmtNum(total)}</div>
+      <div class="k" style="margin-top:6px">${unit}</div></div>
+    <div class="card"><div class="k">Total Call ${label}</div>
+      <div class="v" style="color:${calls>=0?'var(--green)':'var(--red)'}">${fmtNum(calls)}</div>
+      <div class="k" style="margin-top:6px">${unit}</div></div>
+    <div class="card"><div class="k">Total Put ${label}</div>
+      <div class="v" style="color:${puts>=0?'var(--green)':'var(--red)'}">${fmtNum(puts)}</div>
+      <div class="k" style="margin-top:6px">${unit}</div></div>
+    <div class="card"><div class="k">Largest |Net ${label}| Strike</div>
+      <div class="v">${top?fmtPrice(top.strike):'--'} <small>${top?fmtNum(Number(top[netKey])||0):''}</small></div>
+      <div class="k" style="margin-top:6px">${unit}</div></div>`;
 }
 // ---------- Dealer Pressure: GEX / Vanna / Charm pressure map ----------
 function edgeVisibleStrikes(R){
@@ -3213,7 +3301,7 @@ function hideEdgeTooltip(){
 
 // ---------- Wiring ----------
 let activeView = 'gex';
-const selectedExpirationsByView = {gex:null,dex:null,'market-structure':null,'exposure-lab':null,'matrix-gex':null,'shock-engine':null,'max-pain':null};
+const selectedExpirationsByView = {gex:null,dex:null,vex:null,chex:null,'market-structure':null,'exposure-lab':null,'matrix-gex':null,'shock-engine':null,'max-pain':null};
 function currentExpirationValues(){
   return [...document.querySelectorAll('#expirationPicker input:checked')].map(input=>input.value);
 }
@@ -3237,7 +3325,7 @@ function renderExpirationPicker(picker, expiries, byExp, selectedValues){
   const active = new Set(validSelected.length ? validSelected : defaultSelection);
   picker.innerHTML = expiries.length ? expiries.map(exp=>{
     const dte = byExp.get(exp);
-    return `<label class="expiry-option"><input type="checkbox" value="${exp}" ${active.has(exp)?'checked':''}>${exp} (${dte}DTE)</label>`;
+    return `<label class="expiry-option"><input type="checkbox" value="${exp}" data-dte="${dte}" ${active.has(exp)?'checked':''}>${exp} (${dte}DTE)</label>`;
   }).join('') : '<span class="expiry-empty">No expirations available</span>';
   return [...active];
 }
@@ -3257,6 +3345,33 @@ function populateExpirations(chain){
   if(selectedExpirationsByView.hasOwnProperty(activeView) && !remembered){
     selectedExpirationsByView[activeView] = currentExpirationValues();
   }
+  syncExpiryQuickButtons();
+}
+// Quick-select buttons (0DTE / Week / All) above the expiration picker.
+function expiryQuickPredicate(kind){
+  return kind==='all' ? ()=>true : kind==='week' ? dte=>dte<=7 : dte=>dte===0;
+}
+function syncExpiryQuickButtons(){
+  const inputs=[...document.querySelectorAll('#expirationPicker input[type=checkbox]')];
+  const checked=inputs.filter(i=>i.checked);
+  const matches=kind=>{
+    const pred=expiryQuickPredicate(kind);
+    const targets=inputs.filter(i=>pred(Number(i.dataset.dte)));
+    return targets.length>0 && checked.length===targets.length && targets.every(i=>i.checked);
+  };
+  document.querySelectorAll('.expiry-quick-btn').forEach(btn=>btn.classList.toggle('active',matches(btn.dataset.expquick)));
+}
+function applyExpirationQuickSelect(kind){
+  const inputs=[...document.querySelectorAll('#expirationPicker input[type=checkbox]')];
+  if(!inputs.length) return;
+  const pred=expiryQuickPredicate(kind);
+  if(!inputs.some(i=>pred(Number(i.dataset.dte)))) return;  // e.g. no 0DTE listed: keep current selection
+  inputs.forEach(input=>{ input.checked=pred(Number(input.dataset.dte)); });
+  // Same flow as a manual checkbox change: per-view memory, re-render, flow reload.
+  syncExpiryQuickButtons();
+  saveCurrentExpirationSelection();
+  run();
+  if(activeView==='net-flow') loadFlowData(true);
 }
 function setView(view){
   if(view === activeView) return;
@@ -3273,6 +3388,8 @@ function setView(view){
     drawChart(window._lastR);
   });
   if(view === 'dex' && window._lastR) requestAnimationFrame(()=>drawChart(window._lastR,'dexChart'));
+  if(view === 'vex' && window._lastR) requestAnimationFrame(()=>{ drawChart(window._lastR,'vexChart'); renderGreekExposureKpis(window._lastR,'vex'); });
+  if(view === 'chex' && window._lastR) requestAnimationFrame(()=>{ drawChart(window._lastR,'chexChart'); renderGreekExposureKpis(window._lastR,'chex'); });
   if(view === 'market-structure' && window._lastR) requestAnimationFrame(()=>renderMarketStructure(window._lastR));
   if(view === 'exposure-lab' && window._lastR) requestAnimationFrame(()=>drawExposureLab(window._lastR));
   if(view === 'matrix-gex' && window._lastR) requestAnimationFrame(()=>drawChart(window._lastR,'matrixGexChart'));
@@ -3316,6 +3433,8 @@ function run(){
 bind('market','change',()=>{
   selectedExpirationsByView.gex=null;
   selectedExpirationsByView.dex=null;
+  selectedExpirationsByView.vex=null;
+  selectedExpirationsByView.chex=null;
   selectedExpirationsByView['market-structure']=null;
   selectedExpirationsByView['exposure-lab']=null;
   selectedExpirationsByView['matrix-gex']=null;
@@ -3329,6 +3448,8 @@ bind('symbol','change',()=>{
   document.getElementById('expirationPicker').innerHTML='';
   selectedExpirationsByView.gex=null;
   selectedExpirationsByView.dex=null;
+  selectedExpirationsByView.vex=null;
+  selectedExpirationsByView.chex=null;
   selectedExpirationsByView['market-structure']=null;
   selectedExpirationsByView['exposure-lab']=null;
   selectedExpirationsByView['matrix-gex']=null;
@@ -3338,6 +3459,7 @@ bind('symbol','change',()=>{
 });
 bind('expirationPicker','change',()=>{
   saveCurrentExpirationSelection();
+  syncExpiryQuickButtons();
   run();
   if(activeView==='net-flow') loadFlowData(true);
 });
@@ -3353,6 +3475,8 @@ window.addEventListener('resize',()=>{
     drawChart(window._lastR);
   }
   if(activeView === 'dex') drawChart(window._lastR,'dexChart');
+  if(activeView === 'vex'){ drawChart(window._lastR,'vexChart'); renderGreekExposureKpis(window._lastR,'vex'); }
+  if(activeView === 'chex'){ drawChart(window._lastR,'chexChart'); renderGreekExposureKpis(window._lastR,'chex'); }
   if(activeView === 'market-structure') renderMarketStructure(window._lastR);
   if(activeView === 'exposure-lab') drawExposureLab(window._lastR);
   if(activeView === 'matrix-gex') drawChart(window._lastR,'matrixGexChart');
@@ -3370,6 +3494,16 @@ bind('dexChart','mouseleave',hideChartTooltip);
 bind('dexChart','touchstart',showChartTooltip,{passive:true});
 bind('dexChart','touchmove',showChartTooltip,{passive:true});
 bind('dexChart','touchend',()=>setTimeout(hideChartTooltip,1200),{passive:true});
+bind('vexChart','mousemove',showChartTooltip);
+bind('vexChart','mouseleave',hideChartTooltip);
+bind('vexChart','touchstart',showChartTooltip,{passive:true});
+bind('vexChart','touchmove',showChartTooltip,{passive:true});
+bind('vexChart','touchend',()=>setTimeout(hideChartTooltip,1200),{passive:true});
+bind('chexChart','mousemove',showChartTooltip);
+bind('chexChart','mouseleave',hideChartTooltip);
+bind('chexChart','touchstart',showChartTooltip,{passive:true});
+bind('chexChart','touchmove',showChartTooltip,{passive:true});
+bind('chexChart','touchend',()=>setTimeout(hideChartTooltip,1200),{passive:true});
 bind('marketGexChart','mousemove',showChartTooltip);
 bind('marketGexChart','mouseleave',hideChartTooltip);
 bind('marketGexChart','touchstart',showChartTooltip,{passive:true});
@@ -3461,6 +3595,11 @@ document.querySelectorAll('.pbtn').forEach(btn=>{
   });
 });
 
+// expiration quick-select buttons (0DTE / Week / All)
+document.querySelectorAll('.expiry-quick-btn').forEach(btn=>{
+  btn.addEventListener('click',()=>applyExpirationQuickSelect(btn.dataset.expquick));
+});
+
 function syncSigmaButtons(){
   const value=Number.isFinite(DISPLAY_SIGMA)?String(DISPLAY_SIGMA):'all';
   document.querySelectorAll('[data-sigma]').forEach(btn=>btn.classList.toggle('active',btn.dataset.sigma===value));
@@ -3472,6 +3611,8 @@ document.querySelectorAll('[data-sigma]').forEach(btn=>{
     syncSigmaButtons();
     if(window._lastR && activeView === 'gex') drawChart(window._lastR);
     if(window._lastR && activeView === 'dex') drawChart(window._lastR,'dexChart');
+    if(window._lastR && activeView === 'vex') drawChart(window._lastR,'vexChart');
+    if(window._lastR && activeView === 'chex') drawChart(window._lastR,'chexChart');
     if(window._lastR && activeView === 'market-structure') renderMarketStructure(window._lastR);
   });
 });

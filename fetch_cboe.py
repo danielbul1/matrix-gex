@@ -18,6 +18,7 @@ SYMBOLS = [
     ("_SPX", "SPX"),
     ("SPY", "SPY"),
     ("QQQ", "QQQ"),
+    ("_VIX", "VIX"),
     ("IWM", "IWM"),
     ("AAPL", "AAPL"),
     ("NVDA", "NVDA"),

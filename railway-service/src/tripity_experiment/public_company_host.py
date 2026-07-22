@@ -37,6 +37,7 @@ from tripity_experiment.source_analysis import analyze_source_url
 DEFAULT_OPENAPI_URL = "https://petstore3.swagger.io/api/v3/openapi.json"
 DEFAULT_COMPANY_NAME = "Swagger Petstore"
 MATRIX_SPX_QUOTE_URL = "https://cdn.cboe.com/api/global/delayed_quotes/quotes/_SPX.json"
+MATRIX_VIX_QUOTE_URL = "https://cdn.cboe.com/api/global/delayed_quotes/quotes/_VIX.json"
 MATRIX_OPTIONS_URL = "https://cdn.cboe.com/api/global/delayed_quotes/options/{}.json"
 MATRIX_YAHOO_CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{}"
 MATRIX_LSE_CHAIN_URL = "https://api.londonstrategicedge.com/vault/options/chain"
@@ -61,6 +62,7 @@ MATRIX_CBOE_SYMBOLS = (
     ("_SPX", "SPX"),
     ("SPY", "SPY"),
     ("QQQ", "QQQ"),
+    ("_VIX", "VIX"),
 )
 MATRIX_CORS_ORIGINS = {
     "https://danielbul1.github.io",
@@ -276,10 +278,10 @@ class PublicConnector:
     openapi_spec: dict[str, Any] | None = None
 
 
-async def _fetch_matrix_spx_quote() -> dict[str, Any]:
+async def _fetch_matrix_cboe_quote(url: str, symbol: str, cboe_symbol: str) -> dict[str, Any]:
     async with httpx.AsyncClient(timeout=10.0) as client:
         response = await client.get(
-            MATRIX_SPX_QUOTE_URL,
+            url,
             headers={"User-Agent": "Tripity Matrix quote proxy (+https://trytripity.site)"},
         )
         response.raise_for_status()
@@ -293,12 +295,39 @@ async def _fetch_matrix_spx_quote() -> dict[str, Any]:
     asof = data.get("last_trade_time") or payload.get("timestamp")
     return {
         "ok": True,
-        "symbol": "SPX",
+        "symbol": symbol,
         "spot": float(price),
         "asof": asof,
         "source": "cboe_delayed_quote",
-        "cboe_symbol": payload.get("symbol") or "_SPX",
+        "cboe_symbol": payload.get("symbol") or cboe_symbol,
     }
+
+
+async def _fetch_matrix_spx_quote() -> dict[str, Any]:
+    return await _fetch_matrix_cboe_quote(MATRIX_SPX_QUOTE_URL, "SPX", "_SPX")
+
+
+# VIX has no LSE websocket stream, so its spot rides the CBOE delayed quote
+# (same fallback pattern as the SPX quote), cached briefly for the poller.
+MATRIX_CBOE_SPOT_URLS = {"VIX": MATRIX_VIX_QUOTE_URL}
+_matrix_cboe_spot_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+
+
+async def _fetch_matrix_cboe_spot_cached(symbol: str) -> dict[str, Any] | None:
+    url = MATRIX_CBOE_SPOT_URLS.get(symbol)
+    if not url:
+        return None
+    now = time.time()
+    cached = _matrix_cboe_spot_cache.get(symbol)
+    if cached and now - cached[0] < MATRIX_CANDLES_CACHE_SECONDS:
+        return cached[1]
+    try:
+        quote = await _fetch_matrix_cboe_quote(url, symbol, f"_{symbol}")
+    except Exception:  # noqa: BLE001
+        return cached[1] if cached else None
+    entry = {"spot": quote["spot"], "asof": quote.get("asof"), "source": "cboe_delayed_quote"}
+    _matrix_cboe_spot_cache[symbol] = (time.time(), entry)
+    return entry
 
 
 def _matrix_lse_candles_payload(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1599,13 +1628,13 @@ def _matrix_bs_greeks(S: float, K: float, T: float, sigma: float, r: float, is_c
 
 
 def _matrix_years_to_expiry(exp: str, root: str, valuation_ms: int) -> float:
-    """Mirrors preciseYearsToExpiry() in matrix.js (AM-settled SPX/NDX roots)."""
+    """Mirrors preciseYearsToExpiry() in matrix.js (AM-settled SPX/NDX/VIX roots)."""
     try:
         year, month, day = (int(part) for part in str(exp)[:10].split("-"))
     except ValueError:
         return 1 / (365.25 * 24 * 60)
     et = ZoneInfo("America/New_York")
-    if root in {"SPX", "NDX"}:
+    if root in {"SPX", "NDX", "VIX", "VIXW"}:
         expiry = datetime.datetime(year, month, day, 9, 30, tzinfo=et)
     else:
         expiry = datetime.datetime(year, month, day, 16, 0, tzinfo=et)
@@ -2346,6 +2375,11 @@ class PublicCompanyApp:
                             "asof": entry.get("asof"),
                             "source": "lse_rest_1m",
                         }
+            # VIX has no LSE stream; use the cached CBOE delayed quote instead.
+            if "VIX" not in symbols:
+                vix_spot = await _fetch_matrix_cboe_spot_cached("VIX")
+                if vix_spot:
+                    symbols["VIX"] = vix_spot
             await self._json(
                 send,
                 {
