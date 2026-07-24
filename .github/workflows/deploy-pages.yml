@@ -32,9 +32,10 @@ jobs:
             --exclude '__pycache__' --exclude '*.pyc' --exclude '*.log' \
             --exclude 'cboe_data.json' --exclude 'spy.json' \
             --exclude 'candles_data.json' --exclude 'cboe_open_data.json' \
-            --exclude 'matrix_remote.js' --exclude 'exposure_history' \
+            --exclude 'exposure_history' \
             --exclude '*.py' --exclude '*.ps1' --exclude 'requirements.txt' \
             --exclude '.env*' --exclude 'functions' \
+            --exclude 'railway-service' \
             ./ public/
 
       - uses: actions/configure-pages@v5

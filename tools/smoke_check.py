@@ -1,6 +1,5 @@
 import json
 import os
-import re
 import sys
 from datetime import datetime, time, timedelta
 from pathlib import Path
@@ -16,71 +15,6 @@ FRESHNESS_FUTURE_TOLERANCE = timedelta(minutes=5)
 FRESHNESS_MARKET_START_ET = time(9, 45)
 FRESHNESS_MARKET_END_ET = time(16, 30)
 ET = ZoneInfo("America/New_York")
-REQUIRED_IDS = (
-    "symbol",
-    "expirationPicker",
-    "source",
-    "autorefresh",
-    "mode",
-    "strikeCount",
-    "spotOverride",
-    "run",
-    "dataHealth",
-    "dataHealthState",
-    "dataHealthSource",
-    "dataHealthAge",
-    "dataHealthContracts",
-    "dataHealthAsof",
-    "dataHealthSpot",
-    "dataHealthLoaded",
-    "staleDataBanner",
-    "forceTripityRefresh",
-    "marketReadPanel",
-    "keyLevelsPanel",
-    "scenarioLadderPanel",
-    "signalQualityPanel",
-    "snapshotControls",
-    "snapshotNote",
-    "saveSnapshot",
-    "matrixGexChart",
-    "matrixGexTooltip",
-    "matrixGexCrosshairX",
-    "matrixSymLabel",
-    "matrixChartLegend",
-    "shockStatePanel",
-    "shockUpsidePanel",
-    "shockDownsidePanel",
-    "shockEngineChart",
-    "shockTooltip",
-    "reviewSnapshotList",
-    "reviewOutcomeFilter",
-    "reviewStatsPanel",
-    "clearSnapshots",
-    "gexChart",
-    "view-dex",
-    "dexChart",
-    "dexTooltip",
-    "dexCrosshairX",
-    "dexChartLegend",
-    "view-market-structure",
-    "marketGexChart",
-    "marketGexTooltip",
-    "marketGexCrosshairX",
-    "marketGexLegend",
-    "marketPriceCanvas",
-    "marketLevelLegend",
-    "marketStructureStatus",
-    "optionsHeatMap",
-    "netFlowChart",
-    "darkPoolLevels",
-    "maxPainChart",
-    "matrixPriceChart",
-    "matrixPriceNote",
-    "marketReadCard",
-    "dealerScenarioPanel",
-    "dealerFlowMap",
-    "edgeChart",
-)
 
 
 def fail(message):
@@ -238,36 +172,6 @@ def validate_status_file():
     return 0
 
 
-def validate_dashboard():
-    path = ROOT / "gex_dashboard.html"
-    html = path.read_text(encoding="utf-8")
-    js = (ROOT / "assets" / "dashboard.js").read_text(encoding="utf-8")
-    css = (ROOT / "assets" / "dashboard.css").read_text(encoding="utf-8")
-
-    missing_ids = [item for item in REQUIRED_IDS if f'id="{item}"' not in html]
-    if missing_ids:
-        return fail(f"dashboard missing required ids: {', '.join(missing_ids)}")
-
-    if 'href="assets/dashboard.css' not in html:
-        return fail("dashboard does not load assets/dashboard.css")
-    if 'src="assets/dashboard.js' not in html:
-        return fail("dashboard does not load assets/dashboard.js")
-    if ":root" not in css or "body{" not in css:
-        return fail("dashboard CSS asset looks incomplete")
-    if "debugStaleBanner" not in js:
-        return fail("dashboard stale banner debug hook missing")
-
-    for function_name in ("loadData", "run", "drawChart", "drawShockEngine", "renderDealerFlowMap", "updateStaleDataBanner", "shouldShowStaleDataBanner"):
-        if not re.search(rf"function\s+{re.escape(function_name)}\s*\(", js):
-            return fail(f"dashboard missing function {function_name}()")
-
-    broken_user_text = ("ð", "Â", "â€”", "â†", "Î“", "Ã—", "â‰¤", "âˆ’")
-    found = [token for token in broken_user_text if token in html or token in js or token in css]
-    if found:
-        return fail(f"dashboard still contains mojibake tokens: {', '.join(found)}")
-    return 0
-
-
 def validate_server_contracts():
     server = (ROOT / "server.py").read_text(encoding="utf-8")
     if "@app.route('/status')" not in server:
@@ -278,7 +182,7 @@ def validate_server_contracts():
 
 
 def main():
-    for check in (validate_data, validate_freshness, validate_status_file, validate_dashboard, validate_server_contracts):
+    for check in (validate_data, validate_freshness, validate_status_file, validate_server_contracts):
         rc = check()
         if rc:
             return rc

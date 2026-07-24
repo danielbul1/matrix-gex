@@ -42,22 +42,13 @@ python tools\smoke_check.py
 Remove-Item Env:\MATRIX_REQUIRE_FRESH_DATA
 ```
 
-## Local Dashboard Check
+## Live Dashboard
 
-```powershell
-python -m http.server 8765 --bind 127.0.0.1
-```
-
-Open:
+The dashboard frontend was unified on the Railway copy (2026-07-24). There is
+no local dashboard page anymore — open the live UI:
 
 ```text
-http://127.0.0.1:8765/gex_dashboard.html
-```
-
-To force the stale-data banner for UI verification:
-
-```text
-http://127.0.0.1:8765/gex_dashboard.html?debugStaleBanner=1
+https://api.trytripity.site/matrix/
 ```
 
 ## Local Flask Server
