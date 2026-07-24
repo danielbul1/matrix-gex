@@ -139,6 +139,9 @@ Gotchas learned the hard way (2026-07-19):
 - `matrix.js` `setupSpotsPoller()` now polls `/api/matrix/spots` every 1s instead of
   5s. Client-side only: no change to Cboe/LSE/Yahoo cadences, snapshot capture stays
   1/min, and upstream rate budgets are untouched (the endpoint serves our own backend).
+- Deployed to Railway production (`railway up`); health checks passed: `/api/matrix/spots`
+  fresh websocket spots, `/api/matrix/gex-history?symbol=SPY&session_offset=1` OK, and
+  the served `matrix.js` contains `setInterval(pollLiveSpots, 1000)`.
 
 ### 2026-07-23 — Dynamic Cboe symbol search, favorites, and one live LSE stock
 - Added a TradingView-style symbol search backed by Cboe's official option-symbol
