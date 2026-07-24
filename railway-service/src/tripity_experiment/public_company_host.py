@@ -5,7 +5,9 @@ from __future__ import annotations
 import html
 import ipaddress
 import asyncio
+import csv
 import datetime
+import io
 import json
 import math
 import os
@@ -39,6 +41,9 @@ DEFAULT_COMPANY_NAME = "Swagger Petstore"
 MATRIX_SPX_QUOTE_URL = "https://cdn.cboe.com/api/global/delayed_quotes/quotes/_SPX.json"
 MATRIX_VIX_QUOTE_URL = "https://cdn.cboe.com/api/global/delayed_quotes/quotes/_VIX.json"
 MATRIX_OPTIONS_URL = "https://cdn.cboe.com/api/global/delayed_quotes/options/{}.json"
+MATRIX_CBOE_SYMBOL_DIRECTORY_URL = (
+    "https://www.cboe.com/us/options/symboldir/equity_index_options/?download=csv"
+)
 MATRIX_YAHOO_CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{}"
 MATRIX_LSE_CHAIN_URL = "https://api.londonstrategicedge.com/vault/options/chain"
 MATRIX_LSE_CANDLES_URL = "https://api.londonstrategicedge.com/vault/candles"
@@ -72,6 +77,9 @@ MATRIX_CORS_ORIGINS = {
 MATRIX_OCC = re.compile(r"([A-Z]+)(\d{6})([CP])(\d{8})")
 MATRIX_STRIKE_RANGE = 0.25
 MATRIX_CBOE_DATA_CACHE_SECONDS = 120.0
+MATRIX_SYMBOL_CATALOG_CACHE_SECONDS = 86400.0
+MATRIX_DYNAMIC_CHAIN_CACHE_MAX = 64
+MATRIX_DYNAMIC_CHAIN_FETCHES_PER_MINUTE = 12
 MATRIX_MARKET_DATA_CACHE_SECONDS = 300.0
 MATRIX_CANDLES_CACHE_SECONDS = 50.0
 # REST flow is a bootstrap/backfill source. Live charts read the persistent
@@ -88,6 +96,11 @@ MATRIX_WEB_DIR = (
 )
 _matrix_cboe_data_cache: tuple[float, dict[str, Any]] | None = None
 _matrix_cboe_data_lock = asyncio.Lock()
+_matrix_dynamic_chain_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+_matrix_dynamic_chain_lock = asyncio.Lock()
+_matrix_dynamic_chain_fetches: list[float] = []
+_matrix_symbol_catalog_cache: tuple[float, list[dict[str, str]]] | None = None
+_matrix_symbol_catalog_lock = asyncio.Lock()
 _matrix_market_data_cache: tuple[float, dict[str, Any]] | None = None
 _matrix_market_data_lock = asyncio.Lock()
 _matrix_candles_cache: dict[tuple[str, str, str], tuple[float, dict[str, Any]]] = {}
@@ -588,6 +601,141 @@ async def _fetch_matrix_cboe_data() -> dict[str, Any]:
         return data
 
 
+def _matrix_dynamic_symbol(value: str) -> str:
+    symbol = value.upper().strip()
+    if not re.fullmatch(r"[A-Z][A-Z0-9.-]{0,5}", symbol):
+        raise ValueError("Enter a valid US option symbol")
+    return symbol
+
+
+class MatrixDynamicRateLimitError(RuntimeError):
+    pass
+
+
+async def _fetch_matrix_symbol_catalog() -> list[dict[str, str]]:
+    global _matrix_symbol_catalog_cache
+    now = time.time()
+    if (
+        _matrix_symbol_catalog_cache is not None
+        and now - _matrix_symbol_catalog_cache[0] < MATRIX_SYMBOL_CATALOG_CACHE_SECONDS
+    ):
+        return _matrix_symbol_catalog_cache[1]
+    async with _matrix_symbol_catalog_lock:
+        now = time.time()
+        if (
+            _matrix_symbol_catalog_cache is not None
+            and now - _matrix_symbol_catalog_cache[0] < MATRIX_SYMBOL_CATALOG_CACHE_SECONDS
+        ):
+            return _matrix_symbol_catalog_cache[1]
+        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+            response = await client.get(
+                MATRIX_CBOE_SYMBOL_DIRECTORY_URL,
+                headers={"User-Agent": "Tripity Matrix symbol search (+https://trytripity.site)"},
+            )
+            response.raise_for_status()
+        rows: list[dict[str, str]] = []
+        for row in csv.DictReader(io.StringIO(response.text.lstrip("\ufeff"))):
+            symbol = str(row.get(" Stock Symbol") or row.get("Stock Symbol") or "").upper().strip()
+            name = str(row.get("Company Name") or "").strip()
+            if not symbol or not name:
+                continue
+            try:
+                symbol = _matrix_dynamic_symbol(symbol)
+            except ValueError:
+                continue
+            rows.append({"symbol": symbol, "name": name})
+        if not rows:
+            raise ValueError("CBOE symbol directory returned no symbols")
+        _matrix_symbol_catalog_cache = (time.time(), rows)
+        return rows
+
+
+async def _search_matrix_symbols(query: str, limit: int = 12) -> list[dict[str, str]]:
+    text = query.strip()[:80]
+    if not text:
+        return []
+    upper = text.upper()
+    try:
+        catalog = await _fetch_matrix_symbol_catalog()
+    except (httpx.HTTPError, ValueError):
+        catalog = []
+    ranked: list[tuple[int, str, str, dict[str, str]]] = []
+    for item in catalog:
+        symbol = item["symbol"]
+        name = item["name"]
+        name_upper = name.upper()
+        if symbol == upper:
+            score = 0
+        elif symbol.startswith(upper):
+            score = 1
+        elif upper in symbol:
+            score = 2
+        elif name_upper.startswith(upper):
+            score = 3
+        elif upper in name_upper:
+            score = 4
+        else:
+            continue
+        ranked.append((score, symbol, name_upper, item))
+    ranked.sort(key=lambda item: (item[0], len(item[1]), item[1], item[2]))
+    results = [item[3] for item in ranked[: max(1, min(limit, 20))]]
+    if re.fullmatch(r"[A-Z][A-Z0-9.-]{0,5}", upper) and not any(
+        item["symbol"] == upper for item in results
+    ):
+        results.insert(0, {"symbol": upper, "name": "Load exact symbol"})
+    return results[: max(1, min(limit, 20))]
+
+
+async def _fetch_matrix_dynamic_chain(symbol: str) -> dict[str, Any]:
+    symbol = _matrix_dynamic_symbol(symbol)
+    now = time.time()
+    today_et = datetime.datetime.now(ZoneInfo("America/New_York")).date()
+    cached = _matrix_dynamic_chain_cache.get(symbol)
+    if (
+        cached is not None
+        and datetime.datetime.fromtimestamp(cached[0], ZoneInfo("America/New_York")).date() == today_et
+    ):
+        return cached[1]
+    async with _matrix_dynamic_chain_lock:
+        now = time.time()
+        cached = _matrix_dynamic_chain_cache.get(symbol)
+        if (
+            cached is not None
+            and datetime.datetime.fromtimestamp(cached[0], ZoneInfo("America/New_York")).date() == today_et
+        ):
+            return cached[1]
+        _matrix_dynamic_chain_fetches[:] = [
+            fetched_at for fetched_at in _matrix_dynamic_chain_fetches if now - fetched_at < 60
+        ]
+        if len(_matrix_dynamic_chain_fetches) >= MATRIX_DYNAMIC_CHAIN_FETCHES_PER_MINUTE:
+            raise MatrixDynamicRateLimitError("Too many new option symbols; try again in one minute")
+        _matrix_dynamic_chain_fetches.append(now)
+        async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=10.0)) as client:
+            _, record = await _fetch_matrix_cboe_symbol(
+                client,
+                symbol,
+                symbol,
+                today=datetime.date.today(),
+            )
+        if not record.get("spot") or not record.get("opts"):
+            raise ValueError(f"CBOE returned no active option chain for {symbol}")
+        record.update({
+            "source": "cboe_daily_on_demand",
+            "price_source": "Cboe delayed",
+            "price_asof": record.get("asof"),
+            "oi_source": "cboe_daily",
+            "oi_asof": record.get("asof"),
+            "dynamic": True,
+            "history_available": False,
+            "flow_available": False,
+        })
+        _matrix_dynamic_chain_cache[symbol] = (time.time(), record)
+        if len(_matrix_dynamic_chain_cache) > MATRIX_DYNAMIC_CHAIN_CACHE_MAX:
+            oldest = min(_matrix_dynamic_chain_cache, key=lambda key: _matrix_dynamic_chain_cache[key][0])
+            _matrix_dynamic_chain_cache.pop(oldest, None)
+        return record
+
+
 def _matrix_lse_api_key() -> str:
     return (
         os.getenv("TRIPITY_MATRIX_LSE_API_KEY")
@@ -1036,6 +1184,16 @@ async def _fetch_matrix_flow_history(
     else:
         try:
             session_date = datetime.date.fromisoformat(session).isoformat()
+        except MatrixDynamicRateLimitError as exc:
+            await self._json(
+                send,
+                {"ok": False, "detail": str(exc)},
+                status=429,
+                headers=[
+                    *self._matrix_cors_headers(scope),
+                    (b"retry-after", b"60"),
+                ],
+            )
         except ValueError as exc:
             raise ValueError("Flow session_date must use YYYY-MM-DD") from exc
         if session_date not in _matrix_retained_session_dates():
@@ -1080,6 +1238,9 @@ class MatrixFlowCollector:
         self.reconnects = 0
         self.connection_gaps: list[dict[str, Any]] = []
         self.latest_spot: dict[str, float] = {}
+        self.latest_spot_asof: dict[str, str] = {}
+        self.client: Any | None = None
+        self.dynamic_symbol: str | None = None
         self._recent_signatures: dict[tuple[Any, ...], float] = {}
         self._last_contract_volume: dict[str, float] = {}
         self._volume_comparisons = 0
@@ -1123,7 +1284,33 @@ class MatrixFlowCollector:
             "volume_semantics": volume_semantics,
             "volume_nondecreasing_ratio": round(volume_ratio, 4) if volume_ratio is not None else None,
             "volume_samples": self._volume_comparisons,
+            "dynamic_symbol": self.dynamic_symbol,
         }
+
+    def set_active_symbol(self, symbol: str) -> None:
+        symbol = _matrix_dynamic_symbol(symbol)
+        previous = self.dynamic_symbol
+        if previous == symbol:
+            return
+        self.dynamic_symbol = symbol
+        if previous:
+            self.latest_spot.pop(previous, None)
+            self.latest_spot_asof.pop(previous, None)
+        client = self.client
+        if client is not None:
+            if previous:
+                client.unsubscribe([previous])
+            client.subscribe([symbol])
+
+    def clear_active_symbol(self) -> None:
+        previous = self.dynamic_symbol
+        if not previous:
+            return
+        self.dynamic_symbol = None
+        self.latest_spot.pop(previous, None)
+        self.latest_spot_asof.pop(previous, None)
+        if self.client is not None:
+            self.client.unsubscribe([previous])
 
     def _on_authenticated(self) -> None:
         now = datetime.datetime.now(datetime.timezone.utc)
@@ -1152,7 +1339,8 @@ class MatrixFlowCollector:
         tick_symbol = str(getattr(tick, "symbol", "") or "").upper()
         # Underlying price tick: map streamed symbol (SPY, QQQ, or an index
         # catalog name like SPX500/USD) to the dashboard symbol.
-        display_symbol = tick_symbol if tick_symbol in MATRIX_LSE_SYMBOLS else MATRIX_LSE_INDEX_STREAM_SYMBOLS.get(tick_symbol)
+        is_dynamic = self.dynamic_symbol is not None and tick_symbol == self.dynamic_symbol
+        display_symbol = tick_symbol if tick_symbol in MATRIX_LSE_SYMBOLS or is_dynamic else MATRIX_LSE_INDEX_STREAM_SYMBOLS.get(tick_symbol)
         if not symbol and display_symbol:
             try:
                 spot = float(getattr(tick, "price", 0) or 0)
@@ -1160,6 +1348,12 @@ class MatrixFlowCollector:
                 spot = 0
             if spot > 0:
                 self.latest_spot[display_symbol] = spot
+                timestamp = _matrix_flow_epoch_ms(getattr(tick, "timestamp", None))
+                self.latest_spot_asof[display_symbol] = (
+                    datetime.datetime.fromtimestamp(timestamp / 1000, datetime.timezone.utc).isoformat()
+                    if timestamp is not None
+                    else datetime.datetime.now(datetime.timezone.utc).isoformat()
+                )
                 self.underlying_ticks += 1
             return
         if symbol not in MATRIX_LSE_SYMBOLS or right not in {"call", "put"}:
@@ -1262,11 +1456,15 @@ class MatrixFlowCollector:
     async def run(self) -> None:
         from lse import LSE
         await asyncio.to_thread(_matrix_flow_db_init)
-        stream_symbols = list(MATRIX_LSE_SYMBOLS)
+        base_stream_symbols = list(MATRIX_LSE_SYMBOLS)
         if os.getenv("TRIPITY_MATRIX_STREAM_INDICES", "1").strip().lower() not in {"0", "false", "off", "no"}:
-            stream_symbols += list(MATRIX_LSE_INDEX_STREAM_SYMBOLS)
+            base_stream_symbols += list(MATRIX_LSE_INDEX_STREAM_SYMBOLS)
         while True:
+            stream_symbols = [*base_stream_symbols]
+            if self.dynamic_symbol and self.dynamic_symbol not in stream_symbols:
+                stream_symbols.append(self.dynamic_symbol)
             client = LSE(api_key=self.api_key)
+            self.client = client
             client.subscribe_options(list(MATRIX_LSE_SYMBOLS))
             client.on("authenticated", self._on_authenticated)
             client.on("error", self._on_error)
@@ -1284,6 +1482,9 @@ class MatrixFlowCollector:
                 self.state = "error"
                 self.detail = str(exc)[:240]
                 self._disconnected_at = self._disconnected_at or datetime.datetime.now(datetime.timezone.utc)
+            finally:
+                if self.client is client:
+                    self.client = None
             await self.flush()
             if self.state == "connected":
                 self.state = "reconnecting"
@@ -2009,6 +2210,45 @@ class PublicCompanyApp:
             if method == "GET":
                 await self._matrix_cboe_data(scope, send)
                 return
+        if path == "/api/matrix/symbol-search":
+            if method == "OPTIONS":
+                await self._response(
+                    send,
+                    204,
+                    b"",
+                    b"text/plain; charset=utf-8",
+                    headers=self._matrix_cors_headers(scope),
+                )
+                return
+            if method == "GET":
+                await self._matrix_symbol_search(scope, send)
+                return
+        if path == "/api/matrix/symbol-data":
+            if method == "OPTIONS":
+                await self._response(
+                    send,
+                    204,
+                    b"",
+                    b"text/plain; charset=utf-8",
+                    headers=self._matrix_cors_headers(scope),
+                )
+                return
+            if method == "GET":
+                await self._matrix_symbol_data(scope, send)
+                return
+        if path == "/api/matrix/active-symbol":
+            if method == "OPTIONS":
+                await self._response(
+                    send,
+                    204,
+                    b"",
+                    b"text/plain; charset=utf-8",
+                    headers=self._matrix_cors_headers(scope),
+                )
+                return
+            if method == "GET":
+                await self._matrix_active_symbol(scope, send)
+                return
         if path == "/api/matrix/candles":
             if method == "OPTIONS":
                 await self._response(
@@ -2285,6 +2525,85 @@ class PublicCompanyApp:
                 headers=self._matrix_cors_headers(scope),
             )
 
+    async def _matrix_symbol_search(self, scope: dict[str, Any], send: Any) -> None:
+        try:
+            query = parse_qs(scope.get("query_string", b"").decode("latin1"))
+            text = (query.get("q") or [""])[0]
+            items = await _search_matrix_symbols(text)
+            await self._json(
+                send,
+                {"ok": True, "query": text, "items": items},
+                headers=[
+                    *self._matrix_cors_headers(scope),
+                    (b"cache-control", b"public, max-age=300"),
+                ],
+            )
+        except Exception as exc:  # noqa: BLE001
+            await self._json(
+                send,
+                {"ok": False, "detail": str(exc)},
+                status=502,
+                headers=self._matrix_cors_headers(scope),
+            )
+
+    async def _matrix_symbol_data(self, scope: dict[str, Any], send: Any) -> None:
+        try:
+            query = parse_qs(scope.get("query_string", b"").decode("latin1"))
+            symbol = _matrix_dynamic_symbol((query.get("symbol") or [""])[0])
+            record = await _fetch_matrix_dynamic_chain(symbol)
+            collector = _matrix_flow_collector
+            if collector is not None:
+                collector.set_active_symbol(symbol)
+            await self._json(
+                send,
+                {
+                    "ok": True,
+                    "symbol": symbol,
+                    "record": record,
+                    "cache_scope": "et_calendar_day",
+                    "spot_source": "lse_websocket" if collector is not None else "cboe_delayed",
+                    "history_available": False,
+                    "flow_available": False,
+                },
+                headers=[
+                    *self._matrix_cors_headers(scope),
+                    (b"cache-control", b"public, max-age=300"),
+                ],
+            )
+        except ValueError as exc:
+            await self._json(
+                send,
+                {"ok": False, "detail": str(exc)},
+                status=400,
+                headers=self._matrix_cors_headers(scope),
+            )
+        except Exception as exc:  # noqa: BLE001
+            await self._json(
+                send,
+                {"ok": False, "detail": str(exc)},
+                status=502,
+                headers=self._matrix_cors_headers(scope),
+            )
+
+    async def _matrix_active_symbol(self, scope: dict[str, Any], send: Any) -> None:
+        query = parse_qs(scope.get("query_string", b"").decode("latin1"))
+        symbol = (query.get("symbol") or [""])[0].upper().strip()
+        collector = _matrix_flow_collector
+        if collector is not None and symbol in MATRIX_LSE_PRICE_SYMBOLS:
+            collector.clear_active_symbol()
+        await self._json(
+            send,
+            {
+                "ok": True,
+                "symbol": symbol or None,
+                "dynamic_symbol": collector.dynamic_symbol if collector is not None else None,
+            },
+            headers=[
+                *self._matrix_cors_headers(scope),
+                (b"cache-control", b"no-store"),
+            ],
+        )
+
     async def _matrix_candles(self, scope: dict[str, Any], send: Any) -> None:
         try:
             query = parse_qs(scope.get("query_string", b"").decode("latin1"))
@@ -2358,7 +2677,7 @@ class PublicCompanyApp:
                 for symbol, spot in collector.latest_spot.items():
                     symbols[symbol] = {
                         "spot": float(spot),
-                        "asof": collector.last_tick,
+                        "asof": collector.latest_spot_asof.get(symbol) or collector.last_tick,
                         "source": "lse_websocket",
                     }
             missing = [symbol for symbol in MATRIX_LSE_PRICE_SYMBOLS if symbol not in symbols]

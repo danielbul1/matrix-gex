@@ -4,16 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>GEX Analytics Dashboard</title>
-<script>
-  window.__loadMatrixChartLib=function(){
-    if(window.LightweightCharts) return;
-    const fallback=document.createElement('script');
-    fallback.src='https://cdn.jsdelivr.net/npm/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js';
-    document.head.appendChild(fallback);
-  };
-</script>
-<script src="https://unpkg.com/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js" onerror="window.__loadMatrixChartLib && window.__loadMatrixChartLib()"></script>
-<link rel="stylesheet" href="matrix.css?v=20260722-vex-chex1">
+<link rel="stylesheet" href="matrix.css?v=20260723-symbol-search3">
 </head>
 <body>
 <header>
@@ -39,7 +30,16 @@
 <div class="controls">
   <div class="ctrl">
     <label>Symbol</label>
-    <select id="symbol"></select>
+    <div class="symbol-picker">
+      <div class="symbol-search-row">
+        <input id="symbolSearch" type="search" placeholder="Search ticker or company (e.g. MSFT)" autocomplete="off" spellcheck="false" aria-label="Search an option symbol" aria-controls="symbolSearchResults" aria-expanded="false">
+        <button type="button" id="symbolFavorite" class="symbol-favorite" title="Add current symbol to favorites" aria-label="Add current symbol to favorites">☆</button>
+      </div>
+      <select id="symbol" hidden aria-hidden="true"></select>
+      <div id="symbolSearchResults" class="symbol-search-results" role="listbox" hidden></div>
+      <div id="symbolFavorites" class="symbol-favorites" aria-label="Favorite symbols"></div>
+      <div id="symbolSearchStatus" class="symbol-search-status" aria-live="polite"></div>
+    </div>
   </div>
   <div class="ctrl">
     <label>Expirations</label>
@@ -80,10 +80,6 @@
       <option value="0dte">0DTE (+/-15%)</option>
       <option value="full">full (entire chain)</option>
     </select>
-  </div>
-  <div class="ctrl">
-    <label>Strike Count (+/-N)</label>
-    <input id="strikeCount" type="number" value="20" min="5" max="40">
   </div>
   <div class="ctrl">
     <label>Spot Override</label>
@@ -163,8 +159,6 @@
         <canvas id="gexChart" height="540"></canvas>
       </div>
     </div>
-
-    <div class="grid row-top" id="topCards"></div>
   </section>
 
   <section class="app-view" id="view-dex">
@@ -304,7 +298,7 @@
         <div>
           <span class="lab-eyebrow"><i></i> Live exposure workspace</span>
           <h2>Exposure Lab</h2>
-          <p>Dealer positioning across Gamma, Delta, Vanna and Charm â€” synchronized to the global symbol and expiration selection.</p>
+          <p>Dealer positioning across Gamma, Delta, Vanna and Charm — synchronized to the global symbol and expiration selection.</p>
         </div>
         <div class="lab-range" role="group" aria-label="Exposure Lab strike range">
           <span>Strike range</span>
@@ -438,14 +432,6 @@
     </div>
   </section>
 
-  <section class="app-view" id="view-options-heat-map">
-    <article class="feature-card heatmap-card">
-      <h2>What is the Options Heat Map?</h2>
-      <p>The Options Heat Map shows where call/put premium is concentrated across strike prices and expiration dates. Blue cells show call premium leading, red cells show put premium leading, and brighter cells mark stronger relative activity.</p>
-      <div class="options-heatmap" id="optionsHeatMap"></div>
-    </article>
-  </section>
-
   <section class="app-view" id="view-net-flow">
     <div class="flow-workspace">
       <div class="flow-workspace-head">
@@ -476,19 +462,6 @@
         </article>
       </div>
     </div>
-  </section>
-
-  <section class="app-view" id="view-dark-pool-levels">
-    <article class="feature-card darkpool-card">
-      <div class="darkpool-top">
-        <div class="darkpool-title">
-          <h2>Dark Pool Levels</h2>
-          <p>Estimated support/resistance levels from option-chain liquidity concentration.</p>
-        </div>
-        <div class="darkpool-badge">Estimated from options chain</div>
-      </div>
-      <div class="darkpool-table" id="darkPoolLevels"></div>
-    </article>
   </section>
 
   <section class="app-view" id="view-max-pain">
@@ -543,49 +516,14 @@
     </article>
   </section>
 
-  <section class="app-view" id="view-edge">
-    <article class="feature-card edge-card">
-      <div class="edge-top">
-        <div class="edge-title">
-          <h2>Dealer Pressure</h2>
-          <p>Dynamic pressure map from GEX, Vanna and Charm. It highlights pin zones, support/resistance pressure and acceleration pockets around spot.</p>
-        </div>
-        <div class="range-control edge-range" role="group" aria-label="Dealer pressure strike display range">
-          <span class="range-label">Range</span>
-          <button type="button" class="range-btn edge-range-btn" data-edge-sigma="1">1&sigma;</button>
-          <button type="button" class="range-btn edge-range-btn active" data-edge-sigma="2">2&sigma;</button>
-          <button type="button" class="range-btn edge-range-btn" data-edge-sigma="3">3&sigma;</button>
-          <button type="button" class="range-btn edge-range-btn" data-edge-sigma="all">All</button>
-        </div>
-      </div>
-      <div class="dealer-chart-grid">
-        <div class="tv-card">
-          <div class="matrix-price-chart" id="matrixPriceChart"></div>
-          <div class="matrix-price-note" id="matrixPriceNote">SPY candles with SPX pressure levels converted to SPY</div>
-        </div>
-        <aside class="market-read-card" id="marketReadCard" aria-live="polite"></aside>
-      </div>
-      <div class="scenario-panel" id="dealerScenarioPanel" aria-live="polite"></div>
-      <div class="flow-map" id="dealerFlowMap" aria-live="polite"></div>
-      <div class="edge-wrap">
-        <div class="edge-crosshair" id="edgeCrosshair0"></div>
-        <div class="edge-crosshair" id="edgeCrosshair1"></div>
-        <div class="edge-crosshair" id="edgeCrosshair2"></div>
-        <div class="edge-tooltip" id="edgeTooltip"></div>
-        <canvas id="edgeChart" height="760"></canvas>
-      </div>
-    </article>
-  </section>
 </main>
 
-<div class="heatmap-tip" id="heatMapTooltip"></div>
-
 <footer>
-  Implementation based on the documented model: Black-Scholes Greeks Â· GEX = Gamma x OI x Multiplier x Spot^2 Â·
-  Regime Detection Â· Zero-Gamma Flip interpolation Â· Call/Put Walls.
+  Implementation based on the documented model: Black-Scholes Greeks · GEX = Gamma x OI x Multiplier x Spot^2 ·
+  Regime Detection · Zero-Gamma Flip interpolation · Call/Put Walls.
   Synthetic data is generated in-browser when live CBOE data is unavailable. Original demo: gex.kctradings.com
 </footer>
 
-<script src="matrix.js?v=20260722-vex-chex1"></script>
+<script src="matrix.js?v=20260723-symbol-search3"></script>
 </body>
 </html>
