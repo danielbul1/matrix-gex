@@ -2,14 +2,18 @@ from flask import Flask, jsonify
 from flask_cors import CORS
 import requests
 import numpy as np
-from scipy.stats import norm
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 import threading
 import time
 import re
 import json
+import sys
 from pathlib import Path
+
+# Canonical greeks/GEX engine (shared with the Railway service and tooling).
+sys.path.insert(0, str(Path(__file__).resolve().parent / 'railway-service' / 'src'))
+from tripity_experiment import matrix_gex
 
 
 try:
@@ -92,8 +96,8 @@ def safe(v, d=0.0):
         return d
 
 def norm_iv(iv):
-    if iv > 1: iv /= 100
-    return iv if 0 < iv < 5 else 0.0
+    # LSE may return IV as a percentage (e.g. 13.5) or decimal (0.135).
+    return matrix_gex.norm_iv(iv)
 
 def is_third_friday(d):
     return d.weekday() == 4 and 15 <= d.day <= 21
@@ -112,68 +116,10 @@ def minutes_to_market_close():
 
 
 def time_to_expiry_years(exp, now_et):
-    """Time to expiry in years. 0DTE contracts use actual intraday time
-    remaining until 16:00 ET with a 1-minute floor (matching the JS port);
-    longer-dated contracts use business days / 262."""
-    bd = int(np.busday_count(now_et.date(), exp.date()))
-    if bd > 0:
-        return bd / 262.0, False
-    minutes = (exp - now_et).total_seconds() / 60.0
-    minutes = max(minutes, 1.0)  # 1-minute floor
-    return minutes / (365.25 * 24 * 60), True
-
-# Black-Scholes greeks
-def bs_d1d2(S, K, vol, T):
-    sq = np.sqrt(T)
-    d1 = (np.log(S / K) + 0.5 * vol**2 * T) / (vol * sq)
-    d2 = d1 - vol * sq
-    return d1, d2
-
-def bs_gamma_scalar(S, K, vol, T):
-    if T <= 0 or vol <= 0: return 0.0
-    d1, _ = bs_d1d2(S, K, vol, T)
-    return norm.pdf(d1) / (S * vol * np.sqrt(T))
-
-def bs_vanna(S, K, vol, T):
-    """Vanna = dDelta/dVol = -norm.pdf(d1)*d2/vol"""
-    if T <= 0 or vol <= 0: return 0.0
-    d1, d2 = bs_d1d2(S, K, vol, T)
-    return -norm.pdf(d1) * d2 / vol
-
-def bs_charm_call(S, K, vol, T, r=0):
-    """Charm for call = dDelta/dt"""
-    if T <= 0 or vol <= 0: return 0.0
-    sq = np.sqrt(T)
-    d1, d2 = bs_d1d2(S, K, vol, T)
-    return -norm.pdf(d1) * (2*r*T - d2*vol*sq) / (2*T*vol*sq)
-
-# Vectorized GEX at a spot level
-def gex_at(S, Kc, vc, Tc, OIc, Kp, vp, Tp, OIp):
-    def side(K, vol, T, OI):
-        if len(K) == 0: return 0.0
-        mask = (T > 0) & (vol > 0) & (OI > 0)
-        if not mask.any(): return 0.0
-        K_, v_, T_, OI_ = K[mask], vol[mask], T[mask], OI[mask]
-        sq = np.sqrt(T_)
-        d1 = (np.log(S / K_) + 0.5*v_**2*T_) / (v_*sq)
-        g  = norm.pdf(d1) / (S * v_ * sq)
-        return (OI_ * 100 * S * S * 0.01 * g).sum()
-    return (side(Kc,vc,Tc,OIc) - side(Kp,vp,Tp,OIp)) / 1e9
-
-def make_np(opts, exclude_exp=None):
-    c_rows, p_rows = [], []
-    for o in opts:
-        if exclude_exp and o['exp'] == exclude_exp: continue
-        c, p = o.get('C',{}), o.get('P',{})
-        if c.get('iv',0)>0 and c.get('oi',0)>0:
-            c_rows.append((o['strike'], c['iv'], o['T'], c['oi']))
-        if p.get('iv',0)>0 and p.get('oi',0)>0:
-            p_rows.append((o['strike'], p['iv'], o['T'], p['oi']))
-    def to_np(rows):
-        if not rows: return np.array([]),np.array([]),np.array([]),np.array([])
-        a = np.array(rows)
-        return a[:,0],a[:,1],a[:,2],a[:,3]
-    return to_np(c_rows), to_np(p_rows)
+    """(Years to expiry, is_0dte) via the canonical engine: AM-settled roots
+    expire 9:30 ET, others 16:00 ET, with a 1-minute floor. SPY is PM-settled."""
+    T = matrix_gex.years_to_expiry(exp.strftime('%Y-%m-%d'), TICKER, now_et.timestamp() * 1000)
+    return T, exp.date() == now_et.date()
 
 # Main computation
 def compute():
@@ -233,7 +179,9 @@ def _compute_fresh(now):
         pairs[key][kind] = {'iv':iv,'gamma':gam,'oi':oi,'delta':dlt}
 
         if spot is None:
-            spot = safe(o.get('underlying_price',0))
+            candidate = safe(o.get('underlying_price',0))
+            if candidate > 0:
+                spot = candidate
 
     if not pairs or spot is None or spot <= 0:
         raise RuntimeError('No options parsed. See /raw to inspect LSE response.')
@@ -250,29 +198,29 @@ def _compute_fresh(now):
 
     for o in opts:
         k  = o['strike']
-        el = o['exp'].strftime('%b %d')
+        el = o['exp'].strftime('%b %d %Y')
         c, p = o.get('C',{}), o.get('P',{})
         T    = o['T']
 
         # GEX
-        c_gex = c.get('gamma',0) * c.get('oi',0) * 100 * spot**2 * 0.01
-        p_gex = p.get('gamma',0) * p.get('oi',0) * 100 * spot**2 * 0.01
+        c_gex = matrix_gex.gex_value(c.get('gamma',0), c.get('oi',0), 100, spot)
+        p_gex = matrix_gex.gex_value(p.get('gamma',0), p.get('oi',0), 100, spot)
 
         # DEX (delta exposure per 1% move)
-        c_dex = c.get('delta',0) * c.get('oi',0) * 100 * spot * 0.01
-        p_dex = p.get('delta',0) * p.get('oi',0) * 100 * spot * 0.01
+        c_dex = matrix_gex.dex_value(c.get('delta',0), c.get('oi',0), 100, spot)
+        p_dex = matrix_gex.dex_value(p.get('delta',0), p.get('oi',0), 100, spot)
 
         # Vanna exposure per 1% IV move
-        c_vanna_unit = bs_vanna(spot, k, c.get('iv',0), T) if c.get('iv',0)>0 else 0
-        p_vanna_unit = bs_vanna(spot, k, p.get('iv',0), T) if p.get('iv',0)>0 else 0
-        c_vex =  c_vanna_unit * c.get('oi',0) * 100 * spot * 0.01
-        p_vex = -p_vanna_unit * p.get('oi',0) * 100 * spot * 0.01
+        c_vanna_unit = matrix_gex.bs_vanna(spot, k, T, c.get('iv',0)) if c.get('iv',0)>0 else 0
+        p_vanna_unit = matrix_gex.bs_vanna(spot, k, T, p.get('iv',0)) if p.get('iv',0)>0 else 0
+        c_vex =  matrix_gex.vex_value(c_vanna_unit, c.get('oi',0), 100, spot)
+        p_vex = -matrix_gex.vex_value(p_vanna_unit, p.get('oi',0), 100, spot)
 
-        # Charm exposure per 1 day
-        c_charm_unit = bs_charm_call(spot, k, c.get('iv',0), T) if c.get('iv',0)>0 else 0
-        p_charm_unit = -bs_charm_call(spot, k, p.get('iv',0), T) if p.get('iv',0)>0 else 0  # put charm ~ -call charm
-        c_charm =  c_charm_unit * c.get('oi',0) * 100 * spot / 252
-        p_charm = -p_charm_unit * p.get('oi',0) * 100 * spot / 252
+        # Charm exposure per 1 trading day
+        c_charm_unit = matrix_gex.bs_charm(spot, k, T, c.get('iv',0)) if c.get('iv',0)>0 else 0
+        p_charm_unit = matrix_gex.bs_charm(spot, k, T, p.get('iv',0)) if p.get('iv',0)>0 else 0  # put charm == call charm (parity); sign applied below
+        c_charm =  matrix_gex.chex_value(c_charm_unit, c.get('oi',0), 100, spot)
+        p_charm = -matrix_gex.chex_value(p_charm_unit, p.get('oi',0), 100, spot)
 
         by_k.setdefault(k, {'cgex':0,'pgex':0,'cdex':0,'pdex':0,'cvex':0,'pvex':0,'ccharm':0,'pcharm':0})
         by_k[k]['cgex']   += c_gex
@@ -325,6 +273,7 @@ def _compute_fresh(now):
         max_g = max(max(abs(r['netGEX']) for r in rows), 1e-9)
         max_v = max(max(abs(r['netVEX']) for r in rows), 1e-9)
         max_c = max(max(abs(r['netCharm']) for r in rows), 1e-9)
+        max_d = max(max(abs(r['netDEX']) for r in rows), 1e-9)
         gamma_accel = 0.85 if total_gex_bn >= 0 else 1.25
         weights = {'gex': 0.50, 'vanna': 0.32, 'charm': 0.28}
         weighted_sum = 0.0
@@ -338,7 +287,7 @@ def _compute_fresh(now):
             r['vannaPressure'] = round(float(v * 100), 2)
             r['charmPressure'] = round(float(c * 100), 2)
             r['powerZone'] = round(float(
-                0.42*abs(g) + 0.24*abs(v) + 0.20*abs(c) + 0.14*min(1.0, abs(r['netDEX'])/max_g)
+                0.42*abs(g) + 0.24*abs(v) + 0.20*abs(c) + 0.14*min(1.0, abs(r['netDEX'])/max_d)
             ), 4)
             liq = max(1.0, abs(r['netGEX']) + abs(r['netVEX']) + abs(r['netCharm']))
             weighted_sum += r['ofi'] * liq
@@ -407,21 +356,24 @@ def _compute_fresh(now):
     tf_dates  = [d for d in all_dates if is_third_friday(d)]
     next_fri  = tf_dates[0] if tf_dates else next_exp
 
-    (Kc,vc,Tc,OIc),(Kp,vp,Tp,OIp) = make_np(opts)
-    (Kc_xn,vc_xn,Tc_xn,OIc_xn),(Kp_xn,vp_xn,Tp_xn,OIp_xn) = make_np(opts,next_exp)
-    (Kc_xf,vc_xf,Tc_xf,OIc_xf),(Kp_xf,vp_xf,Tp_xf,OIp_xf) = make_np(opts,next_fri)
+    def engine_rows(opts, exclude_exp=None):
+        rows = []
+        for o in opts:
+            if exclude_exp and o['exp'] == exclude_exp: continue
+            for kind in ('C', 'P'):
+                side = o.get(kind, {})
+                if side.get('iv',0)>0 and side.get('oi',0)>0:
+                    rows.append({'t': kind, 'k': o['strike'], 'oi': side['oi'], 'iv': side['iv'],
+                                 'exp': o['exp'].strftime('%Y-%m-%d'), 'root': TICKER})
+        return rows
 
-    prof_all = np.array([gex_at(lv,Kc,vc,Tc,OIc,Kp,vp,Tp,OIp)             for lv in levels])
-    prof_xn  = np.array([gex_at(lv,Kc_xn,vc_xn,Tc_xn,OIc_xn,Kp_xn,vp_xn,Tp_xn,OIp_xn) for lv in levels])
-    prof_xf  = np.array([gex_at(lv,Kc_xf,vc_xf,Tc_xf,OIc_xf,Kp_xf,vp_xf,Tp_xf,OIp_xf) for lv in levels])
+    now_ms   = now_et.timestamp() * 1000
+    level_ls = levels.tolist()
+    prof_all = [v/1e9 for v in matrix_gex.gamma_profile(engine_rows(opts), level_ls, 100, now_ms)]
+    prof_xn  = [v/1e9 for v in matrix_gex.gamma_profile(engine_rows(opts, next_exp), level_ls, 100, now_ms)]
+    prof_xf  = [v/1e9 for v in matrix_gex.gamma_profile(engine_rows(opts, next_fri), level_ls, 100, now_ms)]
 
-    zero_gamma = None
-    idx = np.where(np.diff(np.sign(prof_all)))[0]
-    if len(idx):
-        i = idx[0]
-        ng,pg_ = prof_all[i],prof_all[i+1]
-        ns,ps  = levels[i],levels[i+1]
-        zero_gamma = float(ps-(ps-ns)*pg_/(pg_-ng))
+    zero_gamma = matrix_gex.zero_gamma_flip(level_ls, prof_all)
 
     # GEX heatmap (strikes x expiries within 60 days)
     hm_lo, hm_hi = 0.9*spot, 1.1*spot    # tighter range for readability
@@ -443,7 +395,8 @@ def _compute_fresh(now):
         ei = ei_map.get(o['exp'])
         if si is None or ei is None: continue
         c, p = o.get('C',{}), o.get('P',{})
-        net = (c.get('gamma',0)*c.get('oi',0) - p.get('gamma',0)*p.get('oi',0)) * 100*spot**2*0.01/1e6
+        net = (matrix_gex.gex_value(c.get('gamma',0), c.get('oi',0), 100, spot)
+               - matrix_gex.gex_value(p.get('gamma',0), p.get('oi',0), 100, spot)) / 1e6
         z[si][ei] = round(net, 3)
 
     # Raw options table includes all greeks for client-side filtering
@@ -464,19 +417,19 @@ def _compute_fresh(now):
             'callGamma': round(c.get('gamma',0), 4),
             'callOI':    int(c_oi),
             'callDelta': round(c_dlt, 4),
-            'callGEX':   round(c.get('gamma',0)*c_oi*100*spot**2*0.01/1e6, 3),
-            'callDEX':   round(c_dlt*c_oi*100*spot*0.01/1e6, 4),
-            'callVEX':   round(bs_vanna(spot,ks,c_iv,T_)*c_oi*100*spot*0.01/1e6, 4) if c_iv>0 else 0,
-            'callCharm': round(bs_charm_call(spot,ks,c_iv,T_)*c_oi*100*spot/252/1e6, 4) if c_iv>0 else 0,
+            'callGEX':   round(matrix_gex.gex_value(c.get('gamma',0), c_oi, 100, spot)/1e6, 3),
+            'callDEX':   round(matrix_gex.dex_value(c_dlt, c_oi, 100, spot)/1e6, 4),
+            'callVEX':   round(matrix_gex.vex_value(matrix_gex.bs_vanna(spot,ks,T_,c_iv), c_oi, 100, spot)/1e6, 4) if c_iv>0 else 0,
+            'callCharm': round(matrix_gex.chex_value(matrix_gex.bs_charm(spot,ks,T_,c_iv), c_oi, 100, spot)/1e6, 4) if c_iv>0 else 0,
             # put
             'putIV':     round(p_iv*100, 2),
             'putGamma':  round(p.get('gamma',0), 4),
             'putOI':     int(p_oi),
             'putDelta':  round(p_dlt, 4),
-            'putGEX':    round(-p.get('gamma',0)*p_oi*100*spot**2*0.01/1e6, 3),
-            'putDEX':    round(p_dlt*p_oi*100*spot*0.01/1e6, 4),
-            'putVEX':    round(-bs_vanna(spot,ks,p_iv,T_)*p_oi*100*spot*0.01/1e6, 4) if p_iv>0 else 0,
-            'putCharm':  round(-bs_charm_call(spot,ks,p_iv,T_)*p_oi*100*spot/252/1e6, 4) if p_iv>0 else 0,
+            'putGEX':    round(-matrix_gex.gex_value(p.get('gamma',0), p_oi, 100, spot)/1e6, 3),
+            'putDEX':    round(matrix_gex.dex_value(p_dlt, p_oi, 100, spot)/1e6, 4),
+            'putVEX':    round(-matrix_gex.vex_value(matrix_gex.bs_vanna(spot,ks,T_,p_iv), p_oi, 100, spot)/1e6, 4) if p_iv>0 else 0,
+            'putCharm':  round(-matrix_gex.chex_value(matrix_gex.bs_charm(spot,ks,T_,p_iv), p_oi, 100, spot)/1e6, 4) if p_iv>0 else 0,
         })
     raw_opts.sort(key=lambda x: (x['expiration'], x['strike']))
 
@@ -497,9 +450,9 @@ def _compute_fresh(now):
         'options':    raw_opts,
         'profile': {
             'levels': levels.tolist(),
-            'all':    prof_all.tolist(),
-            'exNext': prof_xn.tolist(),
-            'exFri':  prof_xf.tolist(),
+            'all':    prof_all,
+            'exNext': prof_xn,
+            'exFri':  prof_xf,
         },
         'heatmap': {
             'strikes':  hm_strikes,
@@ -528,8 +481,15 @@ def gex():
             return jsonify(body)
         return jsonify({'error': str(e)}), 503
 
+_raw_cache = {'data': None, 'ts': 0}
+_raw_cache_lock = threading.Lock()  # guards _raw_cache reads/writes
+
 @app.route('/raw')
 def raw_view():
+    now = time.time()
+    with _raw_cache_lock:
+        if _raw_cache['data'] is not None and now - _raw_cache['ts'] < CACHE_S:
+            return jsonify(_raw_cache['data'])
     try:
         _record_lse_fetch()
         headers = {k: (v() if callable(v) else v) for k, v in HEADERS.items()}
@@ -537,12 +497,16 @@ def raw_view():
         r.raise_for_status()
         data = r.json()
         opts = data if isinstance(data, list) else []
-        return jsonify({
+        payload = {
             'type':        type(data).__name__,
             'options_len': len(opts),
             'first_5':     opts[:5],
             'spot':        opts[0].get('underlying_price') if opts else None,
-        })
+        }
+        with _raw_cache_lock:
+            _raw_cache['data'] = payload
+            _raw_cache['ts'] = time.time()
+        return jsonify(payload)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 

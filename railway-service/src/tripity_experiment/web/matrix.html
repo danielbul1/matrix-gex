@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>GEX Analytics Dashboard</title>
-<link rel="stylesheet" href="matrix.css?v=20260723-symbol-search3">
+<link rel="stylesheet" href="matrix.css?v=20260818-journal">
 </head>
 <body>
 <header>
@@ -20,6 +20,7 @@
     <a href="#" data-view="shock-engine">Shock Engine</a>
     <a href="#" data-view="max-pain">Max Pain</a>
     <a href="#" data-view="review">Review</a>
+    <a href="#" data-view="journal">Journal</a>
   </nav>
   <div class="side-disclaimer">Disclaimer</div>
   <h1>GEX Analytics</h1>
@@ -109,6 +110,8 @@
 </div>
 
 <div class="stale-data-banner" id="staleDataBanner" role="status" aria-live="polite" hidden></div>
+
+<div class="regime-banner" id="regimeBanner" role="status" aria-live="polite" hidden></div>
 
 <div class="gex-replay-bar" id="gexReplayBar" style="display:flex;align-items:center;gap:10px;margin:8px 0;flex-wrap:wrap;">
   <label for="gexReplaySession" style="font-weight:700;">GEX Replay</label>
@@ -516,6 +519,40 @@
     </article>
   </section>
 
+  <section class="app-view" id="view-journal">
+    <article class="feature-card journal-card">
+      <div class="journal-top">
+        <div>
+          <h2>Regime Journal</h2>
+          <p>Write your regime call before the open. The engine's verdict is frozen next to it, and after the close the day is graded with the same outcome rules as the regime backtester — so over time you can see whether to trust yourself or the machine.</p>
+        </div>
+      </div>
+      <div class="journal-grid">
+        <form class="journal-form" id="journalForm">
+          <div class="journal-form-head">
+            <span>Today's call</span>
+            <b id="journalFormSymbol">--</b>
+            <b id="journalFormDate">--</b>
+          </div>
+          <label>Regime call
+            <select id="journalLabel" aria-label="Regime call"></select>
+          </label>
+          <label>Levels
+            <input id="journalLevels" type="text" placeholder="e.g. 6450 wall / 6380 flip" autocomplete="off">
+          </label>
+          <label>Notes
+            <textarea id="journalNotes" rows="3" placeholder="Why this call?"></textarea>
+          </label>
+          <button type="submit" id="journalSave">Save Call</button>
+          <div class="journal-form-status" id="journalFormStatus" aria-live="polite"></div>
+        </form>
+        <div class="journal-today" id="journalToday" aria-live="polite"></div>
+      </div>
+      <div class="journal-stats" id="journalStats" aria-live="polite"></div>
+      <div class="journal-list" id="journalList" aria-live="polite"></div>
+    </article>
+  </section>
+
 </main>
 
 <footer>
@@ -524,6 +561,6 @@
   Synthetic data is generated in-browser when live CBOE data is unavailable. Original demo: gex.kctradings.com
 </footer>
 
-<script src="matrix.js?v=20260723-symbol-search3"></script>
+<script src="matrix.js?v=20260818-journal"></script>
 </body>
 </html>

@@ -58,10 +58,10 @@ function preciseYearsToExpiry(exp,root,valuationMs){
 
 // ---------- Symbol universe ----------
 const SYMBOLS = {
-  NDX:{spot:30570,  step:25, mult:100, baseIV:0.170, market:"US"},
-  SPX:{spot:7550,   step:5,  mult:100, baseIV:0.140, market:"US"},
-  SPY:{spot:580.50, step:5,  mult:100, baseIV:0.135, market:"US"},
-  QQQ:{spot:525.50, step:1,  mult:100, baseIV:0.165, market:"US"},
+  NDX:{spot:29252.56, step:25, mult:100, baseIV:0.170, market:"US"},
+  SPX:{spot:7482.71,  step:5,  mult:100, baseIV:0.140, market:"US"},
+  SPY:{spot:746.58,  step:5,  mult:100, baseIV:0.135, market:"US"},
+  QQQ:{spot:715.71,  step:1,  mult:100, baseIV:0.165, market:"US"},
   VIX:{spot:20,     step:1,  mult:100, baseIV:0.80,  market:"US"},
 };
 // Real market data is served directly by Tripity. Empty data falls back to synthetic chains.
@@ -2359,6 +2359,7 @@ function setView(view){
   if(viewRenderer && window._lastR) requestAnimationFrame(()=>viewRenderer(window._lastR));
   if(view === 'net-flow') requestAnimationFrame(()=>loadFlowData());
   if(view === 'review') renderReviewPage();
+  if(view === 'journal') requestAnimationFrame(()=>loadJournal());
   window.scrollTo({top:0,left:0});
 }
 function run(){
@@ -2918,7 +2919,7 @@ function applyGexReplaySnapshot(){
   const timeLabel = flowTimeLabel(Number(point.time));
   if(banner){
     banner.hidden = false;
-    banner.textContent = `Replay: ${GEX_REPLAY.session} ${timeLabel} ET · Spot ${fmtReplayLevel(point.spot)} · Total GEX ${fmtNum(Number(point.totalGex)||0)} · Total DEX ${fmtNum(Number(point.totalDex)||0)} · Flip ${fmtReplayLevel(point.flip)} · Call Wall ${fmtReplayLevel(point.callWall)} · Put Wall ${fmtReplayLevel(point.putWall)} · ${point.regime || ''}`;
+    banner.textContent = `Replay: ${GEX_REPLAY.session} ${timeLabel} ET · Spot ${fmtReplayLevel(point.spot)} · Total GEX ${fmtNum(Number(point.totalGex)||0)} · Total DEX ${fmtNum(Number(point.totalDex)||0)} · Total VEX ${fmtNum(Number(point.totalVex)||0)} · Total CHEX ${fmtNum(Number(point.totalChex)||0)} · Flip ${fmtReplayLevel(point.flip)} · Call Wall ${fmtReplayLevel(point.callWall)} · Put Wall ${fmtReplayLevel(point.putWall)} · ${point.regime || ''}`;
   }
   const symbol = document.getElementById('symbol').value;
   if(REAL[symbol] && Number.isFinite(Number(point.spot))){
@@ -2940,6 +2941,226 @@ bind('symbol', 'change', ()=>{
   if(GEX_REPLAY.active && GEX_REPLAY.session) loadGexReplay(GEX_REPLAY.session);
 });
 
+// ---------- Regime engine banner (server-fused verdict, 60s poll) ----------
+const MATRIX_REGIME_URL = 'https://api.trytripity.site/api/matrix/regime';
+let _regimeTimer = null;
+
+function renderRegime(payload){
+  const banner = document.getElementById('regimeBanner');
+  if(!banner) return;
+  if(!payload || !payload.ok){
+    banner.hidden = true;
+    return;
+  }
+  const label = String(payload.label || 'MIXED');
+  const lines = Array.isArray(payload.reasoning) ? payload.reasoning : [];
+  banner.innerHTML =
+    `<div class="regime-head"><b class="regime-label regime-${esc(label)}">${esc(label.replace(/_/g,' '))}</b>` +
+    `<span class="regime-agreement">${Number(payload.agreement)||0}/3 forces aligned</span></div>` +
+    `<ul class="regime-reasons">${lines.map(line=>`<li>${esc(String(line))}</li>`).join('')}</ul>`;
+  banner.hidden = false;
+}
+
+async function pollRegime(){
+  if(document.hidden || GEX_REPLAY.active) return;
+  const symbol = document.getElementById('symbol')?.value || DEFAULT_SYMBOL;
+  if(DYNAMIC_SYMBOLS.has(symbol)){
+    const banner = document.getElementById('regimeBanner');
+    if(banner) banner.hidden = true;
+    return;
+  }
+  const payload = await fetchLiveData(`${MATRIX_REGIME_URL}?symbol=${encodeURIComponent(symbol)}&t=${Date.now()}`);
+  renderRegime(payload);
+}
+
+function setupRegimePoller(){
+  if(_regimeTimer) clearInterval(_regimeTimer);
+  pollRegime();
+  _regimeTimer = setInterval(pollRegime, 60000);
+}
+
+bind('symbol','change',()=>pollRegime());
+
+// ---------- Regime journal (pre-open call, auto-graded after the close) ----------
+const MATRIX_JOURNAL_URL = 'https://api.trytripity.site/api/matrix/journal';
+const MATRIX_JOURNAL_STATS_URL = 'https://api.trytripity.site/api/matrix/journal/stats';
+const JOURNAL_LABELS = ['GRIND_UP','TRAP_DOOR','SQUEEZE','PIN','MIXED'];
+const JOURNAL_SYMBOLS = ['SPX','NDX','SPY','QQQ'];
+let _journalTimer = null;
+let _journalState = {entries:[], stats:null, sessionDate:'', filledFor:null};
+
+function journalSymbol(){
+  const current=document.getElementById('symbol')?.value || DEFAULT_SYMBOL;
+  return JOURNAL_SYMBOLS.includes(current) ? current : 'SPY';
+}
+function journalLabelSelect(selected){
+  return JOURNAL_LABELS.map(l=>`<option value="${l}"${l===selected?' selected':''}>${esc(l.replace(/_/g,' '))}</option>`).join('');
+}
+function journalHitText(tally){
+  if(!tally || !tally.scored) return 'n/a';
+  return `${tally.hits}/${tally.scored} (${((tally.hit_rate||0)*100).toFixed(0)}%)`;
+}
+function journalGradeBadge(grade, prefix){
+  if(grade===1) return `<span class="journal-badge hit">${esc(prefix)} right</span>`;
+  if(grade===0) return `<span class="journal-badge miss">${esc(prefix)} wrong</span>`;
+  return `<span class="journal-badge open">${esc(prefix)} unscored</span>`;
+}
+function renderJournalToday(){
+  const box=document.getElementById('journalToday');
+  if(!box) return;
+  const entry=_journalState.entries.find(e=>e.date===_journalState.sessionDate);
+  if(!entry){
+    box.innerHTML='<div class="journal-empty">No call saved for this session yet — write yours before the open.</div>';
+    return;
+  }
+  const userLabel=String(entry.user_label||'').replace(/_/g,' ');
+  const engineLabel=entry.engine_label ? String(entry.engine_label).replace(/_/g,' ') : null;
+  const meta=[];
+  if(entry.user_levels) meta.push(`Levels: ${esc(entry.user_levels)}`);
+  if(entry.user_notes) meta.push(esc(entry.user_notes));
+  let outcome='';
+  if(entry.locked){
+    outcome=`<div class="journal-outcome">Graded: ${esc(entry.outcome||'--')} · `+
+      `${journalGradeBadge(entry.grade,'you')} ${journalGradeBadge(entry.engine_grade,'engine')}</div>`;
+  }else{
+    outcome='<div class="journal-outcome">Ungraded — grades after the close.</div>';
+  }
+  box.innerHTML=
+    `<div class="journal-versus">`+
+      `<div class="journal-side"><span>Your call · ${esc(entry.symbol)}</span>`+
+        `<b class="regime-label regime-${esc(entry.user_label||'MIXED')}">${esc(userLabel)}</b>`+
+        (meta.length?`<div class="journal-side-meta">${meta.join('<br>')}</div>`:'')+
+      `</div>`+
+      `<div class="journal-side"><span>Engine (frozen at save)</span>`+
+        (engineLabel
+          ? `<b class="regime-label regime-${esc(entry.engine_label)}">${esc(engineLabel)}</b>`+
+            `<div class="journal-side-meta">${Number(entry.engine_agreement)||0}/3 forces aligned</div>`
+          : '<div class="journal-side-meta">Engine verdict unavailable at save time.</div>')+
+      `</div>`+
+    `</div>`+outcome;
+}
+function renderJournalStats(){
+  const box=document.getElementById('journalStats');
+  if(!box) return;
+  const stats=_journalState.stats;
+  if(!stats){
+    box.innerHTML='';
+    return;
+  }
+  const stat=(label,tally,sub)=>
+    `<div class="journal-stat"><span>${esc(label)}</span><strong>${esc(journalHitText(tally))}</strong><small>${esc(sub)}</small></div>`;
+  box.innerHTML=
+    stat('You · overall',stats.user,`${stats.graded||0} graded day(s)`) +
+    stat('Engine · overall',stats.engine,'same days, frozen labels') +
+    stat('You · when agreeing',stats.user_when_agreeing,'your label = engine label') +
+    stat('You · when disagreeing',stats.user_when_disagreeing,'you vs the machine') +
+    (stats.caution?`<div class="journal-caution">${esc(stats.caution)}</div>`:'');
+}
+function renderJournalList(){
+  const box=document.getElementById('journalList');
+  if(!box) return;
+  const rows=_journalState.entries.filter(e=>e.date!==_journalState.sessionDate);
+  if(!rows.length){
+    box.innerHTML='<div class="journal-empty">No prior entries in this window yet.</div>';
+    return;
+  }
+  box.innerHTML=rows.map(entry=>{
+    const user=String(entry.user_label||'--').replace(/_/g,' ');
+    const right=entry.locked
+      ? `${esc(entry.outcome||'--')} · ${journalGradeBadge(entry.grade,'you')} ${journalGradeBadge(entry.engine_grade,'engine')}`
+      : '<span class="journal-badge open">pending</span>';
+    return `<div class="journal-row"><span class="journal-date">${esc(entry.date)}</span>`+
+      `<span>${esc(entry.symbol)}</span>`+
+      `<b class="regime-label regime-${esc(entry.user_label||'MIXED')}">${esc(user)}</b>`+
+      `<span>${right}</span></div>`;
+  }).join('');
+}
+function syncJournalForm(){
+  const symbolEl=document.getElementById('journalFormSymbol');
+  const dateEl=document.getElementById('journalFormDate');
+  const entry=_journalState.entries.find(e=>e.date===_journalState.sessionDate);
+  if(symbolEl) symbolEl.textContent=entry?.symbol || journalSymbol();
+  if(dateEl) dateEl.textContent=_journalState.sessionDate || '--';
+  const locked=!!entry?.locked;
+  for(const id of ['journalLabel','journalLevels','journalNotes','journalSave']){
+    const el=document.getElementById(id);
+    if(el) el.disabled=locked;
+  }
+  if(entry && !locked && _journalState.filledFor!==entry.created_ms){
+    _journalState.filledFor=entry.created_ms;
+    document.getElementById('journalLabel').value=entry.user_label||'MIXED';
+    document.getElementById('journalLevels').value=entry.user_levels||'';
+    document.getElementById('journalNotes').value=entry.user_notes||'';
+    const status=document.getElementById('journalFormStatus');
+    if(status) status.textContent='Call saved — you can still replace it until it is graded.';
+  }
+}
+function renderJournal(){
+  renderJournalToday();
+  renderJournalStats();
+  renderJournalList();
+  syncJournalForm();
+}
+async function loadJournal(){
+  if(document.hidden) return;
+  const days=60;
+  const params=`days=${days}&t=${Date.now()}`;
+  const [entriesPayload,statsPayload]=await Promise.all([
+    fetchLiveData(`${MATRIX_JOURNAL_URL}?${params}`),
+    fetchLiveData(`${MATRIX_JOURNAL_STATS_URL}?${params}`),
+  ]);
+  if(entriesPayload && entriesPayload.ok){
+    if(Array.isArray(entriesPayload.labels) && entriesPayload.labels.length){
+      JOURNAL_LABELS.splice(0,JOURNAL_LABELS.length,...entriesPayload.labels);
+      const select=document.getElementById('journalLabel');
+      if(select && !select.options.length) select.innerHTML=journalLabelSelect('MIXED');
+    }
+    _journalState.entries=Array.isArray(entriesPayload.entries)?entriesPayload.entries:[];
+    _journalState.sessionDate=entriesPayload.session_date||'';
+  }
+  if(statsPayload && statsPayload.ok) _journalState.stats=statsPayload;
+  renderJournal();
+}
+async function submitJournal(event){
+  event.preventDefault();
+  const status=document.getElementById('journalFormStatus');
+  const body={
+    symbol:journalSymbol(),
+    user_label:document.getElementById('journalLabel').value,
+    user_levels:document.getElementById('journalLevels').value,
+    notes:document.getElementById('journalNotes').value,
+  };
+  try{
+    const response=await fetch(MATRIX_JOURNAL_URL,{
+      method:'POST',
+      headers:{'content-type':'application/json'},
+      body:JSON.stringify(body),
+    });
+    const payload=await response.json().catch(()=>null);
+    if(response.status===409){
+      if(status) status.textContent=payload?.detail || 'Entry is locked (already graded).';
+      await loadJournal();
+      return;
+    }
+    if(!response.ok || !payload?.ok) throw new Error(payload?.detail || `save failed (${response.status})`);
+    _journalState.filledFor=null;
+    if(status){
+      status.textContent=`Saved ${payload.entry.date} ${String(payload.entry.user_label).replace(/_/g,' ')}`+
+        (payload.engine_frozen?' — engine verdict frozen.':' — engine unavailable, verdict not frozen.');
+    }
+    await loadJournal();
+  }catch(error){
+    if(status) status.textContent=error?.message || 'Save failed';
+  }
+}
+function setupJournal(){
+  const select=document.getElementById('journalLabel');
+  if(select && !select.options.length) select.innerHTML=journalLabelSelect('MIXED');
+  bind('journalForm','submit',submitJournal);
+  if(_journalTimer) clearInterval(_journalTimer);
+  _journalTimer=setInterval(()=>{ if(activeView==='journal') loadJournal(); },60000);
+}
+
 populateSymbols();
 document.getElementById('symbol').value = DEFAULT_SYMBOL;
 document.getElementById('mode').value = 'full';
@@ -2949,4 +3170,6 @@ document.getElementById('forceTripityRefresh').addEventListener('click',()=>load
 _timerUiTimer=setInterval(updateDataTimer,1000);
 populateGexReplaySessions(gexReplaySessionsFallback());
 setupSpotsPoller();
+setupRegimePoller();
+setupJournal();
 loadData(true).then(setupAutoRefresh);

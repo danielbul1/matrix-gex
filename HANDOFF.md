@@ -96,6 +96,43 @@ Gotchas learned the hard way (2026-07-19):
 
 ## Session Log (every agent MUST append — newest first)
 
+### 2026-08-18 — Canonical greeks engine, regime engine, VEX/CHEX history, backtester, journal
+- External review + 5-phase build (no prior commit; all verified locally, 92 pytest green).
+- **Fixes:** smoke-check.yml compiled a nonexistent root `gamma_exposure.py` (CI red
+  since 2026-07-19) → now `tools/gamma_exposure.py`, dead path filters pruned;
+  server.py put-charm double negation (CHEX put side was wrong-signed); powerZone
+  DEX/GEX unit mix ($M vs $B saturated the DEX term); spot=0 first-row poisoning;
+  `%b %d` expiry key merged years; `norm_iv` threshold 1→3 in server.py AND
+  fetch_lse.py; build_exposure_history vendor-gamma=0 now falls back to BS gamma,
+  day keyed by ET session, interval 5→30; `/raw` gets a 60s cache; wrong put-gamma
+  formula in tools/gamma_exposure.py; deploy.ps1 got the DEPRECATED header;
+  README cron text + .env.example staleness fixed; .gitignore extended (data
+  snapshots, exposure_history/, cboe_open_data.json).
+- **Engine:** new `railway-service/src/tripity_experiment/matrix_gex.py` (pure
+  stdlib) is the single source for BS greeks, GEX/DEX/VEX/CHEX, smooth zero-gamma
+  flip, walls, expected move. Consumers rewired: public_company_host.py,
+  server.py, tools/build_exposure_history.py. matrix.js keeps its in-browser
+  engine (fallback spot constants refreshed). Host `flip` now uses the smooth
+  profile method (was cumulative-sum) — intentional behavior change.
+- **History:** `matrix_gex_snapshot` gains `total_vex`, `total_chex`, `atm_iv`,
+  `term_slope`, `gex_scale`, `vex_scale`, `chex_scale` (PRAGMA+ALTER migration,
+  legacy rows read as 0/NULL). `/api/matrix/gex-history` additive only.
+- **Regime engine:** new `matrix_regime.py` + `GET /api/matrix/regime?symbol=`
+  fuses GEX force / VEX wind / CEX wind / IV term structure / VRP (Garman-Klass
+  from candles) into labeled verdicts (GRIND_UP, TRAP_DOOR, SQUEEZE, PIN, MIXED)
+  with per-force reasoning; banner in the dashboard. Core symbols only.
+- **Backtester:** `tools/backtest_regime.py` replays SQLite or exposure_history/
+  through the regime engine and scores labels vs realized outcomes; shared rules
+  live in `matrix_outcome.py`. RUNBOOK documents usage.
+- **Journal:** `matrix_journal_entries` table + `POST/GET /api/matrix/journal`,
+  `/grade`, `/stats` — pre-open user call frozen beside the engine verdict,
+  auto-graded after close via matrix_outcome; stats split user-vs-engine and
+  agree/disagree. New Journal nav view in the dashboard.
+- **Known issues:** tools/smoke_matrix_frontend.js fails on HEAD (pre-existing
+  DOM stub gap, matrix.js addEventListener) — untouched; old DB rows show zero
+  VEX/CHEX until new snapshots accumulate; VIX regime has no VRP (no candles);
+  no holiday calendar.
+
 ### 2026-07-24 — Pages frontend retired, unified on Railway copy
 - Deleted the legacy GitHub Pages dashboard: `gex_dashboard.html`,
   `assets/dashboard.js`, `assets/dashboard.css` (assets/ dir removed — it held

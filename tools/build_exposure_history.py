@@ -2,12 +2,20 @@
 import argparse
 import datetime as dt
 import json
+import sys
 from pathlib import Path
+
+# Canonical greeks/GEX engine (shared with the Railway service and server.py).
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "railway-service" / "src"))
+from tripity_experiment import matrix_gex
+
+ET = matrix_gex.ET
 
 
 def snapshot(symbol, rec):
     spot = float(rec.get("spot") or 0)
     mult = float(rec.get("mult") or 100)
+    now_ms = dt.datetime.now(ET).timestamp() * 1000
     strikes = {}
     for option in rec.get("opts", []):
         strike = float(option.get("k") or 0)
@@ -15,10 +23,12 @@ def snapshot(symbol, rec):
             continue
         row = strikes.setdefault(strike, [strike, 0.0, 0.0, 0.0, 0.0])
         oi = float(option.get("oi") or 0)
-        gamma = float(option.get("g") or 0)
+        # Vendor gamma is frequently 0 even when IV is valid; effective_gamma
+        # falls back to Black-Scholes from the row's IV and the spot.
+        gamma = matrix_gex.effective_gamma(option, spot, now_ms)
         delta = float(option.get("d") or 0)
-        gex = gamma * oi * mult * spot * spot * 0.01
-        dex = delta * oi * mult * spot * 0.01
+        gex = matrix_gex.gex_value(gamma, oi, mult, spot)
+        dex = matrix_gex.dex_value(delta, oi, mult, spot)
         if option.get("t") == "C":
             row[1] += gex
             row[3] += dex
@@ -44,14 +54,14 @@ def main():
     source = json.loads(Path(args.input).read_text())
     root = Path(args.root)
     root.mkdir(parents=True, exist_ok=True)
-    day = dt.datetime.now(dt.timezone.utc).date().isoformat()
+    day = dt.datetime.now(ET).date().isoformat()
     day_dir = root / day
     day_dir.mkdir(exist_ok=True)
 
     for symbol, rec in source.items():
         current = snapshot(symbol, rec)
         target = day_dir / f"{symbol}.json"
-        payload = {"date": day, "symbol": symbol, "interval_minutes": 5, "scope": "all_expirations", "snapshots": []}
+        payload = {"date": day, "symbol": symbol, "interval_minutes": 30, "scope": "all_expirations", "snapshots": []}
         if target.exists():
             try:
                 payload = json.loads(target.read_text())
@@ -72,7 +82,7 @@ def main():
         (root / old_day).rmdir()
     days = days[-args.retain:]
     index = {"updated_at": dt.datetime.now(dt.timezone.utc).isoformat(), "days": days,
-             "interval_minutes": 5, "retention_trading_days": args.retain, "scope": "all_expirations"}
+             "interval_minutes": 30, "retention_trading_days": args.retain, "scope": "all_expirations"}
     (root / "index.json").write_text(json.dumps(index, separators=(",", ":")))
     print(f"updated exposure history for {len(source)} symbols; retained {len(days)} days")
 

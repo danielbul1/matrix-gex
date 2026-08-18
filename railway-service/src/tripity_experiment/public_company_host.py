@@ -9,7 +9,6 @@ import csv
 import datetime
 import io
 import json
-import math
 import os
 import re
 import socket
@@ -26,6 +25,9 @@ from zoneinfo import ZoneInfo
 import httpx
 import uvicorn
 
+from tripity_experiment import matrix_gex
+from tripity_experiment import matrix_outcome
+from tripity_experiment import matrix_regime
 from tripity_experiment.company_api import infer_api_base_url
 from tripity_experiment.har_openapi import har_to_openapi
 from tripity_experiment.company_connector import build_company_connector_draft
@@ -1011,18 +1013,76 @@ def _matrix_flow_db_init() -> None:
                 spot REAL NOT NULL,
                 total_gex REAL NOT NULL DEFAULT 0,
                 total_dex REAL NOT NULL DEFAULT 0,
+                total_vex REAL NOT NULL DEFAULT 0,
+                total_chex REAL NOT NULL DEFAULT 0,
                 flip REAL,
                 call_wall REAL,
                 put_wall REAL,
                 max_gamma_strike REAL,
                 regime TEXT,
+                atm_iv REAL,
+                term_slope REAL,
+                gex_scale REAL NOT NULL DEFAULT 0,
+                vex_scale REAL NOT NULL DEFAULT 0,
+                chex_scale REAL NOT NULL DEFAULT 0,
                 updated_at_ms INTEGER NOT NULL,
                 PRIMARY KEY (symbol, minute_ms)
             )
         """)
+        gex_columns = {row[1] for row in connection.execute("PRAGMA table_info(matrix_gex_snapshot)")}
+        for column in ("total_vex", "total_chex", "gex_scale", "vex_scale", "chex_scale"):
+            if column not in gex_columns:
+                connection.execute(
+                    f"ALTER TABLE matrix_gex_snapshot ADD COLUMN {column} REAL NOT NULL DEFAULT 0"
+                )
+        for column in ("atm_iv", "term_slope"):
+            if column not in gex_columns:
+                connection.execute(
+                    f"ALTER TABLE matrix_gex_snapshot ADD COLUMN {column} REAL"
+                )
         connection.execute(
             "CREATE INDEX IF NOT EXISTS idx_matrix_gex_session ON matrix_gex_snapshot(symbol, session_date, minute_ms)"
         )
+        # Regime journal: one pre-open call per (session_date, symbol), with
+        # the engine's verdict frozen at save time and the realized outcome /
+        # grades filled in after the close. Long-lived: NOT covered by the
+        # retention deletes below.
+        connection.execute("""
+            CREATE TABLE IF NOT EXISTS matrix_journal_entries (
+                session_date TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                created_ms INTEGER NOT NULL,
+                user_label TEXT NOT NULL,
+                user_levels TEXT,
+                user_notes TEXT,
+                engine_label TEXT,
+                engine_agreement INTEGER,
+                engine_reasoning TEXT,
+                call_wall REAL,
+                put_wall REAL,
+                outcome TEXT,
+                grade INTEGER,
+                engine_grade INTEGER,
+                graded_ms INTEGER,
+                PRIMARY KEY (session_date, symbol)
+            )
+        """)
+        journal_columns = {row[1] for row in connection.execute("PRAGMA table_info(matrix_journal_entries)")}
+        for column in ("engine_reasoning", "user_levels", "user_notes"):
+            if column not in journal_columns:
+                connection.execute(
+                    f"ALTER TABLE matrix_journal_entries ADD COLUMN {column} TEXT"
+                )
+        for column in ("engine_agreement", "grade", "engine_grade", "graded_ms", "created_ms"):
+            if column not in journal_columns:
+                connection.execute(
+                    f"ALTER TABLE matrix_journal_entries ADD COLUMN {column} INTEGER"
+                )
+        for column in ("call_wall", "put_wall"):
+            if column not in journal_columns:
+                connection.execute(
+                    f"ALTER TABLE matrix_journal_entries ADD COLUMN {column} REAL"
+                )
         retained = _matrix_retained_session_dates()
         connection.execute(
             "DELETE FROM matrix_option_flow_minute WHERE session_date NOT IN (?, ?, ?)",
@@ -1805,108 +1865,44 @@ async def _fetch_matrix_market_data() -> dict[str, Any]:
 
 # -----------------------------------------------------------------------------
 # Matrix GEX snapshots (live levels + per-minute history)
-# Pure-Python port of the GEX math in web/matrix.js so the backend can compute
-# snapshots without adding dependencies. Keep in sync with matrix.js.
+# Greeks/exposure math lives in the canonical engine (matrix_gex.py); this
+# module only shapes snapshots for storage. Keep payload fields stable.
 # -----------------------------------------------------------------------------
-def _matrix_norm_pdf(x: float) -> float:
-    return math.exp(-0.5 * x * x) / math.sqrt(2 * math.pi)
-
-
-def _matrix_norm_cdf(x: float) -> float:
-    return 0.5 * (1.0 + math.erf(x / math.sqrt(2)))
-
-
-def _matrix_bs_greeks(S: float, K: float, T: float, sigma: float, r: float, is_call: bool) -> tuple[float, float]:
-    """Black-Scholes (gamma, delta); mirrors calcGreeks() in matrix.js."""
-    T = max(T, 1 / (365.25 * 24 * 60))  # 1-minute floor, same as the JS port
-    sigma = max(sigma, 0.01)
-    sq = math.sqrt(T)
-    d1 = (math.log(S / K) + (r + 0.5 * sigma * sigma) * T) / (sigma * sq)
-    d2 = d1 - sigma * sq
-    gamma = _matrix_norm_pdf(d1) / (S * sigma * sq)
-    delta = _matrix_norm_cdf(d1) if is_call else _matrix_norm_cdf(d1) - 1
-    return gamma, delta
-
-
-def _matrix_years_to_expiry(exp: str, root: str, valuation_ms: int) -> float:
-    """Mirrors preciseYearsToExpiry() in matrix.js (AM-settled SPX/NDX/VIX roots)."""
-    try:
-        year, month, day = (int(part) for part in str(exp)[:10].split("-"))
-    except ValueError:
-        return 1 / (365.25 * 24 * 60)
-    et = ZoneInfo("America/New_York")
-    if root in {"SPX", "NDX", "VIX", "VIXW"}:
-        expiry = datetime.datetime(year, month, day, 9, 30, tzinfo=et)
-    else:
-        expiry = datetime.datetime(year, month, day, 16, 0, tzinfo=et)
-    expiry_ms = expiry.timestamp() * 1000
-    return max((expiry_ms - valuation_ms) / (365.25 * 86400000), 1 / (365.25 * 24 * 60))
-
-
 def _compute_matrix_gex_snapshot(
     symbol: str,
     record: dict[str, Any],
     spot: float,
     valuation_ms: int,
 ) -> dict[str, Any]:
-    """Aggregate per-strike GEX/DEX and derive flip/walls/regime.
+    """Aggregate per-strike GEX/DEX/VEX/CHEX and derive flip/walls/regime.
 
     Mirrors the "full" mode of the analytics engine in matrix.js:
-    GEX = gamma * OI * mult * spot^2 * 0.01 (calls +, puts -).
+    GEX = gamma * OI * mult * spot^2 * 0.01 (calls +, puts -). VEX/CHEX
+    totals follow the engine conventions (calls +, puts -; CHEX per
+    trading day with the put-side single negation).
     """
     mult = float(record.get("mult") or 100)
-    by_strike: dict[float, list[float]] = {}  # K -> [callGex, putGex, callDex, putDex]
-    for option in record.get("opts") or []:
-        try:
-            oi = float(option.get("oi") or 0)
-            K = float(option.get("k") or 0)
-        except (TypeError, ValueError):
-            continue
-        if oi < 10 or K <= 0:
-            continue
-        is_call = option.get("t") == "C"
-        T = _matrix_years_to_expiry(str(option.get("exp") or ""), str(option.get("root") or ""), valuation_ms)
-        iv = float(option.get("iv") or 0)
-        bs_gamma, bs_delta = _matrix_bs_greeks(spot, K, T, iv if iv > 0 else 0.2, 0.05, is_call)
-        gamma = float(option.get("g") or 0)
-        if gamma <= 0:
-            gamma = bs_gamma
-        delta = float(option.get("d") or 0)
-        if delta == 0:
-            delta = bs_delta
-        gex = gamma * oi * mult * spot * spot * 0.01
-        dex = delta * oi * mult * spot * 0.01
-        row = by_strike.setdefault(K, [0.0, 0.0, 0.0, 0.0])
-        if is_call:
-            row[0] += gex
-            row[2] += dex
-        else:
-            row[1] -= gex
-            row[3] += dex
+    options = record.get("opts") or []
+    strikes = matrix_gex.aggregate_strikes(options, spot, mult, valuation_ms, include_vc=True)
 
-    strikes = sorted(by_strike.items())
-    total_call_gex = sum(row[0] for _, row in strikes)
-    total_put_gex = sum(row[1] for _, row in strikes)
+    total_call_gex = sum(row["call_gex"] for row in strikes)
+    total_put_gex = sum(row["put_gex"] for row in strikes)
     total_gex = total_call_gex + total_put_gex
-    total_dex = sum(row[2] + row[3] for _, row in strikes)
+    total_dex = sum(row["net_dex"] for row in strikes)
+    total_vex = sum(row["net_vex"] for row in strikes)
+    total_chex = sum(row["net_chex"] for row in strikes)
 
-    flip = None
-    cum = 0.0
-    prev_cum: float | None = None
-    prev_k: float | None = None
-    for K, row in strikes:
-        net = row[0] + row[1]
-        new_cum = cum + net
-        if prev_cum is not None and prev_cum * new_cum < 0 and prev_k is not None:
-            ratio = abs(prev_cum) / (abs(prev_cum) + abs(new_cum))
-            flip = prev_k + ratio * (K - prev_k)
-            break
-        prev_cum, prev_k, cum = new_cum, K, new_cum
+    lo, hi = spot * 0.8, spot * 1.2
+    levels = [lo + (hi - lo) * i / 59 for i in range(60)]
+    flip = matrix_gex.zero_gamma_flip(
+        levels,
+        matrix_gex.gamma_profile(options, levels, mult, valuation_ms, min_oi=10),
+    )
 
     call_wall = put_wall = max_gamma_strike = None
     cw_g, pw_g, max_abs = float("-inf"), float("inf"), 0.0
-    for K, row in strikes:
-        net = row[0] + row[1]
+    for row in strikes:
+        K, net = row["strike"], row["net_gex"]
         if net > cw_g:
             cw_g, call_wall = net, K
         if net < pw_g:
@@ -1922,10 +1918,25 @@ def _compute_matrix_gex_snapshot(
     else:
         regime = "neutral"
 
+    # ATM IV term structure (front/back + slope) — persisted with each
+    # snapshot so history replay can reactivate the engine's VEX leg.
+    term = matrix_regime.atm_iv_term_structure(options, spot, valuation_ms)
+
     return {
         "spot": spot,
         "total_gex": total_gex,
         "total_dex": total_dex,
+        "total_vex": total_vex,
+        "total_chex": total_chex,
+        # Additive: per-side absolute sums, used by the regime engine as each
+        # force's noise deadzone; persisted to the snapshot table so replay
+        # applies the same deadzones as the live engine.
+        "gex_scale": strong_mag,
+        "vex_scale": sum(abs(row["call_vex"]) + abs(row["put_vex"]) for row in strikes),
+        "chex_scale": sum(abs(row["call_chex"]) + abs(row["put_chex"]) for row in strikes),
+        # Additive: ATM vol context (None when the chain has no usable IV).
+        "atm_iv": term["front_iv"],
+        "term_slope": term["slope"],
         "flip": flip,
         "call_wall": call_wall,
         "put_wall": put_wall,
@@ -1942,17 +1953,26 @@ def _matrix_gex_db_insert(rows: list[tuple[Any, ...]]) -> None:
         connection.executemany("""
             INSERT INTO matrix_gex_snapshot (
                 symbol, session_date, minute_ms, spot, total_gex, total_dex,
-                flip, call_wall, put_wall, max_gamma_strike, regime, updated_at_ms
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                total_vex, total_chex,
+                flip, call_wall, put_wall, max_gamma_strike, regime,
+                atm_iv, term_slope, gex_scale, vex_scale, chex_scale, updated_at_ms
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(symbol, minute_ms) DO UPDATE SET
                 spot=excluded.spot,
                 total_gex=excluded.total_gex,
                 total_dex=excluded.total_dex,
+                total_vex=excluded.total_vex,
+                total_chex=excluded.total_chex,
                 flip=excluded.flip,
                 call_wall=excluded.call_wall,
                 put_wall=excluded.put_wall,
                 max_gamma_strike=excluded.max_gamma_strike,
                 regime=excluded.regime,
+                atm_iv=excluded.atm_iv,
+                term_slope=excluded.term_slope,
+                gex_scale=excluded.gex_scale,
+                vex_scale=excluded.vex_scale,
+                chex_scale=excluded.chex_scale,
                 updated_at_ms=excluded.updated_at_ms
         """, rows)
         connection.commit()
@@ -1962,11 +1982,20 @@ def _matrix_gex_db_payload(symbol: str, session_date: str) -> dict[str, Any] | N
     path = _matrix_flow_db_path()
     if not path.exists():
         return None
+    # Tolerate legacy DBs missing the newer columns: select what exists and
+    # fill the rest as None (the neutral replay fallback).
+    all_columns = (
+        "minute_ms", "spot", "total_gex", "total_dex", "total_vex", "total_chex",
+        "flip", "call_wall", "put_wall", "max_gamma_strike", "regime",
+        "atm_iv", "term_slope", "gex_scale", "vex_scale", "chex_scale",
+        "updated_at_ms",
+    )
     with sqlite3.connect(path, timeout=20) as connection:
+        available = {row[1] for row in connection.execute("PRAGMA table_info(matrix_gex_snapshot)")}
+        columns = [c for c in all_columns if c in available]
         rows = connection.execute(
-            """
-            SELECT minute_ms, spot, total_gex, total_dex, flip, call_wall, put_wall,
-                   max_gamma_strike, regime, updated_at_ms
+            f"""
+            SELECT {', '.join(columns)}
             FROM matrix_gex_snapshot
             WHERE symbol = ? AND session_date = ?
             ORDER BY minute_ms
@@ -1975,25 +2004,33 @@ def _matrix_gex_db_payload(symbol: str, session_date: str) -> dict[str, Any] | N
         ).fetchall()
     if not rows:
         return None
-    points = [
-        {
-            "time": row[0],
-            "spot": row[1],
-            "totalGex": row[2],
-            "totalDex": row[3],
-            "flip": row[4],
-            "callWall": row[5],
-            "putWall": row[6],
-            "maxGammaStrike": row[7],
-            "regime": row[8],
-        }
-        for row in rows
-    ]
+    points = []
+    for row in rows:
+        record = {name: row[i] for i, name in enumerate(columns)}
+        points.append({
+            "time": record.get("minute_ms"),
+            "spot": record.get("spot"),
+            "totalGex": record.get("total_gex"),
+            "totalDex": record.get("total_dex"),
+            "totalVex": record.get("total_vex"),
+            "totalChex": record.get("total_chex"),
+            "flip": record.get("flip"),
+            "callWall": record.get("call_wall"),
+            "putWall": record.get("put_wall"),
+            "maxGammaStrike": record.get("max_gamma_strike"),
+            "regime": record.get("regime"),
+            # Phase-5 additions (additive; None on legacy rows).
+            "atmIv": record.get("atm_iv"),
+            "termSlope": record.get("term_slope"),
+            "gexScale": record.get("gex_scale"),
+            "vexScale": record.get("vex_scale"),
+            "chexScale": record.get("chex_scale"),
+        })
     return {
         "ok": True,
         "symbol": symbol,
         "source": "matrix_gex_snapshot_store",
-        "asof": datetime.datetime.fromtimestamp(rows[-1][9] / 1000, datetime.timezone.utc).isoformat(),
+        "asof": datetime.datetime.fromtimestamp(rows[-1][columns.index("updated_at_ms")] / 1000, datetime.timezone.utc).isoformat(),
         "interval_seconds": MATRIX_GEX_SNAPSHOT_INTERVAL_SECONDS,
         "session_date": session_date,
         "points": points,
@@ -2084,14 +2121,368 @@ async def _matrix_gex_snapshot_loop() -> None:
                 continue
             rows.append((
                 symbol, session_date, minute_ms, float(spot),
-                snap["total_gex"], snap["total_dex"], snap["flip"],
-                snap["call_wall"], snap["put_wall"], snap["max_gamma_strike"],
-                snap["regime"], updated_ms,
+                snap["total_gex"], snap["total_dex"],
+                snap["total_vex"], snap["total_chex"],
+                snap["flip"], snap["call_wall"], snap["put_wall"],
+                snap["max_gamma_strike"], snap["regime"],
+                snap["atm_iv"], snap["term_slope"],
+                snap["gex_scale"], snap["vex_scale"], snap["chex_scale"],
+                updated_ms,
             ))
         try:
             await asyncio.to_thread(_matrix_gex_db_insert, rows)
         except Exception as exc:  # noqa: BLE001
             print(f"matrix gex snapshot: db write failed: {exc}")
+
+
+# -----------------------------------------------------------------------------
+# Regime journal (morning checklist + auto-grading)
+# A trader writes a regime call before the open; the system freezes the
+# engine's verdict at save time, then grades both calls after the close using
+# the SAME outcome rules as tools/backtest_regime.py (matrix_outcome). One
+# entry per (session_date, symbol); entries lock once graded.
+# -----------------------------------------------------------------------------
+# Calls lock shortly after the close (16:05 ET): afterwards "today's call"
+# targets the next trading session, and the finished session can be graded.
+MATRIX_JOURNAL_CLOSE_MINUTE = 16 * 60 + 5
+# Accuracy on fewer scored days than this is noise, not signal (mirrors the
+# backtester's SMALL_SAMPLE_DAYS).
+MATRIX_JOURNAL_SMALL_SAMPLE_DAYS = 30
+
+_MATRIX_JOURNAL_COLUMNS = (
+    "session_date", "symbol", "created_ms", "user_label", "user_levels",
+    "user_notes", "engine_label", "engine_agreement", "engine_reasoning",
+    "call_wall", "put_wall", "outcome", "grade", "engine_grade", "graded_ms",
+)
+
+
+def _matrix_journal_session_date(now_et: datetime.datetime | None = None) -> datetime.date:
+    """The trading session a new call is FOR: today until the close, then the
+    next weekday (weekends roll forward to Monday)."""
+    now_et = now_et or datetime.datetime.now(ZoneInfo("America/New_York"))
+    day = now_et.date()
+    if day.weekday() < 5 and now_et.hour * 60 + now_et.minute >= MATRIX_JOURNAL_CLOSE_MINUTE:
+        day += datetime.timedelta(days=1)
+    while day.weekday() >= 5:
+        day += datetime.timedelta(days=1)
+    return day
+
+
+def _matrix_journal_gradeable(session_date: str, now_et: datetime.datetime | None = None) -> bool:
+    """A session's outcome is computable once its close has passed."""
+    now_et = now_et or datetime.datetime.now(ZoneInfo("America/New_York"))
+    day = datetime.date.fromisoformat(session_date)
+    if day < now_et.date():
+        return True
+    return day == now_et.date() and now_et.hour * 60 + now_et.minute >= MATRIX_JOURNAL_CLOSE_MINUTE
+
+
+def _matrix_journal_row_to_entry(row: tuple[Any, ...]) -> dict[str, Any]:
+    record = dict(zip(_MATRIX_JOURNAL_COLUMNS, row))
+    reasoning = record.get("engine_reasoning")
+    try:
+        reasoning = json.loads(reasoning) if reasoning else []
+    except ValueError:
+        reasoning = [str(reasoning)]
+    return {
+        "date": record["session_date"],
+        "symbol": record["symbol"],
+        "created_ms": record["created_ms"],
+        "user_label": record["user_label"],
+        "user_levels": record.get("user_levels") or "",
+        "user_notes": record.get("user_notes") or "",
+        "engine_label": record.get("engine_label"),
+        "engine_agreement": record.get("engine_agreement"),
+        "engine_reasoning": reasoning,
+        "call_wall": record.get("call_wall"),
+        "put_wall": record.get("put_wall"),
+        "outcome": record.get("outcome"),
+        "grade": record.get("grade"),
+        "engine_grade": record.get("engine_grade"),
+        "graded_ms": record.get("graded_ms"),
+        "locked": record.get("graded_ms") is not None,
+    }
+
+
+def _matrix_journal_db_get(session_date: str, symbol: str) -> dict[str, Any] | None:
+    _matrix_flow_db_init()
+    with sqlite3.connect(_matrix_flow_db_path(), timeout=20) as connection:
+        row = connection.execute(
+            f"SELECT {', '.join(_MATRIX_JOURNAL_COLUMNS)} FROM matrix_journal_entries"
+            " WHERE session_date = ? AND symbol = ?",
+            (session_date, symbol),
+        ).fetchone()
+    return _matrix_journal_row_to_entry(row) if row else None
+
+
+def _matrix_journal_db_upsert(entry: dict[str, Any]) -> dict[str, Any]:
+    """Save/replace the (date, symbol) call. Never touches outcome/grade
+    fields — callers must check the lock first; grades are write-once."""
+    _matrix_flow_db_init()
+    values = (
+        entry["date"], entry["symbol"], int(entry["created_ms"]), entry["user_label"],
+        entry.get("user_levels") or "", entry.get("user_notes") or "",
+        entry.get("engine_label"), entry.get("engine_agreement"),
+        json.dumps(entry.get("engine_reasoning") or []),
+        entry.get("call_wall"), entry.get("put_wall"),
+    )
+    with sqlite3.connect(_matrix_flow_db_path(), timeout=20) as connection:
+        connection.execute("""
+            INSERT INTO matrix_journal_entries (
+                session_date, symbol, created_ms, user_label, user_levels,
+                user_notes, engine_label, engine_agreement, engine_reasoning,
+                call_wall, put_wall
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(session_date, symbol) DO UPDATE SET
+                created_ms=excluded.created_ms,
+                user_label=excluded.user_label,
+                user_levels=excluded.user_levels,
+                user_notes=excluded.user_notes,
+                engine_label=excluded.engine_label,
+                engine_agreement=excluded.engine_agreement,
+                engine_reasoning=excluded.engine_reasoning,
+                call_wall=excluded.call_wall,
+                put_wall=excluded.put_wall
+        """, values)
+        connection.commit()
+    return _matrix_journal_db_get(entry["date"], entry["symbol"])
+
+
+def _matrix_journal_db_list(days: int = 60, symbol: str | None = None) -> list[dict[str, Any]]:
+    _matrix_flow_db_init()
+    since = (
+        datetime.datetime.now(ZoneInfo("America/New_York")).date()
+        - datetime.timedelta(days=max(1, int(days)))
+    ).isoformat()
+    query = (
+        f"SELECT {', '.join(_MATRIX_JOURNAL_COLUMNS)} FROM matrix_journal_entries"
+        " WHERE session_date >= ?"
+    )
+    params: list[Any] = [since]
+    if symbol:
+        query += " AND symbol = ?"
+        params.append(symbol)
+    query += " ORDER BY session_date DESC, symbol"
+    with sqlite3.connect(_matrix_flow_db_path(), timeout=20) as connection:
+        rows = connection.execute(query, params).fetchall()
+    return [_matrix_journal_row_to_entry(row) for row in rows]
+
+
+def _matrix_journal_db_pending(now_et: datetime.datetime | None = None) -> list[dict[str, Any]]:
+    """Ungraded entries whose session has completed (auto-grade candidates)."""
+    _matrix_flow_db_init()
+    with sqlite3.connect(_matrix_flow_db_path(), timeout=20) as connection:
+        rows = connection.execute(
+            f"SELECT {', '.join(_MATRIX_JOURNAL_COLUMNS)} FROM matrix_journal_entries"
+            " WHERE graded_ms IS NULL ORDER BY session_date"
+        ).fetchall()
+    return [
+        entry
+        for entry in (_matrix_journal_row_to_entry(row) for row in rows)
+        if _matrix_journal_gradeable(entry["date"], now_et)
+    ]
+
+
+def _matrix_journal_db_mark_graded(
+    session_date: str,
+    symbol: str,
+    outcome: str,
+    grade: int | None,
+    engine_grade: int | None,
+    graded_ms: int,
+) -> dict[str, Any] | None:
+    """Write-once grading: no-op when the entry is already graded."""
+    _matrix_flow_db_init()
+    with sqlite3.connect(_matrix_flow_db_path(), timeout=20) as connection:
+        cursor = connection.execute("""
+            UPDATE matrix_journal_entries
+            SET outcome = ?, grade = ?, engine_grade = ?, graded_ms = ?
+            WHERE session_date = ? AND symbol = ? AND graded_ms IS NULL
+        """, (outcome, grade, engine_grade, graded_ms, session_date, symbol))
+        connection.commit()
+    if cursor.rowcount < 1:
+        return None
+    return _matrix_journal_db_get(session_date, symbol)
+
+
+def _matrix_journal_candles_ohlc(candles: list[dict[str, Any]], session_date: str) -> tuple[float, float, float, float] | None:
+    """Full-session (open, high, low, close) for one ET date from intraday bars."""
+    for day in matrix_regime.daily_ohlc(candles):
+        if day["date"] == session_date:
+            return (day["open"], day["high"], day["low"], day["close"])
+    return None
+
+
+def _matrix_journal_grade_entry(
+    entry: dict[str, Any],
+    ohlc: tuple[float, float, float, float] | None,
+    graded_ms: int | None = None,
+) -> dict[str, Any] | None:
+    """Grade one entry from the session's (open, high, low, close).
+
+    Uses the shared matrix_outcome rules (identical to the backtester): the
+    user's label AND the engine's frozen label are each mapped through the
+    same prediction table, enabling "you vs the engine" stats. MIXED makes no
+    prediction: its grade stores NULL and is excluded from hit-rate
+    denominators. Returns None when the day cannot be classified.
+    """
+    if not ohlc:
+        return None
+    outcome, drift, _wall = matrix_outcome.classify_outcome(
+        *ohlc, walls=(entry.get("call_wall"), entry.get("put_wall")))
+    user_hit = matrix_outcome.predicts(entry.get("user_label"), outcome, drift)
+    engine_label = entry.get("engine_label")
+    engine_hit = matrix_outcome.predicts(engine_label, outcome, drift) if engine_label else None
+    return {
+        "outcome": outcome,
+        "drift": drift,
+        "grade": None if user_hit is None else int(user_hit),
+        "engine_grade": None if engine_hit is None else int(engine_hit),
+        "graded_ms": graded_ms if graded_ms is not None else int(time.time() * 1000),
+    }
+
+
+async def _matrix_journal_day_ohlc(symbol: str, session_date: str) -> tuple[float, float, float, float] | None:
+    """Full-session OHLC for grading: the candles feed first, then the
+    snapshot DB's own spot series (the same fallback the backtester uses)."""
+    if symbol in MATRIX_CANDLE_SYMBOLS:
+        try:
+            payload = await _fetch_matrix_candles(symbol=symbol, interval="60m", range_="1mo")
+            ohlc = _matrix_journal_candles_ohlc(payload.get("candles") or [], session_date)
+            if ohlc is not None:
+                return ohlc
+        except Exception:  # noqa: BLE001 — fall through to the spot series
+            pass
+    path = _matrix_flow_db_path()
+    if path.exists():
+        with sqlite3.connect(path, timeout=20) as connection:
+            spots = [row[0] for row in connection.execute(
+                "SELECT spot FROM matrix_gex_snapshot"
+                " WHERE symbol = ? AND session_date = ? ORDER BY minute_ms",
+                (symbol, session_date),
+            )]
+        spots = [float(spot) for spot in spots if spot]
+        if spots:
+            return (spots[0], max(spots), min(spots), spots[-1])
+    return None
+
+
+async def _matrix_journal_auto_grade(
+    provider: Any = None,
+    now_et: datetime.datetime | None = None,
+) -> list[dict[str, Any]]:
+    """Grade every completed-session entry still awaiting an outcome.
+
+    provider(symbol, session_date) -> (open, high, low, close) | None;
+    defaults to the candles feed + snapshot spot series. Returns the newly
+    graded entries.
+    """
+    provider = provider or _matrix_journal_day_ohlc
+    graded: list[dict[str, Any]] = []
+    for entry in _matrix_journal_db_pending(now_et):
+        try:
+            ohlc = await provider(entry["symbol"], entry["date"])
+        except Exception:  # noqa: BLE001 — leave it for a later pass
+            continue
+        fields = _matrix_journal_grade_entry(entry, ohlc)
+        if fields is None:
+            continue
+        updated = _matrix_journal_db_mark_graded(
+            entry["date"], entry["symbol"], fields["outcome"],
+            fields["grade"], fields["engine_grade"], fields["graded_ms"])
+        if updated is not None:
+            graded.append(updated)
+    return graded
+
+
+def _matrix_journal_stats(entries: list[dict[str, Any]]) -> dict[str, Any]:
+    """Hit rates: user overall, engine overall, and the agree/disagree split
+    that answers "should I trust myself or the machine?".
+
+    Only graded entries with a non-NULL grade are scored (MIXED makes no
+    prediction and is excluded from every denominator, like the backtester).
+    """
+    def tally(rows: list[dict[str, Any]], key: str) -> dict[str, Any]:
+        scored = [row for row in rows if row.get(key) is not None]
+        hits = sum(int(row[key]) for row in scored)
+        return {"scored": len(scored), "hits": hits,
+                "hit_rate": (hits / len(scored)) if scored else None}
+
+    graded = [entry for entry in entries if entry.get("graded_ms") is not None]
+    user_scored = [entry for entry in graded if entry.get("grade") is not None]
+    agreeing = [entry for entry in user_scored
+                if entry.get("engine_label") and entry["user_label"] == entry["engine_label"]]
+    disagreeing = [entry for entry in user_scored
+                   if entry.get("engine_label") and entry["user_label"] != entry["engine_label"]]
+    by_label: dict[str, dict[str, Any]] = {}
+    for who, grade_key, label_key in (
+        ("user", "grade", "user_label"),
+        ("engine", "engine_grade", "engine_label"),
+    ):
+        by_label[who] = {
+            label: tally([e for e in graded if e.get(label_key) == label], grade_key)
+            for label in matrix_regime.LABELS
+        }
+    user = tally(graded, "grade")
+    small_sample = user["scored"] < MATRIX_JOURNAL_SMALL_SAMPLE_DAYS
+    return {
+        "ok": True,
+        "entries": len(entries),
+        "graded": len(graded),
+        "user": user,
+        "engine": tally(graded, "engine_grade"),
+        "user_when_agreeing": tally(agreeing, "grade"),
+        "user_when_disagreeing": tally(disagreeing, "grade"),
+        "by_label": by_label,
+        "small_sample_threshold": MATRIX_JOURNAL_SMALL_SAMPLE_DAYS,
+        "small_sample": small_sample,
+        "caution": (
+            f"Fewer than {MATRIX_JOURNAL_SMALL_SAMPLE_DAYS} scored days — "
+            "small-sample noise dominates; do not draw conclusions yet."
+        ) if small_sample else None,
+    }
+
+
+async def _compute_matrix_regime(symbol: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Engine verdict plus the GEX snapshot it was computed from.
+
+    Shared by /api/matrix/regime and the journal save path (which freezes
+    this verdict alongside the user's call). Uses the already-cached chain
+    plus the existing candles feed aggregated to daily bars — no extra
+    upstream calls beyond what those caches already make. Raises on
+    unavailable data; callers decide how to degrade.
+    """
+    data = await _fetch_matrix_market_data()
+    record = data.get(symbol)
+    if not isinstance(record, dict):
+        raise ValueError(f"Unsupported regime symbol {symbol!r}")
+    collector = _matrix_flow_collector
+    spot = None
+    if collector is not None:
+        spot = collector.latest_spot.get(symbol)
+    if not spot and symbol == "VIX":
+        vix = await _fetch_matrix_cboe_spot_cached("VIX")
+        spot = vix["spot"] if vix else None
+    if not spot:
+        spot = record.get("spot")
+    if not spot:
+        raise ValueError(f"No spot available for {symbol}")
+    updated_ms = int(time.time() * 1000)
+    snap = _compute_matrix_gex_snapshot(symbol, record, float(spot), updated_ms)
+    candles: list[dict[str, Any]] = []
+    if symbol in MATRIX_CANDLE_SYMBOLS:
+        try:
+            payload = await _fetch_matrix_candles(symbol=symbol, interval="60m", range_="1mo")
+            candles = matrix_regime.daily_ohlc(payload.get("candles") or [])
+        except Exception:  # noqa: BLE001 — VRP leg degrades to "unavailable"
+            candles = []
+    verdict = matrix_regime.compute_regime({
+        **snap,
+        "options": record.get("opts") or [],
+        "candles": candles,
+        "valuation_ms": updated_ms,
+    })
+    return verdict, snap
 
 
 class PublicCompanyApp:
@@ -2300,6 +2691,61 @@ class PublicCompanyApp:
                 return
             if method == "GET":
                 await self._matrix_gex_history(scope, send)
+                return
+        if path == "/api/matrix/regime":
+            if method == "OPTIONS":
+                await self._response(
+                    send,
+                    204,
+                    b"",
+                    b"text/plain; charset=utf-8",
+                    headers=self._matrix_cors_headers(scope),
+                )
+                return
+            if method == "GET":
+                await self._matrix_regime(scope, send)
+                return
+        if path == "/api/matrix/journal":
+            if method == "OPTIONS":
+                await self._response(
+                    send,
+                    204,
+                    b"",
+                    b"text/plain; charset=utf-8",
+                    headers=self._matrix_cors_headers(scope),
+                )
+                return
+            if method == "POST":
+                await self._matrix_journal_save(scope, receive, send)
+                return
+            if method == "GET":
+                await self._matrix_journal_list(scope, send)
+                return
+        if path == "/api/matrix/journal/grade":
+            if method == "OPTIONS":
+                await self._response(
+                    send,
+                    204,
+                    b"",
+                    b"text/plain; charset=utf-8",
+                    headers=self._matrix_cors_headers(scope),
+                )
+                return
+            if method == "POST":
+                await self._matrix_journal_grade(scope, receive, send)
+                return
+        if path == "/api/matrix/journal/stats":
+            if method == "OPTIONS":
+                await self._response(
+                    send,
+                    204,
+                    b"",
+                    b"text/plain; charset=utf-8",
+                    headers=self._matrix_cors_headers(scope),
+                )
+                return
+            if method == "GET":
+                await self._matrix_journal_stats_endpoint(scope, send)
                 return
 
         target = self._target_connector(path)
@@ -2748,6 +3194,237 @@ class PublicCompanyApp:
                 headers=self._matrix_cors_headers(scope),
             )
 
+    async def _matrix_regime(self, scope: dict[str, Any], send: Any) -> None:
+        """Deterministic regime verdict (matrix_regime.compute_regime) for one
+        core symbol — see _compute_matrix_regime for the data path."""
+        try:
+            query = parse_qs(scope.get("query_string", b"").decode("latin1"))
+            symbol = (query.get("symbol") or ["SPY"])[0].upper()
+            verdict, _snap = await _compute_matrix_regime(symbol)
+            verdict.update({
+                "ok": True,
+                "symbol": symbol,
+                "asof": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            })
+            await self._json(
+                send,
+                verdict,
+                headers=[
+                    *self._matrix_cors_headers(scope),
+                    (b"cache-control", b"public, max-age=30"),
+                ],
+            )
+        except Exception as exc:  # noqa: BLE001
+            await self._json(
+                send,
+                {"ok": False, "detail": str(exc)},
+                status=502,
+                headers=self._matrix_cors_headers(scope),
+            )
+
+    async def _matrix_journal_save(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
+        """Save/replace today's pre-open call, freezing the engine's current
+        verdict (label/agreement/reasoning + walls) alongside it so the
+        user-vs-engine comparison is fixed at decision time. Entries lock
+        once graded; until then a re-save replaces the call."""
+        try:
+            body = await self._read_body(receive)
+            payload = json.loads(body.decode("utf-8") or "{}")
+            symbol = str(payload.get("symbol") or "").upper().strip()
+            if symbol not in MATRIX_LSE_PRICE_SYMBOLS:
+                raise ValueError(f"Unsupported journal symbol {symbol!r}")
+            user_label = str(payload.get("user_label") or payload.get("label") or "").upper().strip()
+            if user_label not in matrix_regime.LABELS:
+                raise ValueError(f"user_label must be one of {', '.join(matrix_regime.LABELS)}")
+            session_date = _matrix_journal_session_date().isoformat()
+            existing = await asyncio.to_thread(_matrix_journal_db_get, session_date, symbol)
+            if existing and existing.get("locked"):
+                await self._json(
+                    send,
+                    {"ok": False, "detail": "journal entry is locked (already graded)", "entry": existing},
+                    status=409,
+                    headers=self._matrix_cors_headers(scope),
+                )
+                return
+            engine: dict[str, Any] = {}
+            try:
+                verdict, snap = await _compute_matrix_regime(symbol)
+                engine = {
+                    "engine_label": verdict.get("label"),
+                    "engine_agreement": verdict.get("agreement"),
+                    "engine_reasoning": verdict.get("reasoning") or [],
+                    "call_wall": snap.get("call_wall"),
+                    "put_wall": snap.get("put_wall"),
+                }
+            except Exception:  # noqa: BLE001 — the user's call still saves
+                engine = {}
+            entry = {
+                "date": session_date,
+                "symbol": symbol,
+                "created_ms": int(time.time() * 1000),
+                "user_label": user_label,
+                "user_levels": str(payload.get("user_levels") or payload.get("levels") or "").strip(),
+                "user_notes": str(payload.get("user_notes") or payload.get("notes") or "").strip(),
+                "engine_label": engine.get("engine_label"),
+                "engine_agreement": engine.get("engine_agreement"),
+                "engine_reasoning": engine.get("engine_reasoning") or [],
+                "call_wall": engine.get("call_wall"),
+                "put_wall": engine.get("put_wall"),
+            }
+            saved = await asyncio.to_thread(_matrix_journal_db_upsert, entry)
+            await self._json(
+                send,
+                {"ok": True, "entry": saved, "engine_frozen": bool(engine)},
+                status=201,
+                headers=self._matrix_cors_headers(scope),
+            )
+        except ValueError as exc:
+            await self._json(
+                send,
+                {"ok": False, "detail": str(exc)},
+                status=400,
+                headers=self._matrix_cors_headers(scope),
+            )
+        except Exception as exc:  # noqa: BLE001
+            await self._json(
+                send,
+                {"ok": False, "detail": str(exc)},
+                status=502,
+                headers=self._matrix_cors_headers(scope),
+            )
+
+    async def _matrix_journal_list(self, scope: dict[str, Any], send: Any) -> None:
+        """Recent entries with grades. Past ungraded days are auto-graded on
+        the way out (best effort — listing never fails because grading did)."""
+        try:
+            query = parse_qs(scope.get("query_string", b"").decode("latin1"))
+            days = int((query.get("days") or ["60"])[0])
+            symbol = (query.get("symbol") or [""])[0].upper().strip() or None
+            try:
+                graded = await _matrix_journal_auto_grade()
+            except Exception:  # noqa: BLE001
+                graded = []
+            entries = await asyncio.to_thread(_matrix_journal_db_list, days, symbol)
+            await self._json(
+                send,
+                {
+                    "ok": True,
+                    "days": days,
+                    "session_date": _matrix_journal_session_date().isoformat(),
+                    "labels": list(matrix_regime.LABELS),
+                    "entries": entries,
+                    "newly_graded": len(graded),
+                },
+                headers=[
+                    *self._matrix_cors_headers(scope),
+                    (b"cache-control", b"no-store"),
+                ],
+            )
+        except Exception as exc:  # noqa: BLE001
+            await self._json(
+                send,
+                {"ok": False, "detail": str(exc)},
+                status=502,
+                headers=self._matrix_cors_headers(scope),
+            )
+
+    async def _matrix_journal_grade(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
+        """Grade an entry (or all entries for a date) against the session's
+        realized outcome, using the shared matrix_outcome rules."""
+        try:
+            body = await self._read_body(receive)
+            payload = json.loads(body.decode("utf-8") or "{}")
+            session_date = str(payload.get("date") or "").strip()
+            try:
+                datetime.date.fromisoformat(session_date)
+            except ValueError:
+                raise ValueError("date must use YYYY-MM-DD") from None
+            symbol = str(payload.get("symbol") or "").upper().strip() or None
+            if not _matrix_journal_gradeable(session_date):
+                raise ValueError(f"session {session_date} is not complete yet")
+            pending = [
+                entry for entry in await asyncio.to_thread(_matrix_journal_db_pending)
+                if entry["date"] == session_date and (symbol is None or entry["symbol"] == symbol)
+            ]
+            if not pending:
+                existing = await asyncio.to_thread(_matrix_journal_db_get, session_date, symbol) if symbol else None
+                if existing and existing.get("locked"):
+                    await self._json(
+                        send,
+                        {"ok": True, "graded": [], "entry": existing, "detail": "already graded"},
+                        headers=self._matrix_cors_headers(scope),
+                    )
+                else:
+                    await self._json(
+                        send,
+                        {"ok": False, "detail": "no journal entry to grade for that date/symbol"},
+                        status=404,
+                        headers=self._matrix_cors_headers(scope),
+                    )
+                return
+            graded: list[dict[str, Any]] = []
+            for entry in pending:
+                ohlc = await _matrix_journal_day_ohlc(entry["symbol"], entry["date"])
+                fields = _matrix_journal_grade_entry(entry, ohlc)
+                if fields is None:
+                    continue
+                updated = await asyncio.to_thread(
+                    _matrix_journal_db_mark_graded,
+                    entry["date"], entry["symbol"], fields["outcome"],
+                    fields["grade"], fields["engine_grade"], fields["graded_ms"])
+                if updated is not None:
+                    graded.append(updated)
+            await self._json(
+                send,
+                {"ok": True, "graded": graded, "graded_count": len(graded)},
+                headers=self._matrix_cors_headers(scope),
+            )
+        except ValueError as exc:
+            await self._json(
+                send,
+                {"ok": False, "detail": str(exc)},
+                status=400,
+                headers=self._matrix_cors_headers(scope),
+            )
+        except Exception as exc:  # noqa: BLE001
+            await self._json(
+                send,
+                {"ok": False, "detail": str(exc)},
+                status=502,
+                headers=self._matrix_cors_headers(scope),
+            )
+
+    async def _matrix_journal_stats_endpoint(self, scope: dict[str, Any], send: Any) -> None:
+        """Hit rates: user overall, engine overall, user-when-agreeing vs
+        user-when-disagreeing, plus a per-label breakdown and a small-sample
+        caution. Past ungraded days are auto-graded first (best effort)."""
+        try:
+            query = parse_qs(scope.get("query_string", b"").decode("latin1"))
+            days = int((query.get("days") or ["60"])[0])
+            symbol = (query.get("symbol") or [""])[0].upper().strip() or None
+            try:
+                await _matrix_journal_auto_grade()
+            except Exception:  # noqa: BLE001
+                pass
+            entries = await asyncio.to_thread(_matrix_journal_db_list, days, symbol)
+            stats = _matrix_journal_stats(entries)
+            stats.update({"days": days, "symbol": symbol})
+            await self._json(
+                send,
+                stats,
+                headers=[
+                    *self._matrix_cors_headers(scope),
+                    (b"cache-control", b"no-store"),
+                ],
+            )
+        except Exception as exc:  # noqa: BLE001
+            await self._json(
+                send,
+                {"ok": False, "detail": str(exc)},
+                status=502,
+                headers=self._matrix_cors_headers(scope),
+            )
+
     def _connector_dict(self, connector: PublicConnector) -> dict[str, Any]:
         return {
             "slug": connector.slug,
@@ -2784,7 +3461,7 @@ class PublicCompanyApp:
             if item.strip()
         }
         headers = [
-            (b"access-control-allow-methods", b"GET, OPTIONS"),
+            (b"access-control-allow-methods", b"GET, POST, OPTIONS"),
             (b"access-control-allow-headers", b"content-type"),
         ]
         if origin in allowed:
