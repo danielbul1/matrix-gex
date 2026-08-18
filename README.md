@@ -36,7 +36,7 @@ Three pipelines exist in/around this repo:
 The LSE free plan allows **~10 historical downloads per hour** and **up to 16
 simultaneous WebSocket stream symbols**. How this repo stays within limits:
 
-- Pipeline A runs **once per hour** (cron `13 13-20 * * 1-5`); one full
+- Pipeline A runs **every 30 minutes** (cron `13,43 13-20 * * 1-5`); one full
   refresh uses ~8 downloads (4 options snapshots + 4 candles) across the 4
   streamed symbols — within the 16-symbol cap and the hourly download cap.
   If the key is upgraded to a registered/paid plan, the workflow comment in

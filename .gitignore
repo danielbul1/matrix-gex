@@ -9,3 +9,12 @@ spy.json
 lse.js
 
 *.egg-info/
+
+# Generated data snapshots and build output
+cboe_open_data.json
+cboe_data.json
+candles_data.json
+data_status.json
+exposure_history/
+build/
+dist/

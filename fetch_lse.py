@@ -197,9 +197,10 @@ def fetch_options_for_symbol(symbol: str) -> dict:
 
         iv_raw = row.get("iv") or 0
         # LSE may return IV as a percentage (e.g. 13.5) or decimal (0.135).
-        # Normalize to decimal used by the dashboard.
+        # Anything above 3 (300%) is treated as a percent; below that,
+        # decimal. Matches norm_iv() in server.py.
         iv = float(iv_raw)
-        if iv > 1:
+        if iv > 3:
             iv = iv / 100.0
 
         gamma = float(row.get("gamma") or 0)

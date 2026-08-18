@@ -18,11 +18,8 @@ def calcGammaEx(S, K, vol, T, r, q, optType, OI):
     if T == 0 or vol == 0:
         return 0
     dp = (np.log(S/K) + (r - q + 0.5*vol**2)*T) / (vol*np.sqrt(T))
-    dm = dp - vol*np.sqrt(T)
-    if optType == 'call':
-        gamma = np.exp(-q*T) * norm.pdf(dp) / (S * vol * np.sqrt(T))
-    else:
-        gamma = K * np.exp(-r*T) * norm.pdf(dm) / (S * S * vol * np.sqrt(T))
+    # Gamma is identical for calls and puts: norm.pdf(d1) / (S * vol * sqrt(T))
+    gamma = np.exp(-q*T) * norm.pdf(dp) / (S * vol * np.sqrt(T))
     return OI * 100 * S * S * 0.01 * gamma
 
 def isThirdFriday(d):
