@@ -116,6 +116,34 @@ Interpreting the report:
   Older rows (NULL slope, zero scales) and the `exposure_history/` fallback
   still replay with a neutral VEX force, so only PIN / MIXED can fire there.
 
+## Spread Backtest
+
+Answers "how much money", where the regime backtest answers "was the label
+right". It replays the Baseline (a 7DTE SPXW put credit spread entered every
+session at 10:00 ET, held to expiry, settled at the SPX close on the expiry
+date) over the chain store and writes a JSON report: Sharpe, Sortino, max
+drawdown, worst week, CVaR 5% (per trade), win rate, average P&L per trade,
+trade count, every trade and every skipped session.
+
+```powershell
+pip install -r requirements.txt   # optopsy builds the spreads and fills
+python tools\backtest_spread.py --store C:\path\chain.sqlite3 --out report.json
+python tools\backtest_spread.py --store C:\path\chain.sqlite3 --short-delta 0.10 --width 50 --fill-ratio 1.0
+```
+
+- Chain store: `railway-service/src/tripity_experiment/chain_store.py`
+  defines the schema (`option_chain_snapshot`, one row per contract per
+  snapshot; `daily_close`, VIX and SPX closes). The backfill and the forward
+  collector write it; the backtester only reads it.
+- Short strike: the put whose delta (canonical greeks engine, snapshot IV) is
+  closest to `--short-delta`; long strike = short − `--width`.
+- Costs: fills cross `--fill-ratio` of the half-spread from mid (0.5 by
+  default); IBKR tiered commission plus an exchange-fee constant per contract
+  on entry, none at cash settlement.
+- Sizing: contracts = floor(`--risk-pct` × equity ÷ max loss per spread),
+  equity = `--equity` plus P&L settled before the session. With the default
+  1%, one 25-wide SPX spread needs roughly $220k of equity.
+
 ## Regime Journal
 
 Daily workflow: write your regime call before the open in the dashboard's

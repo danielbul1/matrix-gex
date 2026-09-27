@@ -41,7 +41,7 @@ jobs:
           python-version: "3.12"
 
       - name: Compile Python files
-        run: python -m py_compile server.py fetch_cboe.py tools/gamma_exposure.py tools/build_data_status.py tools/smoke_check.py
+        run: python -m py_compile server.py fetch_cboe.py tools/gamma_exposure.py tools/build_data_status.py tools/smoke_check.py tools/backtest_spread.py railway-service/src/tripity_experiment/chain_store.py
 
       - name: Run dashboard smoke check
         run: python tools/smoke_check.py
