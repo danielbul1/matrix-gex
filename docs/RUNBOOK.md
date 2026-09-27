@@ -131,17 +131,18 @@ mean of the worst 5% of daily returns) are fractions of equity.
 pip install -r requirements.txt   # optopsy builds the spreads and fills
 python tools\backtest_spread.py --store C:\path\chain.sqlite3 --out report.json
 python tools\backtest_spread.py --store C:\path\chain.sqlite3 --short-delta 0.10 --width 50 --fill-ratio 1.0
-python tools\backtest_spread.py --store C:\path\chain.sqlite3 --exit managed
+python tools\backtest_spread.py --store C:\path\chain.sqlite3 --exit-rule managed
 python tools\backtest_spread.py --store C:\path\chain.sqlite3 --grid --out grid.json
 ```
 
-- Exits: `--exit hold` (the default) settles at the SPX close on the expiry
-  date. `--exit managed` buys the spread back at the first intraday snapshot
+- Exits: `--exit-rule hold` (the default) settles at the SPX close on the
+  expiry date. `--exit-rule managed` buys the spread back at the first
+  intraday snapshot
   (the store's 30-minute grid) where that costs <= 50% of the credit (take
   profit) or >= 2x the credit (stop), else holds to expiry. Buy-backs fill
   under the same `--fill-ratio` as the entry.
 - Grid: `--grid` runs short delta {0.10, 0.16, 0.20} x width {25, 50} x exit
-  {hold, managed}. `headline` has one row per cell at the 50% fill;
+  rule {hold, managed}, and refuses the single-cell flags. `headline` has one row per cell at the 50% fill;
   `fill_sensitivity` repeats every cell at mid, 50% and full spread. The fill
   levels need not rank mid >= 50% >= full. With managed exits, the
   take-profit is a share of the credit, so a richer mid credit can take profit

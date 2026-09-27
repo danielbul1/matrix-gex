@@ -49,8 +49,28 @@ _Avoid_: VIX filter, control
 The sessions a filter declines to trade, reported alongside the sessions it keeps.
 
 **Skipped Session**:
-A session the backtester could not trade: data was missing, the risk budget could not fit one spread, or five positions were already open. Unlike a Rejected Session, no filter chose to pass on it.
+A session the backtester could not trade: data was missing, the risk budget could not fit one spread, or the Position Cap was reached. Unlike a Rejected Session, no filter chose to pass on it.
 _Avoid_: rejected, filtered out
+
+**Position Cap**:
+The most spreads the experiment holds open at once. A spread stays open until it is closed or settles.
+_Avoid_: max trades, slot limit
+
+**Exit Rule**:
+How an open spread is closed: held to settlement, or managed by a take-profit and a stop on the spread's buy-back cost.
+_Avoid_: management style
+
+**Fill Level**:
+How far from mid an order fills, as a share of the half-spread: mid, 50%, or the full spread.
+_Avoid_: slippage
+
+**Headline**:
+The grid's results at the 50% Fill Level: one row per short delta, width and Exit Rule.
+_Avoid_: main results, summary
+
+**Fill Sensitivity**:
+The grid rerun at every Fill Level, showing how much a result depends on execution.
+_Avoid_: slippage test
 
 **Dev Period**:
 The span of history used to choose parameters.
