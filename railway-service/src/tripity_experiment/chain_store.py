@@ -123,3 +123,10 @@ def read_daily_closes(connection: sqlite3.Connection, symbol: str) -> dict[str, 
     return dict(connection.execute(
         "SELECT session_date, close FROM daily_close WHERE symbol = ?"
         " ORDER BY session_date", (symbol,)))
+
+
+def snapshot_span(connection: sqlite3.Connection) -> tuple[int, int] | None:
+    """(first, last) snapshot_ms in the store, or None when it is empty."""
+    first, last = connection.execute(
+        "SELECT MIN(snapshot_ms), MAX(snapshot_ms) FROM option_chain_snapshot").fetchone()
+    return None if first is None else (first, last)
