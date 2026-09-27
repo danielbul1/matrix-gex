@@ -118,8 +118,8 @@ Interpreting the report:
 
 ## Spread Backtest
 
-Answers "how much money", where the regime backtest answers "was the label
-right". It replays the Baseline (a 7DTE SPXW put credit spread entered every
+Answers "how much money", where the regime backtest answers "was the Engine
+Label right". It replays the Baseline (a 7DTE SPXW put credit spread entered every
 session at 10:00 ET, held to expiry, settled at the SPX close on the expiry
 date) over the chain store and writes a JSON report: Sharpe, Sortino, max
 drawdown, worst week, CVaR 5% (per trade), win rate, average P&L per trade,

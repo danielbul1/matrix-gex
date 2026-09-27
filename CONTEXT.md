@@ -31,7 +31,7 @@ _Avoid_: regime, signal
 ## Spread experiment
 
 **Baseline**:
-The unfiltered strategy: a 7DTE SPXW put credit spread entered every session at 10:00 ET.
+The unfiltered strategy: the put credit spread the experiment enters every session, with no filter applied.
 _Avoid_: control, benchmark
 
 **GEX Filter**:
@@ -48,10 +48,14 @@ _Avoid_: VIX filter, control
 **Rejected Sessions**:
 The sessions a filter declines to trade, reported alongside the sessions it keeps.
 
+**Skipped Session**:
+A session the backtester could not trade: data was missing, or the risk budget could not fit one spread. Unlike a Rejected Session, no filter chose to pass on it.
+_Avoid_: rejected, filtered out
+
 **Dev Period**:
-2018–2023, the only span used to choose parameters.
+The span of history used to choose parameters.
 _Avoid_: in-sample, training period
 
 **Holdout**:
-2024–2026, run once after the Dev Period is frozen.
+The span of history held back from parameter choice and run once, after the Dev Period is frozen.
 _Avoid_: test set, out-of-sample, OOS

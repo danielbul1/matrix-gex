@@ -243,7 +243,8 @@ def test_equity_too_small_for_one_spread_is_skipped(tmp_path):
     report = _run(_one_session_store(tmp_path, settlement=5010.0),
                   initial_equity=100_000.0)
     assert report["trades"] == []
-    assert report["skipped"] == [["2026-03-02", "max loss of one spread exceeds risk budget"]]
+    assert report["skipped"] == [
+        {"session": "2026-03-02", "reason": "max loss of one spread exceeds risk budget"}]
 
 
 # ---------------------------------------------------------------------------

@@ -3,8 +3,8 @@ and the spread backtester.
 
 One SQLite file, two tables:
 
-- option_chain_snapshot: one row per contract per snapshot time. Append-only;
-  a re-written (contract, snapshot) replaces the earlier copy.
+- option_chain_snapshot: one row per contract per snapshot time. Writes are
+  upserts: a re-written (contract, snapshot) replaces the earlier copy.
 - daily_close: the companion daily series (VIX and SPX closes), one value per
   symbol per session. The SPX close on an expiry date is the SPXW PM
   settlement value.
