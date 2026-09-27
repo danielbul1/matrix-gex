@@ -190,10 +190,10 @@ python tools\gex_crosscheck.py --store C:\path\chain.sqlite3
   (Gamma Regime positive) and `gex_percentile` (percentile above
   `--gex-percentile`, 0.5 by default). Each gets three rows, `kept`,
   `rejected` (the Rejected Sessions, replayed as their own strategy) and
-  `baseline`, each with its own five-position cap, metrics over the same
-  calendar, trades and Skipped Sessions. Sessions a filter cannot decide
-  (no Naive GEX, or no percentile yet) are listed under `undecided`, in
-  neither row. `gex` lists every session's Naive GEX, Gamma Regime and
+  `baseline`, each with its own Position Cap, metrics over the same
+  calendar, trades and Skipped Sessions. A filter's Undecided Sessions (no
+  Naive GEX, or no percentile yet) are listed under `undecided` and sit in
+  no row, `baseline` included, so the three rows cover the same sessions. `gex` lists every session's Naive GEX, Gamma Regime and
   percentile.
 - `gex_crosscheck.py` compares our daily Naive GEX with SqueezeMetrics' free
   daily GEX (the DIX CSV, downloaded unless `--csv` points to a copy) and

@@ -600,12 +600,14 @@ def test_positive_gamma_filter_reports_kept_rejected_and_baseline(tmp_path):
         rows["kept"]["metrics"]["total_pnl"] + rows["rejected"]["metrics"]["total_pnl"])
 
 
-def _percentile_store(tmp_path, later_oi=1_000_000):
+def _percentile_store(tmp_path, later_oi=1_000_000, extra_rows=()):
     """Twenty sessions of rising call OI, then T at the middle of them, then
-    T+1 far above everything. Naive GEX is proportional to the OI."""
+    T+1 far above everything. Naive GEX is proportional to the OI.
+    extra_rows join T's session."""
     days = [MONDAY + timedelta(days=i) for i in range(22)]
     ois = [1000 * (i + 1) for i in range(20)] + [10_500, later_oi]
     sessions = {day: [_option(day, 10, 0, "C", 5000, oi)] for day, oi in zip(days, ois)}
+    sessions[days[20]] += list(extra_rows)
     return days, _store(tmp_path, sessions, {})
 
 
@@ -635,10 +637,11 @@ def test_percentile_filter_keeps_sessions_above_the_threshold(tmp_path):
     (variant,) = [f for f in _gex_run(path)["filters"] if f["filter"] == "gex_percentile"]
     assert variant["threshold"] == 0.5
     rows = {row["sessions"]: row for row in variant["rows"]}
-    # T sits at exactly 0.5 (not above); T+1 is above; warm-up sessions are
-    # neither kept nor rejected.
+    # T sits at exactly 0.5 (not above); T+1 is above; Undecided Sessions
+    # are neither kept, rejected, nor in the Baseline row.
     assert rows["kept"]["session_count"] == 1
     assert rows["rejected"]["session_count"] == 1
+    assert rows["baseline"]["session_count"] == 2
     assert variant["undecided"] == [
         {"session": day.isoformat(), "reason": "fewer than 20 past sessions of Naive GEX"}
         for day in days[:20]]
@@ -674,10 +677,38 @@ def test_no_look_ahead_from_next_day_oi_or_later_quotes(tmp_path):
     poisoned = {MONDAY: clean[MONDAY] + later, tuesday: poisoned_tuesday}
     (tmp_path / "clean").mkdir()
     (tmp_path / "poisoned").mkdir()
-    clean_view = _monday_view(_gex_run(_store(tmp_path / "clean", clean, closes)))
+    clean_report = _gex_run(_store(tmp_path / "clean", clean, closes))
     poisoned_report = _gex_run(_store(tmp_path / "poisoned", poisoned, closes))
-    assert _monday_view(poisoned_report) == clean_view
-    assert _gex_of(poisoned_report, tuesday)["naive_gex"] < 0
+    assert _monday_view(poisoned_report) == _monday_view(clean_report)
+    # The poison was read: Tuesday's own Naive GEX moved with it.
+    assert _gex_of(poisoned_report, tuesday)["naive_gex"] != pytest.approx(
+        _gex_of(clean_report, tuesday)["naive_gex"])
+
+
+def _percentile_view(report, session):
+    """The session's Naive GEX and GEX Percentile, and the percentile
+    filter's split: T rejected at exactly 0.5, T+1 kept."""
+    rows = _filter(report, "gex_percentile")
+    return (_gex_of(report, session),
+            rows["kept"]["session_count"], rows["rejected"]["session_count"])
+
+
+def test_no_look_ahead_in_the_percentile_decision(tmp_path):
+    # T+1 open interest poisoned, and T quoted again after 10:00 with call OI
+    # that would lift T to the top of its history if it leaked in.
+    later = [_option(MONDAY + timedelta(days=20), hour, minute, "C", 5000, 9e9,
+                     iv=0.9, spot=4000.0)
+             for hour, minute in ((10, 30), (12, 0), (15, 0))]
+    (tmp_path / "clean").mkdir()
+    (tmp_path / "poisoned").mkdir()
+    days, clean_path = _percentile_store(tmp_path / "clean")
+    _, poisoned_path = _percentile_store(tmp_path / "poisoned", later_oi=9e9,
+                                         extra_rows=later)
+    clean_report, poisoned_report = _gex_run(clean_path), _gex_run(poisoned_path)
+    assert _percentile_view(poisoned_report, days[20]) == _percentile_view(
+        clean_report, days[20])
+    assert _gex_of(poisoned_report, days[21])["naive_gex"] > _gex_of(
+        clean_report, days[21])["naive_gex"]
 
 
 def test_cli_runs_the_gex_filter_report(tmp_path, capsys):

@@ -38,7 +38,7 @@ Regime, and GEX Percentile above a threshold. Naive GEX is read at the entry
 snapshot only (SOD Open Interest, the snapshot's spot and IV, the canonical
 greeks engine, calls + / puts -); the percentile ranks it against past
 sessions only. Each filter reports its kept sessions, its Rejected Sessions
-and the Baseline side by side. tools/gex_crosscheck.py checks the Naive GEX
+and the Baseline side by side, all over the sessions it could decide. tools/gex_crosscheck.py checks the Naive GEX
 series against SqueezeMetrics.
 
 optopsy builds the spreads, applies the fill model and computes the exit
@@ -672,7 +672,9 @@ def naive_gex(rows, session):
 
     The dashboard's number: canonical-engine gamma over the whole SPX/SPXW
     chain (0DTE included), SOD Open Interest, calls + and puts -. Only the
-    snapshot's spot and IV feed the gamma, never vendor greeks."""
+    snapshot's spot and IV feed the gamma, never vendor greeks. Like the
+    dashboard, aggregate_strikes drops contracts with SOD Open Interest
+    under its min_oi (10)."""
     stamp = entry_snapshot(rows, session)
     if stamp is None:
         return None
@@ -743,8 +745,9 @@ def run_gex_filter(store_path, config, start=None, end=None,
     the report dict. start/end are inclusive session dates.
 
     Each filter splits the sessions into kept and Rejected Sessions; both are
-    replayed as a strategy of their own, beside the Baseline. A session the
-    filter cannot decide (no Naive GEX, or no GEX Percentile yet) is neither.
+    replayed as a strategy of their own, beside the Baseline. Its Undecided
+    Sessions (no Naive GEX, or no GEX Percentile yet) sit outside the
+    comparison, the Baseline row included, so kept + rejected = Baseline.
     GEX Percentile history reaches back before start."""
     sessions, closes = load_store(store_path, start, end)
     series = {}
@@ -786,7 +789,7 @@ def run_gex_filter(store_path, config, start=None, end=None,
         filters.append({"filter": name, **settings, "rows": [
             _filter_row(label, days, sessions, marks, priced, skipped, config)
             for label, days in ((ROW_KEPT, kept), (ROW_REJECTED, rejected),
-                                (ROW_BASELINE, set(sessions)))],
+                                (ROW_BASELINE, kept | rejected))],
             "undecided": undecided})
     return {
         "config": asdict(config),
