@@ -77,6 +77,7 @@ def journal_db(tmp_path, monkeypatch):
     session is gradeable, TODAY and the future are not."""
     monkeypatch.setenv("TRIPITY_MATRIX_FLOW_DB", str(tmp_path / "matrix_flow.sqlite3"))
     monkeypatch.setattr(host, "_matrix_journal_session_date", lambda now_et=None: TODAY)
+    monkeypatch.setattr(host, "_matrix_journal_today", lambda: TODAY)
     monkeypatch.setattr(
         host, "_matrix_journal_gradeable",
         lambda session_date, now_et=None: date.fromisoformat(session_date) < TODAY)
