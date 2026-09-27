@@ -512,3 +512,217 @@ def test_cli_reports_missing_store(tmp_path, capsys):
     code = bt.main(["--store", str(tmp_path / "absent.sqlite3")])
     assert code == 2
     assert "not found" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------------------
+# The GEX Filter: Naive GEX, Gamma Regime, GEX Percentile, Rejected Sessions
+# ---------------------------------------------------------------------------
+def _option(session, hour, minute, right, strike, oi, expiry_offset=7,
+            root="SPXW", iv=IV, spot=SPOT):
+    """One contract carrying only what Naive GEX reads: SOD OI, IV, spot."""
+    return cs.ChainRow(
+        root=root, expiry=(session + timedelta(days=expiry_offset)).isoformat(),
+        strike=float(strike), right=right, snapshot_ms=_ms(session, hour, minute),
+        bid=1.00, ask=1.10, iv=iv, sod_oi=float(oi), vendor_delta=None,
+        vendor_gamma=None, underlying=spot)
+
+
+def _hand_gex(session, hour, minute, contracts):
+    """Naive GEX by hand from canonical gamma: calls +, puts -."""
+    stamp = _ms(session, hour, minute)
+    total = 0.0
+    for right, strike, oi, offset, root in contracts:
+        expiry = (session + timedelta(days=offset)).isoformat()
+        T = mg.years_to_expiry(expiry, root, stamp)
+        gamma = mg.bs_gamma(SPOT, strike, T, IV)
+        total += (1 if right == "C" else -1) * gamma * oi * 100 * SPOT ** 2 * 0.01
+    return total
+
+
+def _gex_run(path, **overrides):
+    config = bt.SpreadConfig(**{"initial_equity": 1_000_000.0, **overrides})
+    return bt.run_gex_filter(path, config)
+
+
+def _gex_of(report, session):
+    (row,) = [r for r in report["gex"] if r["session"] == session.isoformat()]
+    return row
+
+
+def test_naive_gex_matches_the_canonical_engine_by_hand(tmp_path):
+    # SPXW and AM-settled SPX alike, 0DTE included, from SOD OI at 10:00.
+    contracts = [("C", 5050.0, 2000, 7, "SPXW"), ("P", 4900.0, 1500, 7, "SPXW"),
+                 ("C", 5000.0, 800, 4, "SPX"), ("P", 4975.0, 300, 0, "SPXW")]
+    rows = [_option(MONDAY, 10, 0, right, strike, oi, offset, root)
+            for right, strike, oi, offset, root in contracts]
+    path = _store(tmp_path, {MONDAY: rows}, {MONDAY: SPOT})
+    row = _gex_of(_gex_run(path), MONDAY)
+    assert row["naive_gex"] == pytest.approx(_hand_gex(MONDAY, 10, 0, contracts))
+    assert row["gamma_regime"] == "positive"
+
+
+def _gamma_calls(session, oi=50_000):
+    """Call OI heavy enough to turn a put chain's Naive GEX positive."""
+    return [_option(session, 10, 0, "C", strike, oi) for strike in (5000, 5025, 5050)]
+
+
+def _positive_then_negative_store(tmp_path):
+    """Monday: positive Gamma Regime; Tuesday: negative. Both settle OTM."""
+    tuesday = MONDAY + timedelta(days=1)
+    sessions = {MONDAY: _chain(MONDAY, 10, 0) + _gamma_calls(MONDAY),
+                tuesday: _chain(tuesday, 10, 0)}
+    closes = {MONDAY: SPOT, tuesday: SPOT, MONDAY + timedelta(days=7): 5010.0,
+              tuesday + timedelta(days=7): 5010.0}
+    return tuesday, _store(tmp_path, sessions, closes)
+
+
+def _filter(report, name):
+    (variant,) = [f for f in report["filters"] if f["filter"] == name]
+    return {row["sessions"]: row for row in variant["rows"]}
+
+
+def test_positive_gamma_filter_reports_kept_rejected_and_baseline(tmp_path):
+    tuesday, path = _positive_then_negative_store(tmp_path)
+    report = _gex_run(path)
+    assert _gex_of(report, MONDAY)["gamma_regime"] == "positive"
+    assert _gex_of(report, tuesday)["gamma_regime"] == "negative"
+    rows = _filter(report, "positive_gamma")
+    assert set(rows) == {"kept", "rejected", "baseline"}
+    assert [t["session"] for t in rows["kept"]["trades"]] == ["2026-03-02"]
+    assert [t["session"] for t in rows["rejected"]["trades"]] == ["2026-03-03"]
+    assert [t["session"] for t in rows["baseline"]["trades"]] == [
+        "2026-03-02", "2026-03-03"]
+    assert rows["kept"]["session_count"] == 1
+    assert rows["rejected"]["session_count"] == 1
+    assert rows["baseline"]["session_count"] == 2
+    assert rows["kept"]["metrics"]["trades"] == 1
+    assert rows["baseline"]["metrics"]["total_pnl"] == pytest.approx(
+        rows["kept"]["metrics"]["total_pnl"] + rows["rejected"]["metrics"]["total_pnl"])
+
+
+def _percentile_store(tmp_path, later_oi=1_000_000, extra_rows=()):
+    """Twenty sessions of rising call OI, then T at the middle of them, then
+    T+1 far above everything. Naive GEX is proportional to the OI.
+    extra_rows join T's session."""
+    days = [MONDAY + timedelta(days=i) for i in range(22)]
+    ois = [1000 * (i + 1) for i in range(20)] + [10_500, later_oi]
+    sessions = {day: [_option(day, 10, 0, "C", 5000, oi)] for day, oi in zip(days, ois)}
+    sessions[days[20]] += list(extra_rows)
+    return days, _store(tmp_path, sessions, {})
+
+
+def test_gex_percentile_ranks_against_past_sessions_only(tmp_path):
+    days, path = _percentile_store(tmp_path)
+    report = _gex_run(path)
+    # 10 of the 20 past sessions sit below T; T itself and T+1 do not count.
+    assert _gex_of(report, days[20])["gex_percentile"] == pytest.approx(0.5)
+    assert _gex_of(report, days[21])["gex_percentile"] == pytest.approx(1.0)
+    # Fewer than 20 past sessions: no percentile yet.
+    assert _gex_of(report, days[19])["gex_percentile"] is None
+
+
+def test_gex_percentile_is_unchanged_by_later_sessions(tmp_path):
+    days, path = _percentile_store(tmp_path, later_oi=1)
+    assert _gex_of(_gex_run(path), days[20])["gex_percentile"] == pytest.approx(0.5)
+
+
+def test_gex_percentile_history_reaches_before_the_start_date(tmp_path):
+    days, path = _percentile_store(tmp_path)
+    report = bt.run_gex_filter(path, bt.SpreadConfig(), start=days[20])
+    assert _gex_of(report, days[20])["gex_percentile"] == pytest.approx(0.5)
+
+
+def test_percentile_filter_keeps_sessions_above_the_threshold(tmp_path):
+    days, path = _percentile_store(tmp_path)
+    (variant,) = [f for f in _gex_run(path)["filters"] if f["filter"] == "gex_percentile"]
+    assert variant["threshold"] == 0.5
+    rows = {row["sessions"]: row for row in variant["rows"]}
+    # T sits at exactly 0.5 (not above); T+1 is above; Undecided Sessions
+    # are neither kept, rejected, nor in the Baseline row.
+    assert rows["kept"]["session_count"] == 1
+    assert rows["rejected"]["session_count"] == 1
+    assert rows["baseline"]["session_count"] == 2
+    assert variant["undecided"] == [
+        {"session": day.isoformat(), "reason": "fewer than 20 past sessions of Naive GEX"}
+        for day in days[:20]]
+
+
+ENTRY_FIELDS = ("session", "expiry", "short_strike", "long_strike", "short_delta",
+                "underlying_at_entry", "short_fill", "long_fill", "credit", "contracts")
+
+
+def _monday_view(report):
+    """Monday's Naive GEX, filter decision and entry."""
+    rows = _filter(report, "positive_gamma")
+    (trade,) = [t for t in rows["kept"]["trades"] if t["session"] == "2026-03-02"]
+    return (_gex_of(report, MONDAY), {f: trade[f] for f in ENTRY_FIELDS})
+
+
+def test_no_look_ahead_from_next_day_oi_or_later_quotes(tmp_path):
+    tuesday = MONDAY + timedelta(days=1)
+    expiry = MONDAY + timedelta(days=7)
+    closes = {MONDAY: SPOT, tuesday: SPOT, expiry: 5010.0,
+              tuesday + timedelta(days=7): 5010.0}
+    clean = {MONDAY: _chain(MONDAY, 10, 0) + _gamma_calls(MONDAY),
+             tuesday: _chain(tuesday, 10, 0)}
+    # T+1 open interest poisoned: huge put OI at every Tuesday strike.
+    poisoned_tuesday = [
+        cs.ChainRow(**{**row.__dict__, "sod_oi": 9e9}) for row in clean[tuesday]]
+    # Every Monday quote after 10:00 poisoned: other spot, IV, OI and prices.
+    later = []
+    for hour, minute in ((10, 30), (12, 0), (15, 0)):
+        for row in _chain(MONDAY, hour, minute, spot=4000.0):
+            later.append(cs.ChainRow(**{
+                **row.__dict__, "sod_oi": 9e9, "iv": 0.9, "bid": 90.0, "ask": 99.0}))
+    poisoned = {MONDAY: clean[MONDAY] + later, tuesday: poisoned_tuesday}
+    (tmp_path / "clean").mkdir()
+    (tmp_path / "poisoned").mkdir()
+    clean_report = _gex_run(_store(tmp_path / "clean", clean, closes))
+    poisoned_report = _gex_run(_store(tmp_path / "poisoned", poisoned, closes))
+    assert _monday_view(poisoned_report) == _monday_view(clean_report)
+    # The poison was read: Tuesday's own Naive GEX moved with it.
+    assert _gex_of(poisoned_report, tuesday)["naive_gex"] != pytest.approx(
+        _gex_of(clean_report, tuesday)["naive_gex"])
+
+
+def _percentile_view(report, session):
+    """The session's Naive GEX and GEX Percentile, and the percentile
+    filter's split: T rejected at exactly 0.5, T+1 kept."""
+    rows = _filter(report, "gex_percentile")
+    return (_gex_of(report, session),
+            rows["kept"]["session_count"], rows["rejected"]["session_count"])
+
+
+def test_no_look_ahead_in_the_percentile_decision(tmp_path):
+    # T+1 open interest poisoned, and T quoted again after 10:00 with call OI
+    # that would lift T to the top of its history if it leaked in.
+    later = [_option(MONDAY + timedelta(days=20), hour, minute, "C", 5000, 9e9,
+                     iv=0.9, spot=4000.0)
+             for hour, minute in ((10, 30), (12, 0), (15, 0))]
+    (tmp_path / "clean").mkdir()
+    (tmp_path / "poisoned").mkdir()
+    days, clean_path = _percentile_store(tmp_path / "clean")
+    _, poisoned_path = _percentile_store(tmp_path / "poisoned", later_oi=9e9,
+                                         extra_rows=later)
+    clean_report, poisoned_report = _gex_run(clean_path), _gex_run(poisoned_path)
+    assert _percentile_view(poisoned_report, days[20]) == _percentile_view(
+        clean_report, days[20])
+    assert _gex_of(poisoned_report, days[21])["naive_gex"] > _gex_of(
+        clean_report, days[21])["naive_gex"]
+
+
+def test_cli_runs_the_gex_filter_report(tmp_path, capsys):
+    _, path = _positive_then_negative_store(tmp_path)
+    out = tmp_path / "gex.json"
+    assert bt.main(["--store", str(path), "--gex-filter", "--gex-percentile", "0.8",
+                    "--out", str(out)]) == 0
+    report = json.loads(out.read_text())
+    assert [f["filter"] for f in report["filters"]] == ["positive_gamma", "gex_percentile"]
+    assert report["filters"][1]["threshold"] == 0.8
+    assert json.loads(capsys.readouterr().out) == report
+
+
+def test_cli_gex_filter_and_grid_are_exclusive(tmp_path, capsys):
+    with pytest.raises(SystemExit) as raised:
+        bt.main(["--store", str(tmp_path / "chain.sqlite3"), "--grid", "--gex-filter"])
+    assert raised.value.code == 2

@@ -170,6 +170,37 @@ python tools\backtest_spread.py --store C:\path\chain.sqlite3 --grid --out grid.
   equity = `--equity` plus P&L of trades closed before the session. With the default
   1%, one 25-wide SPX spread needs roughly $220k of equity.
 
+### GEX Filter
+
+```powershell
+python tools\backtest_spread.py --store C:\path\chain.sqlite3 --gex-filter --out gex.json
+python tools\backtest_spread.py --store C:\path\chain.sqlite3 --gex-filter --gex-percentile 0.8 --exit-rule managed
+python tools\gex_crosscheck.py --store C:\path\chain.sqlite3
+```
+
+- Naive GEX: the dashboard's number, from the canonical greeks engine over
+  the whole SPX/SPXW chain (0DTE included) at each session's 10:00 ET entry
+  snapshot: SOD Open Interest, the snapshot's spot and IV, calls + and
+  puts −. Nothing after 10:00 and no later open interest is read.
+- GEX Percentile: the share of the previous 252 sessions whose Naive GEX sits
+  below the session's own; none until 20 past sessions exist. History is read
+  from up to 380 calendar days before `--start`, so a Holdout run starts
+  warm.
+- `--gex-filter` runs two filters on one configuration: `positive_gamma`
+  (Gamma Regime positive) and `gex_percentile` (percentile above
+  `--gex-percentile`, 0.5 by default). Each gets three rows, `kept`,
+  `rejected` (the Rejected Sessions, replayed as their own strategy) and
+  `baseline`, each with its own Position Cap, metrics over the same
+  calendar, trades and Skipped Sessions. A filter's Undecided Sessions (no
+  Naive GEX, or no percentile yet) are listed under `undecided` and sit in
+  no row, `baseline` included, so the three rows cover the same sessions. `gex` lists every session's Naive GEX, Gamma Regime and
+  percentile.
+- `gex_crosscheck.py` compares our daily Naive GEX with SqueezeMetrics' free
+  daily GEX (the DIX CSV, downloaded unless `--csv` points to a copy) and
+  prints the Pearson correlation and the share of sessions with the same
+  sign. The scales differ, so only those two numbers mean anything. Run it
+  before reading any GEX Filter result.
+
 ## Chain Store Backfill
 
 Fills the chain store from ThetaData through the `thetadata` Python library:

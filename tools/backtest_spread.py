@@ -33,6 +33,14 @@ The grid is short delta {0.10, 0.16, 0.20} x width {25, 50} x exit rule
 {hold, managed}. Its headline has one row per cell at the 50% fill; the fill
 sensitivity table repeats every cell at mid, 50% and full spread.
 
+--gex-filter replays one configuration under each GEX Filter: positive Gamma
+Regime, and GEX Percentile above a threshold. Naive GEX is read at the entry
+snapshot only (SOD Open Interest, the snapshot's spot and IV, the canonical
+greeks engine, calls + / puts -); the percentile ranks it against past
+sessions only. Each filter reports its kept sessions, its Rejected Sessions
+and the Baseline side by side, all over the sessions it could decide. tools/gex_crosscheck.py checks the Naive GEX
+series against SqueezeMetrics.
+
 optopsy builds the spreads, applies the fill model and computes the exit
 proceeds. The loader feeds it only the two chosen legs per session plus one
 synthetic exit row per leg on the expiry date, quoted at intrinsic value
@@ -49,6 +57,10 @@ Usage:
     python tools/backtest_spread.py --store PATH --grid [--start DATE]
         [--end DATE] [--equity 1000000] [--risk-pct 0.01] [--out grid.json]
 
+    python tools/backtest_spread.py --store PATH --gex-filter [--start DATE]
+        [--end DATE] [--gex-percentile 0.5] [single-configuration flags]
+        [--out gex.json]
+
 The JSON report is printed to stdout (and written to --out when given).
 """
 import argparse
@@ -59,7 +71,7 @@ import statistics
 import sys
 from collections import defaultdict
 from dataclasses import asdict, dataclass, fields, replace
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from itertools import product
 from pathlib import Path
 
@@ -121,6 +133,22 @@ HEADLINE_FILL = "50%"
 OPTOPSY_REFERENCE_VOLUME = 1000
 OPTOPSY_MAX_ENTRY_DTE = 60
 OPTOPSY_MIN_BID = 1e-9  # optopsy wants a positive float; legs need a bid > 0
+
+# --- The GEX Filter ---
+GAMMA_POSITIVE = "positive"
+GAMMA_NEGATIVE = "negative"
+FILTER_POSITIVE_GAMMA = "positive_gamma"
+FILTER_GEX_PERCENTILE = "gex_percentile"  # keeps sessions above the threshold
+GEX_PERCENTILE_THRESHOLD = 0.5
+GEX_PERCENTILE_LOOKBACK = 252  # past sessions
+GEX_PERCENTILE_MIN_HISTORY = 20  # past sessions before a percentile exists
+# How far before the first session Naive GEX history is read, in calendar
+# days: enough to hold GEX_PERCENTILE_LOOKBACK sessions.
+GEX_HISTORY_CALENDAR_DAYS = 380
+# The report's rows for every filter.
+ROW_KEPT = "kept"
+ROW_REJECTED = "rejected"
+ROW_BASELINE = "baseline"
 
 
 @dataclass(frozen=True)
@@ -637,6 +665,144 @@ def run_grid(store_path, start=None, end=None,
 
 
 # ---------------------------------------------------------------------------
+# The GEX Filter
+# ---------------------------------------------------------------------------
+def naive_gex(rows, session):
+    """Naive GEX at a session's entry snapshot, or None without one.
+
+    The dashboard's number: canonical-engine gamma over the whole SPX/SPXW
+    chain (0DTE included), SOD Open Interest, calls + and puts -. Only the
+    snapshot's spot and IV feed the gamma, never vendor greeks. Like the
+    dashboard, aggregate_strikes drops contracts with SOD Open Interest
+    under its min_oi (10)."""
+    stamp = entry_snapshot(rows, session)
+    if stamp is None:
+        return None
+    snapshot = [r for r in rows if r.snapshot_ms == stamp
+                and date.fromisoformat(r.expiry) >= session]
+    spots = [r.underlying for r in snapshot if r.underlying]
+    if not spots:
+        return None
+    options = [{"t": r.right, "k": r.strike, "oi": r.sod_oi, "iv": r.iv,
+                "exp": r.expiry, "root": r.root} for r in snapshot]
+    strikes = matrix_gex.aggregate_strikes(options, statistics.median(spots),
+                                           CONTRACT_MULTIPLIER, stamp)
+    return sum(strike["net_gex"] for strike in strikes)
+
+
+def gex_series(store_path, first, last):
+    """{session: Naive GEX} for every day in [first, last] with an entry
+    snapshot. Reads each day's 09:30-10:00 window only, across both roots."""
+    connection = chain_store.connect(store_path)
+    series = {}
+    try:
+        day = first
+        while day <= last:
+            rows = chain_store.read_rows(connection, None, _et_ms(day, *MARKET_OPEN),
+                                         _et_ms(day, *ENTRY_TIME))
+            value = naive_gex(rows, day) if rows else None
+            if value is not None:
+                series[day] = value
+            day += timedelta(days=1)
+    finally:
+        connection.close()
+    return series
+
+
+def gamma_regime(value):
+    return GAMMA_POSITIVE if value > 0 else GAMMA_NEGATIVE
+
+
+def _filter_row(label, days, sessions, marks, priced, skipped, config):
+    """One report row: the Baseline replayed on `days` only. Metrics keep
+    every session's calendar, so rows compare day for day."""
+    report = _report(sessions, marks,
+                     [spread for spread in priced if spread.session in days],
+                     [skip for skip in skipped
+                      if date.fromisoformat(skip["session"]) in days], config)
+    return {"sessions": label, "session_count": len(days),
+            "metrics": report["metrics"], "trades": report["trades"],
+            "skipped": report["skipped"]}
+
+
+def gex_percentiles(series):
+    """{session: GEX Percentile or None}: the share of the previous
+    GEX_PERCENTILE_LOOKBACK sessions whose Naive GEX sits below the session's
+    own. The session itself and anything after it never count; with fewer than
+    GEX_PERCENTILE_MIN_HISTORY past sessions there is no percentile."""
+    days = sorted(series)
+    percentiles = {}
+    for i, day in enumerate(days):
+        past = [series[d] for d in days[max(0, i - GEX_PERCENTILE_LOOKBACK):i]]
+        percentiles[day] = (sum(value < series[day] for value in past) / len(past)
+                            if len(past) >= GEX_PERCENTILE_MIN_HISTORY else None)
+    return percentiles
+
+
+def run_gex_filter(store_path, config, start=None, end=None,
+                   percentile_threshold=GEX_PERCENTILE_THRESHOLD):
+    """Replay the Baseline and every GEX Filter over the chain store; return
+    the report dict. start/end are inclusive session dates.
+
+    Each filter splits the sessions into kept and Rejected Sessions; both are
+    replayed as a strategy of their own, beside the Baseline. Its Undecided
+    Sessions (no Naive GEX, or no GEX Percentile yet) sit outside the
+    comparison, the Baseline row included, so kept + rejected = Baseline.
+    GEX Percentile history reaches back before start."""
+    sessions, closes = load_store(store_path, start, end)
+    series = {}
+    if sessions:
+        series = gex_series(store_path,
+                            min(sessions) - timedelta(days=GEX_HISTORY_CALENDAR_DAYS),
+                            max(sessions))
+    percentiles = gex_percentiles(series)
+    candidates, skipped = select_candidates(sessions, closes, config)
+    priced, pricing_skips = price_candidates(candidates, config.fill_ratio)
+    skipped += pricing_skips
+    marks = leg_marks(sessions)
+
+    def positive_gamma(day):
+        if day not in series:
+            return None, "no Naive GEX at the entry snapshot"
+        return series[day] > 0, None
+
+    def above_percentile(day):
+        if day not in series:
+            return None, "no Naive GEX at the entry snapshot"
+        if percentiles[day] is None:
+            return None, (f"fewer than {GEX_PERCENTILE_MIN_HISTORY}"
+                          " past sessions of Naive GEX")
+        return percentiles[day] > percentile_threshold, None
+
+    variants = ((FILTER_POSITIVE_GAMMA, positive_gamma, {}),
+                (FILTER_GEX_PERCENTILE, above_percentile,
+                 {"threshold": percentile_threshold}))
+    filters = []
+    for name, decide, settings in variants:
+        kept, rejected, undecided = set(), set(), []
+        for day in sorted(sessions):
+            keep, reason = decide(day)
+            if keep is None:
+                undecided.append(_skip(day, reason))
+            else:
+                (kept if keep else rejected).add(day)
+        filters.append({"filter": name, **settings, "rows": [
+            _filter_row(label, days, sessions, marks, priced, skipped, config)
+            for label, days in ((ROW_KEPT, kept), (ROW_REJECTED, rejected),
+                                (ROW_BASELINE, kept | rejected))],
+            "undecided": undecided})
+    return {
+        "config": asdict(config),
+        "sessions": len(sessions),
+        "gex": [{"session": day.isoformat(), "naive_gex": series[day],
+                 "gamma_regime": gamma_regime(series[day]),
+                 "gex_percentile": percentiles[day]}
+                for day in sorted(series) if day in sessions],
+        "filters": filters,
+    }
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 def parse_args(argv=None):
@@ -660,8 +826,15 @@ def parse_args(argv=None):
     parser.add_argument("--exit-rule", choices=EXIT_RULES,
                         help="Hold to expiry, or 50%% take-profit / 2x credit stop "
                              f"(default {SpreadConfig.exit_rule})")
-    parser.add_argument("--grid", action="store_true",
-                        help="Run the whole parameter grid at every fill level")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--grid", action="store_true",
+                      help="Run the whole parameter grid at every fill level")
+    mode.add_argument("--gex-filter", action="store_true",
+                      help="Report every GEX Filter's kept and Rejected Sessions"
+                           " beside the Baseline")
+    parser.add_argument("--gex-percentile", type=float,
+                        help="GEX Percentile the percentile filter must exceed, 0..1 "
+                             f"(default {GEX_PERCENTILE_THRESHOLD}; --gex-filter only)")
     parser.add_argument("--out", help="Also write the JSON report to this path")
     args = parser.parse_args(argv)
     cell_flags = {"--short-delta": args.short_delta, "--width": args.width,
@@ -670,6 +843,8 @@ def parse_args(argv=None):
         parser.error("--grid runs every cell; drop "
                      + ", ".join(flag for flag, value in cell_flags.items()
                                  if value is not None))
+    if args.gex_percentile is not None and not args.gex_filter:
+        parser.error("--gex-percentile needs --gex-filter")
     return args
 
 
@@ -684,7 +859,13 @@ def main(argv=None):
                     "fill_ratio": args.fill_ratio, "exit_rule": args.exit_rule}
             config = SpreadConfig(initial_equity=args.equity, risk_pct=args.risk_pct,
                                   **{k: v for k, v in cell.items() if v is not None})
-            report = run_experiment(args.store, config, args.start, args.end)
+            if args.gex_filter:
+                threshold = (GEX_PERCENTILE_THRESHOLD if args.gex_percentile is None
+                             else args.gex_percentile)
+                report = run_gex_filter(args.store, config, args.start, args.end,
+                                        percentile_threshold=threshold)
+            else:
+                report = run_experiment(args.store, config, args.start, args.end)
     except (FileNotFoundError, ValueError, sqlite3.Error) as exc:
         print(f"backtest_spread: {exc}", file=sys.stderr)
         return 2
@@ -694,6 +875,8 @@ def main(argv=None):
     print(text)
     if args.grid:
         return 0 if any(row["trades"] for row in report["headline"]) else 1
+    if args.gex_filter:
+        return 0 if report["gex"] else 1
     return 0 if report["trades"] else 1
 
 

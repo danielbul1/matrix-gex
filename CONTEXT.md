@@ -48,6 +48,10 @@ _Avoid_: VIX filter, control
 **Rejected Sessions**:
 The sessions a filter declines to trade, reported alongside the sessions it keeps.
 
+**Undecided Session**:
+A session a filter has no input for: its Naive GEX is missing, or its GEX Percentile has too little past history yet. It sits outside that filter's comparison, neither kept, rejected, nor counted in the Baseline beside them.
+_Avoid_: warm-up, unfiltered
+
 **Skipped Session**:
 A session the backtester could not trade: data was missing, the risk budget could not fit one spread, or the Position Cap was reached. Unlike a Rejected Session, no filter chose to pass on it.
 _Avoid_: rejected, filtered out
