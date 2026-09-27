@@ -148,6 +148,42 @@ python tools\backtest_spread.py --store C:\path\chain.sqlite3 --short-delta 0.10
   equity = `--equity` plus P&L settled before the session. With the default
   1%, one 25-wide SPX spread needs roughly $220k of equity.
 
+## Chain Store Backfill
+
+Fills the chain store from ThetaData (Options Standard or Pro) through the
+`thetadata` Python library: a direct connection, no Theta Terminal, Python
+3.12+. The API key is read from `THETADATA_API_KEY` and is never written to
+the store or printed.
+
+Run the probe first, before any bulk download. It prints the earliest SPXW
+date, whether open interest is stamped at the start or the end of the day,
+and whether ThetaData supplies an SPX underlying price before 2022. If the
+history starts after 2018-01, upgrade to Pro for the month.
+
+```powershell
+pip install -r requirements.txt
+$env:THETADATA_API_KEY = "..."
+python tools\backfill_chain.py --probe
+python tools\backfill_chain.py --store C:\path\chain.sqlite3 --start 2024-03-04 --end 2024-03-08
+```
+
+- Pulls SPX and SPXW, 0-10 DTE (`--max-dte`), at the grid times (`--times`,
+  default every 30 minutes 09:30-16:00 ET): bid, ask, IV and delta from
+  ThetaData's first-order greeks, plus the day's open interest. Loads the
+  free Cboe VIX and SPX daily closes first (`--skip-cboe` to skip).
+- Open interest is stored as SOD Open Interest: the latest report ThetaData
+  had published by the session's open, i.e. positions at the close of T-1.
+  A contract missing from a report has zero open interest.
+- The underlying level is derived from put-call parity on the three strikes
+  nearest the money of the nearest expiry, with the canonical greeks engine's
+  rate. The summary lists sessions where the level at the last snapshot is
+  more than 0.5% from the Cboe SPX close.
+- Checkpoints per session in `backfill_checkpoint`; rerun the same command to
+  resume after an interruption. Failed sessions are listed in the summary and
+  retried on the next run (exit code 1 while any failed).
+- `--concurrency` caps requests in flight (default 4, the Standard tier's
+  limit).
+
 ## Regime Journal
 
 Daily workflow: write your regime call before the open in the dashboard's

@@ -8,3 +8,4 @@ matplotlib>=3.4
 python-dotenv>=1.0
 tzdata>=2024.1  # required on Windows for zoneinfo (America/New_York)
 optopsy>=2.2,<3  # spread backtester (tools/backtest_spread.py)
+thetadata>=1.0.11,<2  # chain-store backfill (tools/backfill_chain.py); Python 3.12+
