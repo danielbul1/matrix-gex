@@ -2248,12 +2248,14 @@ def _matrix_journal_db_upsert(entry: dict[str, Any]) -> dict[str, Any]:
     return _matrix_journal_db_get(entry["date"], entry["symbol"])
 
 
+def _matrix_journal_today() -> datetime.date:
+    """Today's date in ET: the reference the journal listing counts back from."""
+    return datetime.datetime.now(ZoneInfo("America/New_York")).date()
+
+
 def _matrix_journal_db_list(days: int = 60, symbol: str | None = None) -> list[dict[str, Any]]:
     _matrix_flow_db_init()
-    since = (
-        datetime.datetime.now(ZoneInfo("America/New_York")).date()
-        - datetime.timedelta(days=max(1, int(days)))
-    ).isoformat()
+    since = (_matrix_journal_today() - datetime.timedelta(days=max(1, int(days)))).isoformat()
     query = (
         f"SELECT {', '.join(_MATRIX_JOURNAL_COLUMNS)} FROM matrix_journal_entries"
         " WHERE session_date >= ?"
