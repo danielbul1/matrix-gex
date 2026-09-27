@@ -36,9 +36,11 @@ SHORT, LONG = 4900.0, 4875.0
 # 50% fills: sell 4900 at 8.60 - 0.10 = 8.50, buy 4875 at 5.30 + 0.10 = 5.40.
 LEG_QUOTES = {SHORT: (8.40, 8.80), LONG: (5.10, 5.50)}
 CREDIT = 3.10
-# IBKR tier ($0.65, premium >= $0.10) + exchange fee ($0.60), per leg.
-COST_PER_SPREAD = 2 * (0.65 + 0.60)
-MAX_LOSS_PER_SPREAD = (25 - CREDIT) * 100 + COST_PER_SPREAD  # 2192.50
+# IBKR tier ($0.65, premium >= $0.10) + Cboe SPXW customer fees for a
+# premium >= $1 ($0.45 + $0.14 + $0.01248 + $0.0025 = $0.60498), per leg.
+EXCHANGE_FEE = 0.60498
+COST_PER_SPREAD = 2 * (0.65 + EXCHANGE_FEE)
+MAX_LOSS_PER_SPREAD = (25 - CREDIT) * 100 + COST_PER_SPREAD  # 2192.51
 
 
 def _ms(day, hour, minute=0):
@@ -169,11 +171,34 @@ def test_mid_and_full_spread_fills(tmp_path):
 
 
 def test_cheap_wing_pays_the_lower_commission_tier(tmp_path):
-    # Long leg fills at 0.07 + 0.01 = 0.08 -> the $0.50 tier (premium < $0.10).
+    # Long leg fills at 0.07 + 0.01 = 0.08 -> the $0.50 tier (premium < $0.10)
+    # and the $0.36 Cboe fee (premium < $1): 0.36 + 0.14 + 0.01248 + 0.0025.
     quotes = {SHORT: (8.40, 8.80), LONG: (0.05, 0.09)}
     (trade,) = _run(_one_session_store(tmp_path, 5010.0, leg_quotes=quotes))["trades"]
     assert trade["long_fill"] == pytest.approx(0.08)
-    assert trade["costs_per_spread"] == pytest.approx((0.65 + 0.60) + (0.50 + 0.60))
+    assert trade["costs_per_spread"] == pytest.approx(
+        (0.65 + EXCHANGE_FEE) + (0.50 + 0.51498))
+
+
+def test_wing_under_one_dollar_pays_the_lower_exchange_fee(tmp_path):
+    # Long leg fills at 0.80 + 0.10 = 0.90: full $0.65 commission, but the
+    # Cboe fee for a premium < $1.
+    quotes = {SHORT: (8.40, 8.80), LONG: (0.60, 1.00)}
+    (trade,) = _run(_one_session_store(tmp_path, 5010.0, leg_quotes=quotes))["trades"]
+    assert trade["long_fill"] == pytest.approx(0.90)
+    assert trade["costs_per_spread"] == pytest.approx(
+        (0.65 + EXCHANGE_FEE) + (0.65 + 0.51498))
+
+
+def test_single_spread_pays_the_one_dollar_order_minimum_per_leg(tmp_path):
+    # 1% of 250,000 = 2,500 -> one spread; 1 x $0.65 is below IBKR's $1.00
+    # order minimum, which applies to each leg of the combo.
+    path = _one_session_store(tmp_path, settlement=5010.0)
+    (trade,) = _run(path, initial_equity=250_000.0)["trades"]
+    cost = 2 * (1.00 + EXCHANGE_FEE)
+    assert trade["contracts"] == 1
+    assert trade["costs_per_spread"] == pytest.approx(cost)
+    assert trade["pnl"] == pytest.approx(CREDIT * 100 - cost)
 
 
 # ---------------------------------------------------------------------------
@@ -204,6 +229,14 @@ def test_sizing_uses_equity_after_settled_trades(tmp_path):
     # 1% of (880,000 - 8,770) = 8,712.30 -> only 3 spreads fit.
     assert second["equity_at_entry"] == pytest.approx(880_000 - loss)
     assert second["contracts"] == 3
+
+
+def test_order_minimum_counts_toward_the_risk_budget(tmp_path):
+    # 1% of 219,290 = 2,192.90: enough for one spread at $0.65 a leg
+    # (2,192.51), not at the $1.00 order minimum (2,193.21).
+    report = _run(_one_session_store(tmp_path, settlement=5010.0),
+                  initial_equity=219_290.0)
+    assert report["trades"] == []
 
 
 def test_equity_too_small_for_one_spread_is_skipped(tmp_path):

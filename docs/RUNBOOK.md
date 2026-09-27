@@ -138,9 +138,11 @@ python tools\backtest_spread.py --store C:\path\chain.sqlite3 --short-delta 0.10
 - Short strike: the put whose delta (canonical greeks engine, snapshot IV) is
   closest to `--short-delta`; long strike = short − `--width`.
 - Costs: fills cross `--fill-ratio` of the half-spread from mid (0.5 by
-  default); IBKR tiered commission plus an exchange-fee constant per contract
-  on entry, none at cash settlement.
-- Sizing: contracts = floor(`--risk-pct` × equity ÷ max loss per spread),
+  default); IBKR tiered commission (with the $1.00 order minimum on each leg)
+  plus Cboe SPXW customer fees by premium tier, per contract on entry, none at
+  cash settlement.
+- Sizing: the most contracts whose total max loss, entry costs included,
+  fits `--risk-pct` × equity,
   equity = `--equity` plus P&L settled before the session. With the default
   1%, one 25-wide SPX spread needs roughly $220k of equity.
 

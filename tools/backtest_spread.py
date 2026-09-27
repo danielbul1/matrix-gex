@@ -60,9 +60,13 @@ CONTRACT_MULTIPLIER = 100
 # IBKR Pro tiered option commissions (<= 10,000 contracts/month), per contract,
 # keyed by the minimum premium of the tier.
 COMMISSION_TIERS = ((0.10, 0.65), (0.05, 0.50), (0.0, 0.25))
-# Approximate Cboe SPXW customer transaction fee plus clearing/regulatory
-# pass-through, per contract. Check against current fee schedules.
-EXCHANGE_FEE_PER_CONTRACT = 0.60
+# IBKR's order minimum, charged on each leg separately, combo orders included.
+MIN_COMMISSION_PER_LEG = 1.00
+# Cboe SPXW public-customer fees IBKR passes through, per contract, keyed by
+# the minimum premium: exchange fee ($0.45 / $0.36) + SPXW execution
+# surcharge ($0.14) + ORF ($0.01248) + trade processing ($0.0025).
+# The SPX index surcharge is $0 for customers; OCC clearing is not included.
+EXCHANGE_FEE_TIERS = ((1.00, 0.60498), (0.0, 0.51498))
 TRADING_DAYS = 252
 CVAR_TAIL = 0.05
 
@@ -259,16 +263,33 @@ def price_candidates(candidates, fill_ratio):
 # ---------------------------------------------------------------------------
 # Costs and sizing
 # ---------------------------------------------------------------------------
-def commission_per_contract(premium):
-    for floor, rate in COMMISSION_TIERS:
+def _tier_rate(tiers, premium):
+    for floor, rate in tiers:
         if premium >= floor:
             return rate
-    return COMMISSION_TIERS[-1][1]
+    return tiers[-1][1]
 
 
-def entry_costs_per_spread(short_fill, long_fill):
-    return sum(commission_per_contract(p) + EXCHANGE_FEE_PER_CONTRACT
+def entry_costs(short_fill, long_fill, contracts):
+    """Commissions and exchange fees for opening `contracts` spreads."""
+    return sum(max(contracts * _tier_rate(COMMISSION_TIERS, p), MIN_COMMISSION_PER_LEG)
+               + contracts * _tier_rate(EXCHANGE_FEE_TIERS, p)
                for p in (short_fill, long_fill))
+
+
+def contracts_within_budget(budget, risk_per_spread, short_fill, long_fill):
+    """Most spreads whose total max loss, entry costs included, fits budget."""
+    # Costs without the order minimum give an upper bound; step down while the
+    # minimum pushes the total over budget (it only binds on small orders).
+    floor_cost = sum(_tier_rate(COMMISSION_TIERS, p) + _tier_rate(EXCHANGE_FEE_TIERS, p)
+                     for p in (short_fill, long_fill))
+    if risk_per_spread + floor_cost <= 0:
+        return 0
+    contracts = math.floor(budget / (risk_per_spread + floor_cost))
+    while contracts >= 1 and (contracts * risk_per_spread
+                              + entry_costs(short_fill, long_fill, contracts)) > budget:
+        contracts -= 1
+    return contracts
 
 
 def size_trades(priced, config):
@@ -278,14 +299,16 @@ def size_trades(priced, config):
         equity = config.initial_equity + sum(
             t["pnl"] for t in trades
             if date.fromisoformat(t["expiry"]) < c["session"])
-        costs = entry_costs_per_spread(c["short_fill"], c["long_fill"])
         width = c["short"].strike - c["long"].strike
-        max_loss = (width - c["credit"]) * CONTRACT_MULTIPLIER + costs
-        contracts = math.floor(config.risk_pct * equity / max_loss) if max_loss > 0 else 0
+        risk_per_spread = (width - c["credit"]) * CONTRACT_MULTIPLIER
+        contracts = contracts_within_budget(config.risk_pct * equity, risk_per_spread,
+                                            c["short_fill"], c["long_fill"])
         if contracts < 1:
             skipped.append([c["session"].isoformat(),
                             "max loss of one spread exceeds risk budget"])
             continue
+        costs = entry_costs(c["short_fill"], c["long_fill"], contracts) / contracts
+        max_loss = risk_per_spread + costs
         pnl_per_spread = ((c["credit"] - c["settlement_value"]) * CONTRACT_MULTIPLIER
                           - costs)
         trades.append({
