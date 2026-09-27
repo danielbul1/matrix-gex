@@ -5,30 +5,48 @@ right?". This one asks "how much money?": it replays the Baseline -- a 7DTE
 SPXW put credit spread entered every session at 10:00 ET -- against the
 normalized chain store and reports after-cost P&L.
 
-One configuration per run:
+One configuration per run (or, with --grid, every configuration of the
+parameter grid):
 - expiry: the SPXW expiry nearest to seven calendar days after the session
   (ties go to the earlier expiry);
 - short strike: the put whose delta, from the canonical greeks engine and the
   snapshot IV, is closest to -short_delta; long strike = short - width;
-- held to expiry, settled at SPXW PM settlement (the SPX close on the expiry
-  date, from the chain store's daily_close series);
+- exit "hold": held to expiry, settled at SPXW PM settlement (the SPX close on
+  the expiry date, from the chain store's daily_close series);
+- exit "managed": a 50% take-profit and a 2x credit stop, checked at every
+  intraday snapshot after entry (the chain store's 30-minute grid). The first
+  snapshot where buying the spread back costs <= 50% of the credit takes
+  profit; the first where it costs >= 2x the credit stops out. A spread that
+  reaches neither is held to expiry;
 - fills cross fill_ratio of the half-spread from mid (0 = mid, 0.5 = the
-  default, 1 = the far side of the quote);
-- commissions on entry at IBKR tiered rates (with the per-leg order minimum)
-  plus Cboe SPXW fees by premium tier; cash settlement at expiry costs nothing;
+  default, 1 = the far side of the quote), on entry and on managed exits
+  alike, so a stop never fills better than an entry;
+- commissions on every order at IBKR tiered rates (with the per-leg order
+  minimum) plus Cboe SPXW fees by premium tier; cash settlement at expiry
+  costs nothing;
+- a new position every session, with at most five open at once;
 - contracts sized so the spread's maximum loss (width - credit, plus entry
   costs) is at most risk_pct of equity. Equity is the starting equity plus the
-  P&L of every trade settled before the session.
+  P&L of every trade closed before the session.
+
+The grid is short delta {0.10, 0.16, 0.20} x width {25, 50} x exit {hold,
+managed}. Its headline has one row per cell at the 50% fill; the fill
+sensitivity table repeats every cell at mid, 50% and full spread.
 
 optopsy builds the spreads, applies the fill model and computes the exit
 proceeds. The loader feeds it only the two chosen legs per session plus one
 synthetic exit row per leg on the expiry date, quoted at intrinsic value
-against the settlement, so optopsy's exit is the PM settlement.
+against the settlement, so optopsy's exit is the PM settlement. optopsy works
+on whole days, so managed exits on the intraday grid are priced here, with the
+same fill formula optopsy applies to entries.
 
 Usage:
     python tools/backtest_spread.py --store PATH [--start DATE] [--end DATE]
         [--short-delta 0.16] [--width 25] [--equity 1000000]
-        [--risk-pct 0.01] [--fill-ratio 0.5] [--out report.json]
+        [--risk-pct 0.01] [--fill-ratio 0.5] [--exit hold|managed]
+        [--out report.json]
+    python tools/backtest_spread.py --store PATH --grid [--start DATE]
+        [--end DATE] [--equity 1000000] [--risk-pct 0.01] [--out grid.json]
 
 The JSON report is printed to stdout (and written to --out when given).
 """
@@ -41,6 +59,7 @@ import sys
 from collections import defaultdict
 from dataclasses import asdict, dataclass, fields
 from datetime import date, datetime
+from itertools import product
 from pathlib import Path
 
 import optopsy
@@ -60,6 +79,7 @@ ENTRY_TIME = (10, 0)  # ET
 
 # --- Execution rules (named constants; tune here only) ---
 MARKET_OPEN = (9, 30)  # ET; snapshots before this never count as the entry
+MARKET_CLOSE = (16, 0)  # ET; SPXW PM settlement, and the last managed-exit check
 # An entry snapshot staler than this is skipped rather than traded.
 ENTRY_MAX_AGE_MINUTES = 45
 CONTRACT_MULTIPLIER = 100
@@ -76,6 +96,20 @@ EXCHANGE_FEE_TIERS = ((1.00, 0.60498), (0.0, 0.51498))
 TRADING_DAYS = 252
 CVAR_TAIL = 0.05
 
+# --- Position management ---
+EXIT_HOLD = "hold"
+EXIT_MANAGED = "managed"  # take profit / stop below, else hold to expiry
+EXITS = (EXIT_HOLD, EXIT_MANAGED)
+TAKE_PROFIT = 0.5  # buy back at <= this share of the credit
+STOP_MULTIPLE = 2.0  # buy back at >= this multiple of the credit
+MAX_OPEN_POSITIONS = 5
+
+# --- The parameter grid ---
+GRID_SHORT_DELTAS = (0.10, 0.16, 0.20)
+GRID_WIDTHS = (25.0, 50.0)
+FILL_LEVELS = (("mid", 0.0), ("50%", 0.5), ("full", 1.0))
+HEADLINE_FILL = "50%"
+
 # optopsy settings: one entry row per leg per session, exit on the expiry date.
 # With volume at the reference volume, optopsy's liquidity slippage crosses
 # exactly fill_ratio of the half-spread.
@@ -89,6 +123,7 @@ class SpreadConfig:
     short_delta: float = 0.16
     width: float = 25.0
     fill_ratio: float = 0.5
+    exit: str = EXIT_HOLD
     initial_equity: float = 1_000_000.0
     risk_pct: float = 0.01
 
@@ -111,6 +146,16 @@ class PricedSpread(Candidate):
     long_fill: float
     credit: float
     settlement_value: float
+
+
+@dataclass(frozen=True)
+class Exit:
+    """How a spread is closed, per share."""
+    reason: str  # "take_profit", "stop" or "expiry"
+    closed_ms: int
+    debit: float  # paid to close: the buy-back, or the settlement value
+    short_fill: float | None  # the buy-back fills; None when cash-settled
+    long_fill: float | None
 
 
 def _skip(session, reason):
@@ -285,9 +330,70 @@ def price_candidates(candidates, fill_ratio):
             short_fill=float(short_fills[short_key]),
             long_fill=float(long_fills[long_key]),
             credit=float(-spread.total_entry_cost),
-            settlement_value=float(-spread.total_exit_proceeds),
+            settlement_value=float(-spread.total_exit_proceeds) + 0.0,  # no -0.0
         ))
     return priced
+
+
+# ---------------------------------------------------------------------------
+# Exits
+# ---------------------------------------------------------------------------
+def leg_marks(sessions):
+    """{(expiry, strike): {snapshot_ms: ChainRow}} over every put in the store."""
+    marks = defaultdict(dict)
+    for rows in sessions.values():
+        for row in rows:
+            if row.right == "P":
+                marks[(row.expiry, row.strike)][row.snapshot_ms] = row
+    return marks
+
+
+def _fill(row, buying, fill_ratio):
+    """optopsy's liquidity fill at the reference volume: mid, moved fill_ratio
+    of the half-spread against us."""
+    mid, half_spread = (row.bid + row.ask) / 2, (row.ask - row.bid) / 2
+    return mid + half_spread * fill_ratio if buying else mid - half_spread * fill_ratio
+
+
+def _exit_quote_ok(row):
+    # A zero bid is a real quote on a far wing; it can still be sold at the fill.
+    return (row.bid is not None and row.ask is not None
+            and 0 <= row.bid <= row.ask and row.ask > 0)
+
+
+def _during_session(snapshot_ms):
+    day = _session_of(snapshot_ms)
+    return _et_ms(day, *MARKET_OPEN) <= snapshot_ms <= _et_ms(day, *MARKET_CLOSE)
+
+
+def find_exit(spread, marks, config):
+    """The Exit the configuration's management rule takes for a PricedSpread."""
+    settle = Exit(reason="expiry", closed_ms=_et_ms(spread.expiry, *MARKET_CLOSE),
+                  debit=spread.settlement_value, short_fill=None, long_fill=None)
+    if config.exit == EXIT_HOLD:
+        return settle
+    expiry = spread.expiry.isoformat()
+    shorts = marks.get((expiry, spread.short_leg.strike), {})
+    longs = marks.get((expiry, spread.long_leg.strike), {})
+    for stamp in sorted(shorts.keys() & longs.keys()):
+        if not (spread.short_leg.snapshot_ms < stamp <= settle.closed_ms
+                and _during_session(stamp)):
+            continue
+        short, long_ = shorts[stamp], longs[stamp]
+        if not (_exit_quote_ok(short) and _exit_quote_ok(long_)):
+            continue
+        short_fill = _fill(short, buying=True, fill_ratio=config.fill_ratio)
+        long_fill = _fill(long_, buying=False, fill_ratio=config.fill_ratio)
+        debit = short_fill - long_fill
+        if debit <= TAKE_PROFIT * spread.credit:
+            reason = "take_profit"
+        elif debit >= STOP_MULTIPLE * spread.credit:
+            reason = "stop"
+        else:
+            continue
+        return Exit(reason=reason, closed_ms=stamp, debit=debit,
+                    short_fill=short_fill, long_fill=long_fill)
+    return settle
 
 
 # ---------------------------------------------------------------------------
@@ -300,8 +406,8 @@ def _tier_rate(tiers, premium):
     return tiers[-1][1]
 
 
-def entry_costs(short_fill, long_fill, contracts):
-    """Commissions and exchange fees for opening `contracts` spreads."""
+def order_costs(short_fill, long_fill, contracts):
+    """Commissions and exchange fees for opening or closing `contracts` spreads."""
     return sum(max(contracts * _tier_rate(COMMISSION_TIERS, p), MIN_COMMISSION_PER_LEG)
                + contracts * _tier_rate(EXCHANGE_FEE_TIERS, p)
                for p in (short_fill, long_fill))
@@ -317,18 +423,28 @@ def contracts_within_budget(budget, risk_per_spread, short_fill, long_fill):
         return 0
     contracts = math.floor(budget / (risk_per_spread + floor_cost))
     while contracts >= 1 and (contracts * risk_per_spread
-                              + entry_costs(short_fill, long_fill, contracts)) > budget:
+                              + order_costs(short_fill, long_fill, contracts)) > budget:
         contracts -= 1
     return contracts
 
 
-def size_trades(priced, config):
-    """Walk sessions in order, sizing each trade on equity settled so far."""
+def _et_iso(snapshot_ms):
+    return datetime.fromtimestamp(snapshot_ms / 1000, tz=ET).isoformat()
+
+
+def size_trades(positions, config):
+    """Walk (PricedSpread, Exit) pairs in session order, skipping entries while
+    MAX_OPEN_POSITIONS are open and sizing each trade on equity closed so far."""
     trades, skipped = [], []
-    realized = []  # (expiry, pnl) of every trade taken so far
-    for spread in sorted(priced, key=lambda spread: spread.session):
+    taken = []  # (closed_ms, pnl) of every trade taken so far
+    for spread, exit in sorted(positions, key=lambda position: position[0].session):
+        entry_ms = spread.short_leg.snapshot_ms
+        if sum(closed_ms > entry_ms for closed_ms, _ in taken) >= MAX_OPEN_POSITIONS:
+            skipped.append(_skip(spread.session,
+                                 f"{MAX_OPEN_POSITIONS} positions already open"))
+            continue
         equity = config.initial_equity + sum(
-            pnl for expiry, pnl in realized if expiry < spread.session)
+            pnl for closed_ms, pnl in taken if _session_of(closed_ms) < spread.session)
         width = spread.short_leg.strike - spread.long_leg.strike
         risk_per_spread = (width - spread.credit) * CONTRACT_MULTIPLIER
         contracts = contracts_within_budget(config.risk_pct * equity, risk_per_spread,
@@ -337,11 +453,16 @@ def size_trades(priced, config):
             skipped.append(_skip(spread.session,
                                  "max loss of one spread exceeds risk budget"))
             continue
-        costs = entry_costs(spread.short_fill, spread.long_fill, contracts) / contracts
-        pnl_per_spread = ((spread.credit - spread.settlement_value) * CONTRACT_MULTIPLIER
-                          - costs)
+        entry_costs = order_costs(spread.short_fill, spread.long_fill,
+                                  contracts) / contracts
+        exit_costs = 0.0
+        if exit.short_fill is not None:
+            exit_costs = order_costs(exit.short_fill, exit.long_fill,
+                                     contracts) / contracts
+        costs = entry_costs + exit_costs
+        pnl_per_spread = (spread.credit - exit.debit) * CONTRACT_MULTIPLIER - costs
         pnl = round(contracts * pnl_per_spread, 2)
-        realized.append((spread.expiry, pnl))
+        taken.append((exit.closed_ms, pnl))
         trades.append({
             "session": spread.session.isoformat(),
             "expiry": spread.expiry.isoformat(),
@@ -353,10 +474,14 @@ def size_trades(priced, config):
             "long_fill": round(spread.long_fill, 6),
             "credit": round(spread.credit, 6),
             "costs_per_spread": round(costs, 6),
-            "max_loss_per_spread": round(risk_per_spread + costs, 6),
+            "max_loss_per_spread": round(risk_per_spread + entry_costs, 6),
             "equity_at_entry": round(equity, 2),
             "contracts": contracts,
             "settlement": spread.settlement,
+            "exit": exit.reason,
+            "exit_time": _et_iso(exit.closed_ms),
+            "closed": _session_of(exit.closed_ms).isoformat(),
+            "exit_debit": round(exit.debit, 6),
             "pnl": pnl,
         })
     return trades, skipped
@@ -366,32 +491,32 @@ def size_trades(priced, config):
 # Metrics
 # ---------------------------------------------------------------------------
 def compute_metrics(trades, sessions, initial_equity):
-    """Risk/return summary over daily returns realized at settlement.
+    """Risk/return summary over daily returns realized when trades close.
 
     As in empyrical/quantstats: Sharpe and Sortino are annualized with a zero
     risk-free rate; max drawdown, worst week and CVaR 5% are fractions of
     equity, CVaR being the mean of the worst 5% of daily returns. Win rate and
-    average P&L are per trade, the average in dollars."""
+    average P&L are per trade, the average and the total in dollars."""
     pnls = [t["pnl"] for t in trades]
     metrics = {
         "trades": len(trades),
         "sharpe": None, "sortino": None, "max_drawdown": None,
         "worst_week": None, "cvar_5": None, "win_rate": None,
-        "avg_pnl_per_trade": None,
+        "avg_pnl_per_trade": None, "total_pnl": 0.0,
     }
     if not trades:
         return metrics
-    pnl_by_expiry = defaultdict(float)
+    pnl_by_day = defaultdict(float)
     for t in trades:
-        pnl_by_expiry[date.fromisoformat(t["expiry"])] += t["pnl"]
-    days = sorted(set(sessions) | set(pnl_by_expiry))
+        pnl_by_day[date.fromisoformat(t["closed"])] += t["pnl"]
+    days = sorted(set(sessions) | set(pnl_by_day))
     equity = peak = initial_equity
     returns, drawdown = [], 0.0
     week_open, week_close = {}, {}  # ISO week -> equity before / after it
     for day in days:
         week = day.isocalendar()[:2]
         week_open.setdefault(week, equity)
-        pnl = pnl_by_expiry.get(day, 0.0)
+        pnl = pnl_by_day.get(day, 0.0)
         returns.append(pnl / equity)
         equity += pnl
         week_close[week] = equity
@@ -410,6 +535,7 @@ def compute_metrics(trades, sessions, initial_equity):
         "cvar_5": statistics.fmean(tail),
         "win_rate": sum(p > 0 for p in pnls) / len(pnls),
         "avg_pnl_per_trade": statistics.fmean(pnls),
+        "total_pnl": round(sum(pnls), 2),
     })
     return metrics
 
@@ -417,10 +543,8 @@ def compute_metrics(trades, sessions, initial_equity):
 # ---------------------------------------------------------------------------
 # The experiment run
 # ---------------------------------------------------------------------------
-def run_experiment(store_path, config, start=None, end=None):
-    """Replay one configuration over the chain store; return the report dict.
-    start/end are inclusive session dates."""
-    sessions, closes = load_store(store_path, start, end)
+def select_candidates(sessions, closes, config):
+    """(candidates, skips) over every session of a loaded store."""
     candidates, skipped = [], []
     for session in sorted(sessions):
         candidate, reason = select_candidate(session, sessions[session], closes, config)
@@ -428,17 +552,76 @@ def run_experiment(store_path, config, start=None, end=None):
             skipped.append(_skip(session, reason))
         else:
             candidates.append(candidate)
-    priced = price_candidates(candidates, config.fill_ratio)
+    return candidates, skipped
+
+
+def price_all(candidates, fill_ratio):
+    """(PricedSpreads, skips for the candidates optopsy could not build)."""
+    priced = price_candidates(candidates, fill_ratio)
     priced_sessions = {spread.session for spread in priced}
-    skipped += [_skip(candidate.session, "optopsy built no spread")
-                for candidate in candidates if candidate.session not in priced_sessions]
-    trades, sizing_skips = size_trades(priced, config)
+    return priced, [_skip(candidate.session, "optopsy built no spread")
+                    for candidate in candidates
+                    if candidate.session not in priced_sessions]
+
+
+def _report(sessions, marks, priced, skipped, config):
+    positions = [(spread, find_exit(spread, marks, config)) for spread in priced]
+    trades, sizing_skips = size_trades(positions, config)
     return {
         "config": asdict(config),
         "sessions": len(sessions),
         "metrics": compute_metrics(trades, sessions, config.initial_equity),
         "trades": trades,
         "skipped": sorted(skipped + sizing_skips, key=lambda skip: skip["session"]),
+    }
+
+
+def run_experiment(store_path, config, start=None, end=None):
+    """Replay one configuration over the chain store; return the report dict.
+    start/end are inclusive session dates."""
+    sessions, closes = load_store(store_path, start, end)
+    candidates, skipped = select_candidates(sessions, closes, config)
+    priced, pricing_skips = price_all(candidates, config.fill_ratio)
+    return _report(sessions, leg_marks(sessions), priced, skipped + pricing_skips,
+                   config)
+
+
+def run_grid(store_path, start=None, end=None,
+             initial_equity=SpreadConfig.initial_equity,
+             risk_pct=SpreadConfig.risk_pct):
+    """Replay every grid cell at every fill level; return the grid report.
+
+    Strikes are chosen once per (short delta, width) and priced once per fill
+    level; only the exits differ between a cell's hold and managed runs."""
+    sessions, closes = load_store(store_path, start, end)
+    marks = leg_marks(sessions)
+    headline, sensitivity = [], []
+    for short_delta, width in product(GRID_SHORT_DELTAS, GRID_WIDTHS):
+        strikes = SpreadConfig(short_delta=short_delta, width=width)
+        candidates, skipped = select_candidates(sessions, closes, strikes)
+        for fill, fill_ratio in FILL_LEVELS:
+            priced, pricing_skips = price_all(candidates, fill_ratio)
+            for exit in EXITS:
+                config = SpreadConfig(short_delta=short_delta, width=width,
+                                      fill_ratio=fill_ratio, exit=exit,
+                                      initial_equity=initial_equity, risk_pct=risk_pct)
+                report = _report(sessions, marks, priced, skipped + pricing_skips,
+                                 config)
+                row = {"short_delta": short_delta, "width": width, "exit": exit,
+                       "fill": fill, "fill_ratio": fill_ratio, **report["metrics"],
+                       "skipped": len(report["skipped"])}
+                sensitivity.append(row)
+                if fill == HEADLINE_FILL:
+                    headline.append(row)
+    return {
+        "grid": {"short_deltas": list(GRID_SHORT_DELTAS), "widths": list(GRID_WIDTHS),
+                 "exits": list(EXITS), "fills": dict(FILL_LEVELS),
+                 "headline_fill": HEADLINE_FILL},
+        "initial_equity": initial_equity,
+        "risk_pct": risk_pct,
+        "sessions": len(sessions),
+        "headline": headline,
+        "fill_sensitivity": sensitivity,
     }
 
 
@@ -459,6 +642,11 @@ def parse_args(argv=None):
     parser.add_argument("--risk-pct", type=float, default=SpreadConfig.risk_pct)
     parser.add_argument("--fill-ratio", type=float, default=SpreadConfig.fill_ratio,
                         help="Share of the half-spread crossed from mid (0..1)")
+    parser.add_argument("--exit", choices=EXITS, default=SpreadConfig.exit,
+                        help="Hold to expiry, or 50%% take-profit / 2x credit stop")
+    parser.add_argument("--grid", action="store_true",
+                        help="Run the whole parameter grid at every fill level "
+                             "(ignores --short-delta, --width, --fill-ratio, --exit)")
     parser.add_argument("--out", help="Also write the JSON report to this path")
     return parser.parse_args(argv)
 
@@ -467,9 +655,13 @@ def main(argv=None):
     args = parse_args(argv)
     config = SpreadConfig(short_delta=args.short_delta, width=args.width,
                           initial_equity=args.equity, risk_pct=args.risk_pct,
-                          fill_ratio=args.fill_ratio)
+                          fill_ratio=args.fill_ratio, exit=args.exit)
     try:
-        report = run_experiment(args.store, config, args.start, args.end)
+        if args.grid:
+            report = run_grid(args.store, args.start, args.end,
+                              initial_equity=args.equity, risk_pct=args.risk_pct)
+        else:
+            report = run_experiment(args.store, config, args.start, args.end)
     except (FileNotFoundError, ValueError, sqlite3.Error) as exc:
         print(f"backtest_spread: {exc}", file=sys.stderr)
         return 2
@@ -477,6 +669,8 @@ def main(argv=None):
     if args.out:
         Path(args.out).write_text(text)
     print(text)
+    if args.grid:
+        return 0 if any(row["trades"] for row in report["headline"]) else 1
     return 0 if report["trades"] else 1
 
 

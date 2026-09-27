@@ -49,7 +49,7 @@ _Avoid_: VIX filter, control
 The sessions a filter declines to trade, reported alongside the sessions it keeps.
 
 **Skipped Session**:
-A session the backtester could not trade: data was missing, or the risk budget could not fit one spread. Unlike a Rejected Session, no filter chose to pass on it.
+A session the backtester could not trade: data was missing, the risk budget could not fit one spread, or five positions were already open. Unlike a Rejected Session, no filter chose to pass on it.
 _Avoid_: rejected, filtered out
 
 **Dev Period**:

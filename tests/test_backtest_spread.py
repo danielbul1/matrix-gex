@@ -247,6 +247,204 @@ def test_equity_too_small_for_one_spread_is_skipped(tmp_path):
         {"session": "2026-03-02", "reason": "max loss of one spread exceeds risk budget"}]
 
 
+def test_no_more_than_five_positions_are_open_at_once(tmp_path):
+    # Mon-Fri entries all expire the following week; the next Monday's 10:00
+    # entry would be a sixth position while the first still awaits settlement.
+    days = [MONDAY + timedelta(days=d) for d in (0, 1, 2, 3, 4, 7)]
+    closes = {day: SPOT for day in days}
+    closes.update({day + timedelta(days=7): 5010.0 for day in days})
+    path = _store(tmp_path, {day: _chain(day, 10, 0) for day in days}, closes)
+    report = _run(path)
+    assert [t["session"] for t in report["trades"]] == [d.isoformat() for d in days[:5]]
+    assert report["skipped"] == [
+        {"session": "2026-03-09", "reason": "5 positions already open"}]
+
+
+def test_a_position_closed_early_frees_a_slot(tmp_path):
+    days = [MONDAY + timedelta(days=d) for d in (0, 1, 2, 3, 4, 7)]
+    closes = {day: SPOT for day in days}
+    closes.update({day + timedelta(days=7): 5010.0 for day in days})
+    sessions = {day: _chain(day, 10, 0) for day in days}
+    # Monday's spread takes profit on Tuesday, before the next Monday.
+    sessions[days[1]] = sessions[days[1]] + _legs(days[1], 12, 0, (2.00, 2.20),
+                                                  (0.60, 0.80))
+    report = _run(_store(tmp_path, sessions, closes), exit="managed")
+    assert len(report["trades"]) == 6
+    assert report["trades"][0]["closed"] == "2026-03-03"
+
+
+# ---------------------------------------------------------------------------
+# Managed exits: 50% take-profit / 2x credit stop on the intraday grid
+# ---------------------------------------------------------------------------
+EXPIRY = MONDAY + timedelta(days=7)
+
+
+def _legs(day, hour, minute, short_quote, long_quote, expiry=EXPIRY):
+    """Only the two legs of the 4900/4875 spread, quoted at one snapshot."""
+    stamp = _ms(day, hour, minute)
+    return [cs.ChainRow(root="SPXW", expiry=expiry.isoformat(), strike=strike,
+                        right="P", snapshot_ms=stamp, bid=bid, ask=ask, iv=IV,
+                        sod_oi=1000.0, vendor_delta=None, vendor_gamma=None,
+                        underlying=SPOT)
+            for strike, (bid, ask) in ((SHORT, short_quote), (LONG, long_quote))]
+
+
+def _managed_store(tmp_path, later_snapshots, settlement=5010.0):
+    """Monday's 10:00 entry plus leg-only snapshots: {day: [rows, ...]}."""
+    sessions = {MONDAY: _chain(MONDAY, 10, 0)}
+    for day, rows in later_snapshots.items():
+        sessions[day] = sessions.get(day, []) + rows
+    return _store(tmp_path, sessions, {MONDAY: SPOT, EXPIRY: settlement})
+
+
+def _exit_costs(short_fill, long_fill):
+    return sum(0.65 + (EXCHANGE_FEE if fill >= 1 else 0.51498)
+               for fill in (short_fill, long_fill))
+
+
+# Credit 3.10: take profit when the buy-back debit is <= 1.55, stop at >= 6.20.
+# Debits below are at 50% fills: buy the short leg at mid + 0.10, sell the long
+# leg at mid - 0.10 (both quotes are 0.20 wide).
+NEAR_TP = ((2.10, 2.30), (0.60, 0.80))   # 2.25 - 0.65 = 1.60
+AT_TP = ((2.00, 2.20), (0.60, 0.80))     # 2.15 - 0.65 = 1.50
+DEEP_TP = ((1.00, 1.20), (0.30, 0.50))   # 1.15 - 0.35 = 0.80
+NEAR_STOP = ((13.80, 14.20), (7.90, 8.30))  # 14.10 - 8.00 = 6.10
+AT_STOP = ((14.00, 14.40), (7.90, 8.30))    # 14.30 - 8.00 = 6.30
+
+
+def test_take_profit_triggers_at_first_snapshot_at_half_the_credit(tmp_path):
+    path = _managed_store(tmp_path, {MONDAY: (
+        _legs(MONDAY, 10, 30, *NEAR_TP) + _legs(MONDAY, 11, 0, *AT_TP)
+        + _legs(MONDAY, 11, 30, *DEEP_TP))})
+    (trade,) = _run(path, exit="managed")["trades"]
+    assert trade["exit"] == "take_profit"
+    assert trade["exit_time"] == "2026-03-02T11:00:00-05:00"
+    assert trade["closed"] == "2026-03-02"
+    assert trade["exit_debit"] == pytest.approx(1.50)
+    costs = COST_PER_SPREAD + _exit_costs(2.15, 0.65)
+    assert trade["costs_per_spread"] == pytest.approx(costs)
+    assert trade["pnl"] == pytest.approx(4 * ((CREDIT - 1.50) * 100 - costs))
+
+
+def test_stop_triggers_at_first_snapshot_costing_twice_the_credit(tmp_path):
+    tuesday = MONDAY + timedelta(days=1)
+    path = _managed_store(tmp_path, {
+        MONDAY: _legs(MONDAY, 15, 30, *NEAR_STOP),
+        tuesday: _legs(tuesday, 11, 0, *AT_STOP) + _legs(tuesday, 11, 30, *NEAR_STOP),
+    }, settlement=4850.0)
+    (trade,) = _run(path, exit="managed")["trades"]
+    assert trade["exit"] == "stop"
+    assert trade["exit_time"] == "2026-03-03T11:00:00-05:00"
+    # The stop pays the same 50% of the spread as the entry, not mid (6.20).
+    assert trade["exit_debit"] == pytest.approx(6.30)
+    costs = COST_PER_SPREAD + _exit_costs(14.30, 8.00)
+    assert trade["pnl"] == pytest.approx(4 * ((CREDIT - 6.30) * 100 - costs))
+
+
+def test_stop_fills_move_with_the_fill_ratio(tmp_path):
+    tuesday = MONDAY + timedelta(days=1)
+    path = _managed_store(tmp_path, {tuesday: _legs(tuesday, 11, 0, *AT_STOP)})
+    # Full spread: credit 2.90, buy back at 14.40 - 7.90 = 6.50 (>= 5.80).
+    (trade,) = _run(path, exit="managed", fill_ratio=1.0)["trades"]
+    assert trade["exit"] == "stop"
+    assert trade["exit_debit"] == pytest.approx(6.50)
+
+
+def test_spread_reaching_neither_is_held_to_expiry(tmp_path):
+    tuesday = MONDAY + timedelta(days=1)
+    path = _managed_store(tmp_path, {
+        MONDAY: _legs(MONDAY, 12, 0, *NEAR_TP),
+        tuesday: _legs(tuesday, 12, 0, *NEAR_STOP),
+        EXPIRY: _legs(EXPIRY, 15, 30, *NEAR_TP),
+    }, settlement=4890.0)
+    (trade,) = _run(path, exit="managed")["trades"]
+    assert trade["exit"] == "expiry"
+    assert trade["closed"] == EXPIRY.isoformat()
+    assert trade["pnl"] == pytest.approx(4 * ((CREDIT - 10) * 100 - COST_PER_SPREAD))
+
+
+def test_hold_variant_ignores_take_profit_snapshots(tmp_path):
+    path = _managed_store(tmp_path, {MONDAY: _legs(MONDAY, 11, 0, *DEEP_TP)})
+    (trade,) = _run(path)["trades"]
+    assert trade["exit"] == "expiry"
+    assert trade["pnl"] == pytest.approx(4 * (CREDIT * 100 - COST_PER_SPREAD))
+
+
+def test_snapshots_with_a_bad_quote_are_not_exits(tmp_path):
+    crossed = ((2.20, 2.00), (0.60, 0.80))
+    path = _managed_store(tmp_path, {MONDAY: (
+        _legs(MONDAY, 10, 30, *crossed) + _legs(MONDAY, 11, 0, *AT_TP))})
+    (trade,) = _run(path, exit="managed")["trades"]
+    assert trade["exit_time"] == "2026-03-02T11:00:00-05:00"
+
+
+# ---------------------------------------------------------------------------
+# The parameter grid and fill sensitivity
+# ---------------------------------------------------------------------------
+def _five_session_store(tmp_path, settlements, expiry_offsets=(4, 7, 9)):
+    sessions, closes = {}, {}
+    for i, settle in enumerate(settlements):
+        session = MONDAY + timedelta(days=i)
+        sessions[session] = _chain(session, 10, 0, expiry_offsets=expiry_offsets)
+        closes[session] = SPOT
+        closes[session + timedelta(days=7)] = settle
+    return _store(tmp_path, sessions, closes)
+
+
+def test_grid_report_has_one_row_per_cell_and_a_sensitivity_table(tmp_path, capsys):
+    path = _five_session_store(tmp_path, [5010.0, 4850.0, 5020.0, 4990.0, 4930.0])
+    out = tmp_path / "grid.json"
+    assert bt.main(["--store", str(path), "--grid", "--out", str(out)]) == 0
+    report = json.loads(out.read_text())
+    cells = {(r["short_delta"], r["width"], r["exit"]) for r in report["headline"]}
+    assert cells == {(d, w, e) for d in (0.10, 0.16, 0.20) for w in (25.0, 50.0)
+                     for e in ("hold", "managed")}
+    assert len(report["headline"]) == 12
+    assert {r["fill"] for r in report["headline"]} == {"50%"}
+    assert all(r["trades"] == 5 for r in report["headline"])
+    sensitivity = {(r["short_delta"], r["width"], r["exit"], r["fill"])
+                   for r in report["fill_sensitivity"]}
+    assert sensitivity == {c + (f,) for c in cells for f in ("mid", "50%", "full")}
+    assert len(report["fill_sensitivity"]) == 36
+    assert json.loads(capsys.readouterr().out) == report
+
+
+def test_headline_cell_matches_a_single_run(tmp_path):
+    path = _five_session_store(tmp_path, [5010.0, 4850.0, 5020.0, 4990.0, 4930.0])
+    report = bt.run_grid(path, initial_equity=1_000_000.0)
+    (row,) = [r for r in report["headline"] if (r["short_delta"], r["width"],
+                                                r["exit"]) == (0.16, 25.0, "hold")]
+    single = _run(path)["metrics"]
+    assert {k: row[k] for k in single} == single
+
+
+def test_pnl_is_ordered_mid_then_half_spread_then_full(tmp_path):
+    # Winners only, and no session re-marks an earlier session's expiry, so
+    # every fill level exits the same way. (A take-profit is a share of the
+    # credit, so on other paths mid can take profit where 50% holds on and
+    # keeps more.)
+    path = _five_session_store(tmp_path, [5010.0] * 5, expiry_offsets=(7,))
+    report = bt.run_grid(path, initial_equity=1_000_000.0)
+    pnl = {(r["short_delta"], r["width"], r["exit"], r["fill"]): r["total_pnl"]
+           for r in report["fill_sensitivity"]}
+    for delta in (0.10, 0.16, 0.20):
+        for width in (25.0, 50.0):
+            for exit in ("hold", "managed"):
+                cell = (delta, width, exit)
+                assert pnl[cell + ("mid",)] >= pnl[cell + ("50%",)] >= pnl[cell + ("full",)]
+                assert pnl[cell + ("mid",)] > pnl[cell + ("full",)]
+
+
+def test_take_profit_pnl_is_ordered_across_fill_levels(tmp_path):
+    # Every fill level takes profit at the same snapshot.
+    path = _managed_store(tmp_path, {MONDAY: _legs(MONDAY, 11, 0, *DEEP_TP)})
+    runs = [_run(path, exit="managed", fill_ratio=ratio)["trades"][0]
+            for ratio in (0.0, 0.5, 1.0)]
+    assert [t["exit"] for t in runs] == ["take_profit"] * 3
+    mid, half, full = (t["pnl"] for t in runs)
+    assert mid > half > full
+
+
 # ---------------------------------------------------------------------------
 # Report over a multi-session store, via the CLI
 # ---------------------------------------------------------------------------
@@ -282,6 +480,17 @@ def test_cli_writes_json_report_over_multi_session_store(tmp_path, capsys):
     assert metrics["max_drawdown"] < 0
     assert math.isfinite(metrics["sharpe"]) and math.isfinite(metrics["sortino"])
     assert json.loads(capsys.readouterr().out) == report
+
+
+def test_cli_runs_the_managed_exit_variant(tmp_path):
+    expiry = MONDAY + timedelta(days=7)
+    rows = _chain(MONDAY, 10, 0) + _legs(MONDAY, 11, 0, (2.00, 2.20), (0.60, 0.80))
+    path = _store(tmp_path, {MONDAY: rows}, {MONDAY: SPOT, expiry: 5010.0})
+    out = tmp_path / "report.json"
+    assert bt.main(["--store", str(path), "--exit", "managed", "--out", str(out)]) == 0
+    report = json.loads(out.read_text())
+    assert report["config"]["exit"] == "managed"
+    assert report["trades"][0]["exit"] == "take_profit"
 
 
 def test_cli_reports_missing_store(tmp_path, capsys):
