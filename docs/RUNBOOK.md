@@ -142,10 +142,17 @@ python tools\backtest_spread.py --store C:\path\chain.sqlite3 --grid --out grid.
   under the same `--fill-ratio` as the entry.
 - Grid: `--grid` runs short delta {0.10, 0.16, 0.20} x width {25, 50} x exit
   {hold, managed}. `headline` has one row per cell at the 50% fill;
-  `fill_sensitivity` repeats every cell at mid, 50% and full spread. With
-  managed exits the fill levels need not rank mid >= 50% >= full: the
+  `fill_sensitivity` repeats every cell at mid, 50% and full spread. The fill
+  levels need not rank mid >= 50% >= full. With managed exits, the
   take-profit is a share of the credit, so a richer mid credit can take profit
-  on a mark where the 50% run holds on and keeps the whole credit.
+  on a mark where the 50% run holds on and keeps the whole credit. In any
+  variant, a richer credit lowers the risk per spread, so more contracts can
+  fit and a losing trade loses more.
+- Open-position cap: a spread expiring today is still open at the 10:00
+  entry (it settles at 16:00), as in Option Omega and Option Alpha. With
+  7DTE entries every session, a held Baseline settles into five entries,
+  then one Skipped Session; managed exits free slots early, so hold and
+  managed runs can trade different sessions.
 
 - Chain store: `railway-service/src/tripity_experiment/chain_store.py`
   defines the schema (`option_chain_snapshot`, one row per contract per
