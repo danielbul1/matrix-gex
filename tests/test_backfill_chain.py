@@ -51,12 +51,12 @@ class FakeClient:
     `spot`, +/- 0.05. Open interest per contract is 1000 plus the day of the
     month of the day the vendor reports it for, so alignment is visible.
     oi_stamping: "sod" stamps each day's OI at 06:30 that day (positions at the
-    previous close); "eod" stamps it at 17:15 on the day whose close it is.
+    previous weekday's close); "date" stamps it with the date only. "eod" stamps it at 17:15 on the day whose close it is.
     """
 
     def __init__(self, sessions, expiry_offsets=(0, 4, 7), times=((10, 0), (10, 30)),
                  oi_stamping="sod", spot=SPOT, fail_on=(), delay=0.0,
-                 missing_oi=()):
+                 missing_oi=(), oi_missing_days=(), oi_jitter=False):
         self.sessions = set(sessions)
         self.expiry_offsets = expiry_offsets
         self.times = times
@@ -65,6 +65,8 @@ class FakeClient:
         self.fail_on = set(fail_on)  # sessions whose greeks call raises once
         self.delay = delay
         self.missing_oi = set(missing_oi)  # (strike, right) absent from OI frames
+        self.oi_missing_days = set(oi_missing_days)  # days with no OI report
+        self.oi_jitter = oi_jitter  # stamp each contract a few seconds apart
         self.calls = []
         self._lock = threading.Lock()
         self.in_flight = 0
@@ -135,16 +137,24 @@ class FakeClient:
     def open_interest(self, root, day, max_dte):
         self._enter("open_interest", root, day, max_dte)
         try:
-            if day.weekday() >= 5:
+            if day.weekday() >= 5 or day in self.oi_missing_days:
                 return pd.DataFrame()
-            if self.oi_stamping == "sod":
-                stamp, value = _stamp(day, 6, 30), self._oi_value(day - timedelta(days=1))
+            if self.oi_stamping == "date":
+                stamp, value = f"{day.isoformat()}T00:00:00.000", self._oi_value(day)
+            elif self.oi_stamping == "sod":
+                previous = day - timedelta(days=1)
+                while previous.weekday() >= 5:
+                    previous -= timedelta(days=1)
+                stamp, value = _stamp(day, 6, 30), self._oi_value(previous)
             else:
                 stamp, value = _stamp(day, 17, 15), self._oi_value(day)
             records = [{"symbol": root, "expiration": e.isoformat(), "strike": strike,
-                        "right": right, "timestamp": stamp, "open_interest": value}
-                       for e in self._expiries() if 0 <= (e - day).days <= max_dte
-                       for strike in STRIKES for right in ("call", "put")
+                        "right": right, "open_interest": value,
+                        "timestamp": stamp[:-6] + f"{i % 60:02d}.000" if self.oi_jitter else stamp}
+                       for i, (e, strike, right) in enumerate(
+                           (e, strike, right) for e in self._expiries()
+                           if 0 <= (e - day).days <= max_dte
+                           for strike in STRIKES for right in ("call", "put"))
                        if (strike, right) not in self.missing_oi]
             return pd.DataFrame(records)
         finally:
@@ -199,10 +209,12 @@ def test_only_expiries_within_max_dte_are_pulled(tmp_path):
     assert pulled == {MONDAY, MONDAY + timedelta(days=7)}
 
 
-def test_grid_times_pick_the_vendor_interval():
-    assert bf.vendor_interval(bf.DEFAULT_TIMES) == "30m"
-    assert bf.vendor_interval(((10, 0), (15, 45))) == "15m"
-    assert bf.vendor_interval(((9, 35),)) == "5m"
+@pytest.mark.parametrize("times, interval", [
+    (bf.DEFAULT_TIMES, "30m"), (((10, 0), (15, 45)), "15m"), (((9, 35),), "5m")])
+def test_grid_times_pick_the_vendor_interval(tmp_path, times, interval):
+    client = FakeClient([MONDAY])
+    bf.run_backfill(client, tmp_path / "chain.sqlite3", [MONDAY], _config(times=times))
+    assert {c[4] for c in client.calls if c[0] == "greeks"} == {interval}
 
 
 def test_both_roots_are_pulled(tmp_path):
@@ -231,6 +243,32 @@ def test_open_interest_after_a_weekend_comes_from_friday(tmp_path):
     assert {r.sod_oi for r in _rows(path)} == {1000.0 + friday.day}
 
 
+def test_each_contract_takes_its_own_open_interest_stamp(tmp_path):
+    # Real reports stamp contracts a few seconds apart.
+    tuesday = MONDAY + timedelta(days=1)
+    path = tmp_path / "chain.sqlite3"
+    bf.run_backfill(FakeClient([tuesday], oi_jitter=True), path, [tuesday], _config())
+    assert {r.sod_oi for r in _rows(path)} == {1000.0 + MONDAY.day}
+
+
+def test_a_stale_morning_report_is_not_used(tmp_path):
+    # Tuesday's report is missing; Monday's morning report holds Friday's close.
+    tuesday = MONDAY + timedelta(days=1)
+    path = tmp_path / "chain.sqlite3"
+    bf.run_backfill(FakeClient([tuesday], oi_missing_days={tuesday}), path, [tuesday],
+                    _config())
+    assert {r.sod_oi for r in _rows(path)} == {None}
+
+
+def test_open_interest_without_a_time_of_day_fails_the_session(tmp_path):
+    path = tmp_path / "chain.sqlite3"
+    summary = bf.run_backfill(FakeClient([MONDAY], oi_stamping="date"), path, [MONDAY],
+                              _config())
+    (failure,) = summary["failed"]
+    assert "no time of day" in failure["error"]
+    assert _rows(path) == []
+
+
 def test_contract_missing_from_open_interest_has_zero(tmp_path):
     # The vendor sends no open-interest message for a contract with none.
     path = tmp_path / "chain.sqlite3"
@@ -238,7 +276,7 @@ def test_contract_missing_from_open_interest_has_zero(tmp_path):
     bf.run_backfill(client, path, [MONDAY], _config())
     by_contract = {(r.strike, r.right): r.sod_oi for r in _rows(path)}
     assert by_contract[(5050.0, "C")] == 0.0
-    assert by_contract[(5050.0, "P")] == 1000.0 + 1  # Sunday's OI for Monday
+    assert by_contract[(5050.0, "P")] == 1000.0 + 27  # Friday's close
 
 
 # ---------------------------------------------------------------------------
@@ -292,6 +330,19 @@ def test_backfill_resumes_after_a_failed_session(tmp_path):
     assert _rows(path) == _rows(clean)
 
 
+def test_sessions_without_vendor_data_are_asked_again(tmp_path):
+    path = tmp_path / "chain.sqlite3"
+    tuesday = MONDAY + timedelta(days=1)
+    first = bf.run_backfill(FakeClient([MONDAY]), path, [MONDAY, tuesday], _config())
+    assert first["completed"] == [MONDAY.isoformat()]
+    assert first["empty"] == [tuesday.isoformat()]
+
+    later = FakeClient([MONDAY, tuesday])
+    second = bf.run_backfill(later, path, [MONDAY, tuesday], _config())
+    assert second["completed"] == [tuesday.isoformat()]
+    assert {c[3] for c in later.calls if c[0] == "greeks"} == {tuesday}
+
+
 def test_concurrency_never_exceeds_the_limit(tmp_path):
     sessions = [MONDAY + timedelta(days=i) for i in range(8)]
     client = FakeClient(sessions, delay=0.01)
@@ -305,8 +356,9 @@ def test_concurrency_never_exceeds_the_limit(tmp_path):
 # Probe mode
 # ---------------------------------------------------------------------------
 class ProbeClient(FakeClient):
-    def __init__(self, spx_underlying, **kwargs):
-        super().__init__([MONDAY, date(2021, 6, 14)], **kwargs)
+    def __init__(self, spx_underlying, serves_early=True, **kwargs):
+        early = [date(2016, 10, 3), date(2018, 1, 2)] if serves_early else []
+        super().__init__([MONDAY, date(2021, 6, 14)] + early, **kwargs)
         self.spx_underlying = spx_underlying
 
     def list_dates(self, root, expiration):
@@ -324,8 +376,17 @@ class ProbeClient(FakeClient):
 def test_probe_answers_the_three_day_one_questions(stamping, answer):
     probe = bf.run_probe(ProbeClient(4246.44, oi_stamping=stamping), probe_date=MONDAY)
     assert probe["earliest_spxw_date"] == "2016-10-03"
+    assert probe["earliest_spxw_date_served"] is True
+    assert probe["spxw_dev_start_served"] is True
     assert probe["open_interest_stamped"] == answer
     assert probe["spx_underlying_before_2022"] is True
+
+
+def test_probe_confirms_listed_dates_with_a_data_request():
+    # The listings may not follow the tier: history that is listed but not served.
+    probe = bf.run_probe(ProbeClient(4246.44, serves_early=False), probe_date=MONDAY)
+    assert probe["earliest_spxw_date_served"] is False
+    assert probe["spxw_dev_start_served"] is False
 
 
 def test_probe_reports_a_missing_spx_underlying():
@@ -339,7 +400,8 @@ def test_probe_mode_prints_the_three_answers(monkeypatch, capsys):
                    client_factory=lambda key: ProbeClient(4246.44))
     out = capsys.readouterr().out
     assert code == 0
-    assert "Earliest SPXW date: 2016-10-03" in out
+    assert "Earliest SPXW date: 2016-10-03 (data returned: yes)" in out
+    assert "SPXW data on 2018-01-02: yes" in out
     assert "Open interest stamped at: start of day" in out
     assert "SPX underlying price before 2022: yes" in out
 
@@ -378,9 +440,10 @@ def test_backfill_command_loads_closes_and_chains(tmp_path, monkeypatch, capsys)
                    fetch_text=_cboe_fetch)
     summary = json.loads(capsys.readouterr().out)
     assert code == 0
-    # Weekdays only; the three sessions with no vendor data complete empty.
-    assert summary["completed"] == [(MONDAY + timedelta(days=i)).isoformat()
-                                    for i in range(5)]
+    # Weekdays only; the three sessions with no vendor data are empty.
+    assert summary["completed"] == [MONDAY.isoformat(), tuesday.isoformat()]
+    assert summary["empty"] == [(MONDAY + timedelta(days=i)).isoformat()
+                                for i in range(2, 5)]
     # Monday sees six expiries within 10 DTE (both sessions' 0/4/7), Tuesday
     # five; 5 strikes x 2 rights x 2 grid times each.
     assert summary["rows_written"] == (6 + 5) * 20
@@ -417,3 +480,20 @@ def test_api_key_never_reaches_the_store_or_output(tmp_path, monkeypatch, capsys
     for text in (captured.out, captured.err, caplog.text):
         assert secret not in text
     assert secret.encode() not in path.read_bytes()
+
+
+def test_vendor_error_outside_a_session_is_redacted(tmp_path, monkeypatch, capsys):
+    secret = "td-secret-77b2"
+    monkeypatch.setenv("THETADATA_API_KEY", secret)
+
+    class RejectingClient(FakeClient):
+        def list_expirations(self, root):
+            raise RuntimeError(f"session expired for {secret}")
+
+    code = bf.main(["--store", str(tmp_path / "chain.sqlite3"), "--start",
+                    MONDAY.isoformat(), "--end", MONDAY.isoformat(), "--skip-cboe"],
+                   client_factory=lambda key: RejectingClient([MONDAY]))
+    captured = capsys.readouterr()
+    assert code == 2
+    assert "session expired for ***" in captured.err
+    assert secret not in captured.out + captured.err

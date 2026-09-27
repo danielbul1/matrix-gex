@@ -156,9 +156,11 @@ Fills the chain store from ThetaData (Options Standard or Pro) through the
 the store or printed.
 
 Run the probe first, before any bulk download. It prints the earliest SPXW
-date, whether open interest is stamped at the start or the end of the day,
-and whether ThetaData supplies an SPX underlying price before 2022. If the
-history starts after 2018-01, upgrade to Pro for the month.
+date (and whether a data request on it actually returns data, since the
+listings may not follow the tier), whether SPXW data comes back for
+2018-01-02, whether open interest is stamped at the start or the end of the
+day, and whether ThetaData supplies an SPX underlying price before 2022. If
+2018-01-02 returns no data, upgrade to Pro for the month.
 
 ```powershell
 pip install -r requirements.txt
@@ -171,16 +173,21 @@ python tools\backfill_chain.py --store C:\path\chain.sqlite3 --start 2024-03-04 
   default every 30 minutes 09:30-16:00 ET): bid, ask, IV and delta from
   ThetaData's first-order greeks, plus the day's open interest. Loads the
   free Cboe VIX and SPX daily closes first (`--skip-cboe` to skip).
-- Open interest is stored as SOD Open Interest: the latest report ThetaData
-  had published by the session's open, i.e. positions at the close of T-1.
-  A contract missing from a report has zero open interest.
+- Open interest is stored as SOD Open Interest, positions at the close of
+  T-1: a report stamped on T before the open, or one stamped after the close
+  of an earlier day. Anything else is refused, so the field stays empty
+  rather than holding look-ahead or T-2 positions; a report without a time
+  of day fails the session. A contract missing from a report has zero open
+  interest.
 - The underlying level is derived from put-call parity on the three strikes
   nearest the money of the nearest expiry, with the canonical greeks engine's
   rate. The summary lists sessions where the level at the last snapshot is
   more than 0.5% from the Cboe SPX close.
 - Checkpoints per session in `backfill_checkpoint`; rerun the same command to
   resume after an interruption. Failed sessions are listed in the summary and
-  retried on the next run (exit code 1 while any failed).
+  retried on the next run (exit code 1 while any failed). Sessions with no
+  vendor data (holidays, or dates the tier does not serve) are listed as
+  empty and asked again on the next run.
 - `--concurrency` caps requests in flight (default 4, the Standard tier's
   limit).
 

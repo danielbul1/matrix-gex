@@ -7,11 +7,17 @@ the chain store, and checkpoint the session. The free Cboe VIX and SPX daily
 closes are loaded first.
 
 Normalization:
-- SOD Open Interest for session T is the latest open interest the vendor had
-  reported by T's open: positions at the close of T-1. ThetaData documents
-  a ~06:30 ET stamp on T; if it instead stamps at the close of T-1, the
-  previous day's report is used. A report stamped after T's open is never
-  used for T. A contract missing from a day's report has zero open interest.
+- SOD Open Interest for session T is positions at the close of T-1. Two
+  vendor stampings qualify: a report stamped on T before the open (ThetaData
+  documents ~06:30 ET), or a report stamped at/after the close of an earlier
+  day (the latest such, reaching back past weekends and holidays). Anything
+  else is refused: a report stamped after T's open is look-ahead, an earlier
+  day's morning report holds positions at the close of T-2, and a stamp with
+  no time of day cannot be told apart and fails the session. Each contract
+  takes its own latest qualifying stamp; a contract missing from the report
+  has zero open interest.
+- Grid rows are ThetaData interval rows, which carry the last quote at the
+  row's timestamp, so the 10:00 row never holds later quotes.
 - The underlying level at each snapshot comes from put-call parity under the
   canonical greeks engine's model (rate DEFAULT_RATE, no dividends):
   S = C - P + K e^(-rT), the median over the PARITY_PAIRS strikes nearest the
@@ -19,13 +25,17 @@ Normalization:
   snapshot is cross-checked against the Cboe SPX close.
 
 Resilience: a session is checkpointed once all its rows are written, and a
-rerun skips checkpointed sessions. At most `concurrency` vendor requests are
+rerun skips checkpointed sessions. A session with no vendor data (a holiday,
+or a date the tier does not serve) is reported as empty and not checkpointed,
+so a rerun asks again. At most `concurrency` vendor requests are
 in flight at once (4 on the Standard tier). A failed session is reported and
 left unchecked for the next run.
 
 Probe (--probe) answers the day-one questions before any bulk download: the
-earliest SPXW date, whether open interest is stamped at the start or the end
-of the day, and whether an SPX underlying price is supplied before 2022.
+earliest SPXW date (the earliest listed, confirmed with a data request, plus
+whether 2018-01 data comes back, since the listings may not follow the
+tier), whether open interest is stamped at the start or the end of the day,
+and whether an SPX underlying price is supplied before 2022.
 
 The API key is read from THETADATA_API_KEY and never written or printed.
 Requires Python 3.12+ (the `thetadata` library's floor).
@@ -43,7 +53,6 @@ import json
 import logging
 import math
 import os
-import sqlite3
 import statistics
 import sys
 import threading
@@ -73,6 +82,7 @@ PARITY_PAIRS = 3  # strikes nearest the money used for the parity level
 PARITY_CLOSE_TOLERANCE = 0.005  # relative gap to the Cboe close worth reporting
 OI_LOOKBACK_DAYS = 7  # how far back to look for a close-of-day OI report
 PROBE_PRE_2022_DATE = date(2021, 6, 14)  # a Monday with an SPX monthly that week
+PROBE_DEV_START = date(2018, 1, 2)  # first session of the Dev Period
 
 CBOE_URL = "https://cdn.cboe.com/api/global/us_indices/daily_prices/{}_History.csv"
 CBOE_CLOSE_COLUMNS = {"VIX": "CLOSE", "SPX": "SPX"}
@@ -106,8 +116,9 @@ class ThetaDataClient:
     def __init__(self, api_key):
         from thetadata import ThetaClient
         from thetadata.errors import NoDataFoundError
-        # The library logs the full auth response at INFO.
-        logging.getLogger("thetadata").setLevel(logging.WARNING)
+        # The library logs the full auth response at INFO and the server's
+        # rejection at ERROR; its errors reach us as exceptions, redacted.
+        logging.getLogger("thetadata").setLevel(logging.CRITICAL + 1)
         self._no_data = NoDataFoundError
         self._client = ThetaClient(api_key=api_key, dataframe_type="pandas")
 
@@ -133,7 +144,7 @@ class ThetaDataClient:
                           expiration="*", date=day, max_dte=max_dte)
 
 
-class _Limited:
+class _ConcurrencyCappedClient:
     """Wraps a client so at most `limit` requests are in flight at once."""
 
     def __init__(self, client, limit):
@@ -182,9 +193,22 @@ def _right(value):
     return str(value).strip()[0].upper()
 
 
-def _contract(root, record):
-    return (root, pd.Timestamp(record["expiration"]).date().isoformat(),
-            float(record["strike"]), _right(record["right"]))
+def _chain_row(root, record, snapshot_ms):
+    """A vendor greeks record as a chain-store row, before OI and the
+    underlying level are attached."""
+    iv = _number(record.get("implied_vol"))
+    return chain_store.ChainRow(
+        root=root, expiry=pd.Timestamp(record["expiration"]).date().isoformat(),
+        strike=float(record["strike"]), right=_right(record["right"]),
+        snapshot_ms=snapshot_ms, bid=_number(record.get("bid")),
+        ask=_number(record.get("ask")), iv=iv if iv else None, sod_oi=None,
+        vendor_delta=_number(record.get("delta")),
+        vendor_gamma=_number(record.get("gamma")), underlying=None)
+
+
+def _contract_of(row):
+    """The key an open-interest report is looked up by."""
+    return (row.root, row.expiry, row.strike, row.right)
 
 
 def _et_ms(day, hour, minute):
@@ -195,26 +219,39 @@ def _et_ms(day, hour, minute):
 # ---------------------------------------------------------------------------
 # SOD Open Interest
 # ---------------------------------------------------------------------------
+def _is_date_only(stamp):
+    return (stamp.hour, stamp.minute, stamp.second, stamp.microsecond) == (0, 0, 0, 0)
+
+
+def _holds_previous_close(stamp, session):
+    """Whether a report stamped at `stamp` holds positions at the close of
+    the session before `session`."""
+    if stamp.date() == session:
+        return (stamp.hour, stamp.minute) < MARKET_OPEN
+    return stamp.date() < session and (stamp.hour, stamp.minute) >= MARKET_CLOSE
+
+
 def sod_open_interest(client, root, session, max_dte):
-    """{(root, expiry, strike, right): open interest} known at the session's
-    open, or None when the vendor has no report. Takes the latest report
-    stamped at/before the open, looking back past weekends and holidays."""
-    open_ms = _et_ms(session, *MARKET_OPEN)
+    """{contract key: SOD Open Interest} for the session, or None when no
+    qualifying report exists. Walks back from the session to the first day
+    with a qualifying report."""
     for back in range(OI_LOOKBACK_DAYS + 1):
         day = session - timedelta(days=back)
         if day.weekday() >= 5:
             continue
-        frame = client.open_interest(root, day, max_dte)
-        if frame.empty:
-            continue
-        records = frame.to_dict("records")
-        stamps = [_to_et(r["timestamp"]).timestamp() * 1000 for r in records]
-        known = [s for s in stamps if s <= open_ms]
-        if not known:
-            continue  # stamped after the open: this report is for later sessions
-        latest = max(known)
-        return {_contract(root, r): float(r["open_interest"])
-                for r, s in zip(records, stamps) if s == latest}
+        latest = {}  # contract key -> (stamp, open interest)
+        for record in client.open_interest(root, day, max_dte + back).to_dict("records"):
+            stamp = _to_et(record["timestamp"])
+            if _is_date_only(stamp):
+                raise ValueError(f"{root} open interest for {day} has no time of day;"
+                                 " cannot tell start-of-day from end-of-day stamping")
+            if not _holds_previous_close(stamp, session):
+                continue
+            key = _contract_of(_chain_row(root, record, 0))
+            if key not in latest or stamp > latest[key][0]:
+                latest[key] = (stamp, float(record["open_interest"]))
+        if latest:
+            return {key: oi for key, (_, oi) in latest.items()}
     return None
 
 
@@ -259,31 +296,21 @@ def fetch_session(client, session, expirations, config):
     """[ChainRow, ...] for one session across every configured root."""
     interval = vendor_interval(config.times)
     grid = set(config.times)
-    raw = []  # (contract, snapshot_ms, record)
+    rows = []
     for root in config.roots:
         expiries = [e for e in expirations[root] if 0 <= (e - session).days <= config.max_dte]
-        root_raw = []
+        root_rows = []
         for expiry in expiries:
             frame = client.greeks(root, expiry, session, interval)
             for record in frame.to_dict("records"):
                 stamp = _to_et(record["timestamp"])
-                if stamp.date() != session or (stamp.hour, stamp.minute) not in grid:
-                    continue
-                snapshot_ms = _et_ms(session, stamp.hour, stamp.minute)
-                root_raw.append((_contract(root, record), snapshot_ms, record))
-        if root_raw:
+                if stamp.date() == session and (stamp.hour, stamp.minute) in grid:
+                    root_rows.append(_chain_row(root, record,
+                                                _et_ms(session, stamp.hour, stamp.minute)))
+        if root_rows:
             oi = sod_open_interest(client, root, session, config.max_dte)
-            raw += [(contract, ms, record, oi) for contract, ms, record in root_raw]
-    rows = []
-    for (root, expiry, strike, right), snapshot_ms, record, oi in raw:
-        iv = _number(record.get("implied_vol"))
-        rows.append(chain_store.ChainRow(
-            root=root, expiry=expiry, strike=strike, right=right,
-            snapshot_ms=snapshot_ms, bid=_number(record.get("bid")),
-            ask=_number(record.get("ask")), iv=iv if iv else None,
-            sod_oi=None if oi is None else oi.get((root, expiry, strike, right), 0.0),
-            vendor_delta=_number(record.get("delta")),
-            vendor_gamma=_number(record.get("gamma")), underlying=None))
+            rows += root_rows if oi is None else [
+                replace(row, sod_oi=oi.get(_contract_of(row), 0.0)) for row in root_rows]
     by_snapshot = {}
     for row in rows:
         by_snapshot.setdefault(row.snapshot_ms, []).append(row)
@@ -327,7 +354,7 @@ def _parity_mismatch(session, rows, closes):
 def run_backfill(client, store_path, sessions, config, redact=str):
     """Backfill `sessions` into the store at store_path; returns the summary.
     redact: applied to every error message before it enters the summary."""
-    client = _Limited(client, config.concurrency)
+    client = _ConcurrencyCappedClient(client, config.concurrency)
     connection = chain_store.connect(store_path)
     try:
         connection.executescript(CHECKPOINT_SCHEMA)
@@ -335,7 +362,7 @@ def run_backfill(client, store_path, sessions, config, redact=str):
         todo = sorted(set(sessions) - done)
         closes = chain_store.read_daily_closes(connection, "SPX")
         summary = {"sessions": len(set(sessions)), "already_done": len(set(sessions) & done),
-                   "completed": [], "failed": [], "rows_written": 0,
+                   "completed": [], "empty": [], "failed": [], "rows_written": 0,
                    "parity_mismatches": []}
         if not todo:
             return summary
@@ -353,6 +380,9 @@ def run_backfill(client, store_path, sessions, config, redact=str):
                         "session": session.isoformat(),
                         "error": redact(f"{type(exc).__name__}: {exc}")})
                     continue
+                if not rows:  # a holiday, or a date the tier does not serve
+                    summary["empty"].append(session.isoformat())
+                    continue
                 chain_store.write_rows(connection, rows)
                 _checkpoint(connection, session, rows, config.roots)
                 summary["completed"].append(session.isoformat())
@@ -363,6 +393,7 @@ def run_backfill(client, store_path, sessions, config, redact=str):
     finally:
         connection.close()
     summary["completed"].sort()
+    summary["empty"].sort()
     summary["failed"].sort(key=lambda f: f["session"])
     summary["parity_mismatches"].sort(key=lambda m: m["session"])
     return summary
@@ -395,6 +426,8 @@ def _stamping(frame, day):
     if frame.empty:
         return "unknown (no open interest reported)"
     stamp = _to_et(frame["timestamp"].iloc[0])
+    if _is_date_only(stamp):
+        return "unknown (date only, no time of day)"
     if stamp.date() < day or (stamp.hour, stamp.minute) < MARKET_OPEN:
         return "start of day"
     if (stamp.hour, stamp.minute) >= MARKET_CLOSE:
@@ -404,11 +437,17 @@ def _stamping(frame, day):
 
 def run_probe(client, probe_date):
     """The three day-one answers, as a dict."""
+    interval = vendor_interval(DEFAULT_TIMES)
     spxw_expirations = _dates(client.list_expirations("SPXW"), "expiration")
-    earliest = None
+    earliest, earliest_served = None, False
     if spxw_expirations:
         quote_dates = _dates(client.list_dates("SPXW", spxw_expirations[0]), "date")
-        earliest = (quote_dates or spxw_expirations)[0].isoformat()
+        earliest = (quote_dates or spxw_expirations)[0]
+        earliest_served = not client.greeks("SPXW", spxw_expirations[0], earliest,
+                                            interval).empty
+    dev_expiry = next((e for e in spxw_expirations if e > PROBE_DEV_START), None)
+    dev_start_served = dev_expiry is not None and not client.greeks(
+        "SPXW", dev_expiry, PROBE_DEV_START, interval).empty
 
     stamped = _stamping(client.open_interest("SPXW", probe_date, 10), probe_date)
 
@@ -416,12 +455,14 @@ def run_probe(client, probe_date):
                        if e > PROBE_PRE_2022_DATE), None)
     supplied = False
     if spx_expiry is not None:
-        frame = client.greeks("SPX", spx_expiry, PROBE_PRE_2022_DATE,
-                              vendor_interval(DEFAULT_TIMES))
+        frame = client.greeks("SPX", spx_expiry, PROBE_PRE_2022_DATE, interval)
         if not frame.empty and "underlying_price" in frame:
             prices = pd.to_numeric(frame["underlying_price"], errors="coerce")
             supplied = bool((prices > 0).any())
-    return {"earliest_spxw_date": earliest, "open_interest_stamped": stamped,
+    return {"earliest_spxw_date": earliest and earliest.isoformat(),
+            "earliest_spxw_date_served": earliest_served,
+            "spxw_dev_start_served": dev_start_served,
+            "open_interest_stamped": stamped,
             "spx_underlying_before_2022": supplied}
 
 
@@ -494,7 +535,11 @@ def main(argv=None, client_factory=ThetaDataClient, fetch_text=_http_get):
         if args.probe:
             probe = run_probe(client, args.probe_date or _last_weekday_before(
                 datetime.now(ET).date()))
-            print(f"Earliest SPXW date: {probe['earliest_spxw_date'] or 'none listed'}")
+            served = "yes" if probe["earliest_spxw_date_served"] else "no"
+            print(f"Earliest SPXW date: {probe['earliest_spxw_date'] or 'none listed'}"
+                  f" (data returned: {served})")
+            print(f"SPXW data on {PROBE_DEV_START}: "
+                  f"{'yes' if probe['spxw_dev_start_served'] else 'no'}")
             print(f"Open interest stamped at: {probe['open_interest_stamped']}")
             print("SPX underlying price before 2022: "
                   f"{'yes' if probe['spx_underlying_before_2022'] else 'no'}")
@@ -509,8 +554,8 @@ def main(argv=None, client_factory=ThetaDataClient, fetch_text=_http_get):
                 connection.close()
         summary = run_backfill(client, args.store, _weekdays(args.start, args.end),
                                config, redact=redact)
-    except (OSError, ValueError, sqlite3.Error) as exc:
-        print(f"backfill_chain: {redact(exc)}", file=sys.stderr)
+    except Exception as exc:  # vendor errors included; never an unredacted traceback
+        print(f"backfill_chain: {type(exc).__name__}: {redact(exc)}", file=sys.stderr)
         return 2
     print(json.dumps(summary, indent=2))
     return 1 if summary["failed"] else 0
