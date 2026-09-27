@@ -39,6 +39,11 @@ def _ms(day, hour, minute=0):
                         tzinfo=ET).timestamp() * 1000)
 
 
+def _price(spot, strike, T, right):
+    """Black-Scholes at the canonical engine's rate: the fake's quote mid."""
+    return mg.bs_price(spot, strike, T, IV, is_call=right == "call")
+
+
 def _stamp(day, hour, minute=0):
     """A vendor timestamp string, ET wall-clock ('YYYY-MM-DDTHH:mm:ss.SSS')."""
     return f"{day.isoformat()}T{hour:02d}:{minute:02d}:00.000"
@@ -48,7 +53,7 @@ class FakeClient:
     """Canned vendor frames for a few sessions.
 
     Every option quote is Black-Scholes at the canonical engine's rate from
-    `spot`, +/- 0.05. Open interest per contract is 1000 plus the day of the
+    `spot` and IV 15%, +/- 0.05 (the bid floored at 0). Open interest per contract is 1000 plus the day of the
     month of the day the vendor reports it for, so alignment is visible.
     oi_stamping: "sod" stamps each day's OI at 06:30 that day (positions at the
     previous weekday's close); "date" stamps it with the date only. "eod" stamps it at 17:15 on the day whose close it is.
@@ -99,8 +104,8 @@ class FakeClient:
         return pd.DataFrame({"date": [s.isoformat() for s in sorted(self.sessions)
                                       if s <= expiration]})
 
-    def greeks(self, root, expiration, day, interval):
-        self._enter("greeks", root, expiration, day, interval)
+    def quotes(self, root, day, interval, max_dte):
+        self._enter("quotes", root, day, interval, max_dte)
         try:
             if day in self.fail_on:
                 self.fail_on.discard(day)
@@ -108,28 +113,32 @@ class FakeClient:
             if day not in self.sessions:
                 return pd.DataFrame()
             records = []
-            for hour, minute in ((9, 30),) + tuple(self.times):
-                stamp_ms = _ms(day, hour, minute)
-                T = mg.years_to_expiry(expiration.isoformat(), root, stamp_ms)
-                for strike in STRIKES:
-                    for right in ("call", "put"):
-                        is_call = right == "call"
-                        price = mg.bs_price(self.spot, strike, T, IV, is_call=is_call)
-                        records.append({
-                            "symbol": root, "expiration": expiration.isoformat(),
-                            "strike": strike, "right": right,
-                            "timestamp": _stamp(day, hour, minute),
-                            "bid": round(max(price - 0.05, 0.0), 2),
-                            "ask": round(price + 0.05, 2),
-                            "delta": mg.bs_delta(self.spot, strike, T, IV, is_call=is_call),
-                            "theta": -1.0, "vega": 2.0, "rho": 0.1,
-                            "implied_vol": IV, "iv_error": 0.0,
-                            "underlying_timestamp": _stamp(day, hour, minute),
-                            "underlying_price": 0.0,
-                        })
+            for expiration in self._expiries():
+                if not 0 <= (expiration - day).days <= max_dte:
+                    continue
+                for hour, minute in ((9, 30),) + tuple(self.times):
+                    stamp_ms = _ms(day, hour, minute)
+                    T = mg.years_to_expiry(expiration.isoformat(), root, stamp_ms)
+                    for strike in STRIKES:
+                        for right in ("call", "put"):
+                            price = _price(self.spot, strike, T, right)
+                            records.append({
+                                "symbol": root, "expiration": expiration.isoformat(),
+                                "strike": strike, "right": right,
+                                "timestamp": _stamp(day, hour, minute),
+                                "bid_size": 10, "bid_exchange": 5,
+                                "bid": max(price - 0.05, 0.0), "bid_condition": 0,
+                                "ask_size": 10, "ask_exchange": 5,
+                                "ask": price + 0.05, "ask_condition": 0,
+                            })
             return pd.DataFrame(records)
         finally:
             self._leave()
+
+    def index_price(self, symbol, day, interval):
+        self._enter("index_price", symbol, day, interval)
+        self._leave()
+        return pd.DataFrame({"timestamp": [_stamp(day, 10)], "price": [self.spot]})
 
     def _oi_value(self, reported_for):
         return 1000.0 + reported_for.day
@@ -190,14 +199,22 @@ def test_vendor_rows_are_normalized_into_the_chain_store(tmp_path):
     row = next(r for r in rows if r.expiry == "2026-03-09" and r.strike == 4975.0
                and r.right == "P" and r.snapshot_ms == _ms(MONDAY, 10))
     T = mg.years_to_expiry("2026-03-09", "SPXW", _ms(MONDAY, 10))
-    price = mg.bs_price(SPOT, 4975.0, T, IV, is_call=False)
+    price = _price(SPOT, 4975.0, T, "put")
     assert row.root == "SPXW"
-    assert row.bid == pytest.approx(round(price - 0.05, 2))
-    assert row.ask == pytest.approx(round(price + 0.05, 2))
-    assert row.iv == IV
-    assert row.vendor_delta == pytest.approx(mg.bs_delta(SPOT, 4975.0, T, IV, is_call=False))
-    assert row.vendor_gamma is None  # first-order greeks carry no gamma
+    assert row.bid == pytest.approx(price - 0.05)
+    assert row.ask == pytest.approx(price + 0.05)
+    assert row.vendor_delta is None and row.vendor_gamma is None  # quotes carry no greeks
     assert {r.right for r in rows} == {"C", "P"}
+
+
+def test_iv_is_solved_from_the_quote_mid_and_the_parity_level(tmp_path):
+    path = tmp_path / "chain.sqlite3"
+    bf.run_backfill(FakeClient([MONDAY], spot=5012.34), path, [MONDAY], _config())
+    rows = _rows(path)
+    priced = [r for r in rows if r.bid > 0]
+    assert priced and all(r.iv == pytest.approx(IV, abs=1e-6) for r in priced)
+    # No bid, no mid: nothing to solve from.
+    assert all(r.iv is None for r in rows if r.bid == 0)
 
 
 def test_only_expiries_within_max_dte_are_pulled(tmp_path):
@@ -205,8 +222,7 @@ def test_only_expiries_within_max_dte_are_pulled(tmp_path):
     client = FakeClient([MONDAY], expiry_offsets=(0, 7, 11))
     bf.run_backfill(client, path, [MONDAY], _config())
     assert {r.expiry for r in _rows(path)} == {"2026-03-02", "2026-03-09"}
-    pulled = {c[2] for c in client.calls if c[0] == "greeks"}
-    assert pulled == {MONDAY, MONDAY + timedelta(days=7)}
+    assert {c[4] for c in client.calls if c[0] == "quotes"} == {10}
 
 
 @pytest.mark.parametrize("times, interval", [
@@ -214,7 +230,7 @@ def test_only_expiries_within_max_dte_are_pulled(tmp_path):
 def test_grid_times_pick_the_vendor_interval(tmp_path, times, interval):
     client = FakeClient([MONDAY])
     bf.run_backfill(client, tmp_path / "chain.sqlite3", [MONDAY], _config(times=times))
-    assert {c[4] for c in client.calls if c[0] == "greeks"} == {interval}
+    assert {c[3] for c in client.calls if c[0] == "quotes"} == {interval}
 
 
 def test_both_roots_are_pulled(tmp_path):
@@ -323,7 +339,7 @@ def test_backfill_resumes_after_a_failed_session(tmp_path):
     assert second["failed"] == []
     assert second["completed"] == [sessions[1].isoformat()]
     assert second["already_done"] == 2
-    assert {c[3] for c in retry.calls if c[0] == "greeks"} == {sessions[1]}
+    assert {c[2] for c in retry.calls if c[0] == "quotes"} == {sessions[1]}
 
     clean = tmp_path / "clean.sqlite3"
     bf.run_backfill(FakeClient(sessions), clean, sessions, _config())
@@ -340,7 +356,7 @@ def test_sessions_without_vendor_data_are_asked_again(tmp_path):
     later = FakeClient([MONDAY, tuesday])
     second = bf.run_backfill(later, path, [MONDAY, tuesday], _config())
     assert second["completed"] == [tuesday.isoformat()]
-    assert {c[3] for c in later.calls if c[0] == "greeks"} == {tuesday}
+    assert {c[2] for c in later.calls if c[0] == "quotes"} == {tuesday}
 
 
 def test_concurrency_never_exceeds_the_limit(tmp_path):
@@ -366,9 +382,9 @@ class ProbeClient(FakeClient):
         self._leave()
         return pd.DataFrame({"date": ["2016-10-03", "2016-10-04"]})
 
-    def greeks(self, root, expiration, day, interval):
-        frame = super().greeks(root, expiration, day, interval)
-        return frame.assign(underlying_price=self.spx_underlying)
+    def index_price(self, symbol, day, interval):
+        frame = super().index_price(symbol, day, interval)
+        return frame.assign(price=self.spx_underlying)
 
 
 @pytest.mark.parametrize("stamping, answer", [("sod", "start of day"),
@@ -465,7 +481,7 @@ def test_api_key_never_reaches_the_store_or_output(tmp_path, monkeypatch, capsys
     monkeypatch.setenv("THETADATA_API_KEY", secret)
 
     class LeakyClient(FakeClient):
-        def greeks(self, root, expiration, day, interval):
+        def quotes(self, root, day, interval, max_dte):
             raise RuntimeError(f"auth rejected for key {secret}")
 
     path = tmp_path / "chain.sqlite3"
@@ -482,7 +498,7 @@ def test_api_key_never_reaches_the_store_or_output(tmp_path, monkeypatch, capsys
     assert secret.encode() not in path.read_bytes()
 
 
-def test_vendor_error_outside_a_session_is_redacted(tmp_path, monkeypatch, capsys):
+def test_vendor_error_outside_a_session_is_redacted(monkeypatch, capsys):
     secret = "td-secret-77b2"
     monkeypatch.setenv("THETADATA_API_KEY", secret)
 
@@ -490,9 +506,7 @@ def test_vendor_error_outside_a_session_is_redacted(tmp_path, monkeypatch, capsy
         def list_expirations(self, root):
             raise RuntimeError(f"session expired for {secret}")
 
-    code = bf.main(["--store", str(tmp_path / "chain.sqlite3"), "--start",
-                    MONDAY.isoformat(), "--end", MONDAY.isoformat(), "--skip-cboe"],
-                   client_factory=lambda key: RejectingClient([MONDAY]))
+    code = bf.main(["--probe"], client_factory=lambda key: RejectingClient([MONDAY]))
     captured = capsys.readouterr()
     assert code == 2
     assert "session expired for ***" in captured.err

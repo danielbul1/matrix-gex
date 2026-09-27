@@ -83,6 +83,34 @@ def bs_vega(S: float, K: float, T: float, sigma: float, r: float = DEFAULT_RATE)
     return S * math.sqrt(max(T, MIN_T)) * norm_pdf(d1) / 100
 
 
+MAX_SIGMA = 5.0  # norm_iv's validity ceiling
+IV_TOLERANCE = 1e-9
+
+
+def implied_vol(price: float, S: float, K: float, T: float, r: float = DEFAULT_RATE,
+                is_call: bool = True) -> float | None:
+    """The sigma at which bs_price matches price, or None when no sigma in
+    [MIN_SIGMA, MAX_SIGMA] does (a price outside the no-arbitrage bounds,
+    or one too close to intrinsic to resolve). Newton steps on vega, kept
+    inside a shrinking bisection bracket."""
+    lo, hi = MIN_SIGMA, MAX_SIGMA
+    if not (bs_price(S, K, T, lo, r, is_call) <= price <= bs_price(S, K, T, hi, r, is_call)):
+        return None
+    sigma = 0.2
+    for _ in range(100):
+        diff = bs_price(S, K, T, sigma, r, is_call) - price
+        if diff > 0:
+            hi = sigma
+        else:
+            lo = sigma
+        if abs(diff) < IV_TOLERANCE or hi - lo < IV_TOLERANCE:
+            break
+        vega = bs_vega(S, K, T, sigma, r) * 100
+        step = sigma - diff / vega if vega > 0 else lo
+        sigma = step if lo < step < hi else (lo + hi) / 2
+    return sigma
+
+
 def bs_theta(S: float, K: float, T: float, sigma: float, r: float = DEFAULT_RATE, is_call: bool = True) -> float:
     """Per calendar day (annual theta / 365)."""
     d1, d2 = d1d2(S, K, T, sigma, r)

@@ -150,17 +150,20 @@ python tools\backtest_spread.py --store C:\path\chain.sqlite3 --short-delta 0.10
 
 ## Chain Store Backfill
 
-Fills the chain store from ThetaData (Options Standard or Pro) through the
-`thetadata` Python library: a direct connection, no Theta Terminal, Python
-3.12+. The API key is read from `THETADATA_API_KEY` and is never written to
-the store or printed.
+Fills the chain store from ThetaData through the `thetadata` Python library:
+a direct connection, no Theta Terminal, Python 3.12+. It uses only the quote
+and open-interest endpoints, which every paid options tier includes, and
+solves IV itself, so Options Standard ($80/month, history from 2016-01-01)
+is enough and no index subscription is needed. The API key is read from
+`THETADATA_API_KEY` and is never written to the store or printed.
 
 Run the probe first, before any bulk download. It prints the earliest SPXW
 date (and whether a data request on it actually returns data, since the
 listings may not follow the tier), whether SPXW data comes back for
 2018-01-02, whether open interest is stamped at the start or the end of the
-day, and whether ThetaData supplies an SPX underlying price before 2022. If
-2018-01-02 returns no data, upgrade to Pro for the month.
+day, and whether ThetaData supplies an SPX index price before 2022 (only
+informational: the backfill derives its own level). If 2018-01-02 returns no
+data, upgrade to Pro for the month.
 
 ```powershell
 pip install -r requirements.txt
@@ -170,9 +173,10 @@ python tools\backfill_chain.py --store C:\path\chain.sqlite3 --start 2024-03-04 
 ```
 
 - Pulls SPX and SPXW, 0-10 DTE (`--max-dte`), at the grid times (`--times`,
-  default every 30 minutes 09:30-16:00 ET): bid, ask, IV and delta from
-  ThetaData's first-order greeks, plus the day's open interest. Loads the
-  free Cboe VIX and SPX daily closes first (`--skip-cboe` to skip).
+  default every 30 minutes 09:30-16:00 ET): the NBBO bid and ask as of each
+  grid time, plus the day's open interest. One quote request per root per
+  session. Loads the free Cboe VIX and SPX daily closes first (`--skip-cboe`
+  to skip).
 - Open interest is stored as SOD Open Interest, positions at the close of
   T-1: a report stamped on T before the open, or one stamped after the close
   of an earlier day. Anything else is refused, so the field stays empty
@@ -183,13 +187,18 @@ python tools\backfill_chain.py --store C:\path\chain.sqlite3 --start 2024-03-04 
   nearest the money of the nearest expiry, with the canonical greeks engine's
   rate. The summary lists sessions where the level at the last snapshot is
   more than 0.5% from the Cboe SPX close.
+- IV is the canonical engine's `implied_vol` of each quote mid against that
+  level, so the backtester reprices the stored quotes exactly. Contracts
+  with no bid or a crossed quote have no IV; vendor delta and gamma stay
+  empty. Solving IV costs roughly 5 s of CPU per full session (about 3 hours
+  for 2018-2026).
 - Checkpoints per session in `backfill_checkpoint`; rerun the same command to
   resume after an interruption. Failed sessions are listed in the summary and
   retried on the next run (exit code 1 while any failed). Sessions with no
   vendor data (holidays, or dates the tier does not serve) are listed as
   empty and asked again on the next run.
 - `--concurrency` caps requests in flight (default 4, the Standard tier's
-  limit).
+  limit; 8 on Pro).
 
 ## Regime Journal
 

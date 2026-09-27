@@ -1,10 +1,14 @@
 """Backfill the chain store from ThetaData, or probe what the subscription has.
 
 Backfill: for every weekday in [start, end] and every root (SPX, SPXW), pull
-the 0-max_dte expiries' first-order greeks at the grid times -- bid, ask, IV
-and delta per contract -- plus the day's open interest, normalize them into
-the chain store, and checkpoint the session. The free Cboe VIX and SPX daily
-closes are loaded first.
+the 0-max_dte expiries' NBBO quotes at the grid times plus the day's open
+interest, normalize them into the chain store, and checkpoint the session.
+The free Cboe VIX and SPX daily closes are loaded first.
+
+Only quote and open-interest endpoints are used: ThetaData's docs disagree on
+whether historical greeks and IV need the Pro tier, and its greeks rest on
+its index feed, which Standard serves only from 2022. IV is solved here
+instead, so the backfill needs neither.
 
 Normalization:
 - SOD Open Interest for session T is positions at the close of T-1. Two
@@ -23,6 +27,11 @@ Normalization:
   S = C - P + K e^(-rT), the median over the PARITY_PAIRS strikes nearest the
   money on the nearest unexpired expiry. The level at a session's last
   snapshot is cross-checked against the Cboe SPX close.
+- IV is the canonical engine's implied_vol of the quote mid against that
+  level, so the backtester's deltas and GEX reprice the quotes exactly. A
+  contract with no bid, a crossed quote, a mid outside the no-arbitrage
+  bounds, or no parity level at its snapshot has no IV. vendor_delta and
+  vendor_gamma stay empty: quotes carry no vendor greeks.
 
 Resilience: a session is checkpointed once all its rows are written, and a
 rerun skips checkpointed sessions. A session with no vendor data (a holiday,
@@ -35,7 +44,9 @@ Probe (--probe) answers the day-one questions before any bulk download: the
 earliest SPXW date (the earliest listed, confirmed with a data request, plus
 whether 2018-01 data comes back, since the listings may not follow the
 tier), whether open interest is stamped at the start or the end of the day,
-and whether an SPX underlying price is supplied before 2022.
+and whether ThetaData's SPX index price is supplied before 2022 (the
+Standard index tier starts in 2022; the backfill derives its own level, so a
+"no" only rules out cross-checks against ThetaData's index).
 
 The API key is read from THETADATA_API_KEY and never written or printed.
 Requires Python 3.12+ (the `thetadata` library's floor).
@@ -81,7 +92,7 @@ VENDOR_INTERVALS = ((60, "1h"), (30, "30m"), (15, "15m"), (10, "10m"),
 PARITY_PAIRS = 3  # strikes nearest the money used for the parity level
 PARITY_CLOSE_TOLERANCE = 0.005  # relative gap to the Cboe close worth reporting
 OI_LOOKBACK_DAYS = 7  # how far back to look for a close-of-day OI report
-PROBE_PRE_2022_DATE = date(2021, 6, 14)  # a Monday with an SPX monthly that week
+PROBE_PRE_2022_DATE = date(2021, 6, 14)  # any pre-2022 session
 PROBE_DEV_START = date(2018, 1, 2)  # first session of the Dev Period
 
 CBOE_URL = "https://cdn.cboe.com/api/global/us_indices/daily_prices/{}_History.csv"
@@ -135,13 +146,17 @@ class ThetaDataClient:
         return self._call("option_list_dates", request_type="quote", symbol=root,
                           expiration=expiration)
 
-    def greeks(self, root, expiration, day, interval):
-        return self._call("option_history_greeks_first_order", symbol=root,
-                          expiration=expiration, date=day, interval=interval)
+    def quotes(self, root, day, interval, max_dte):
+        return self._call("option_history_quote", symbol=root, expiration="*",
+                          date=day, interval=interval, max_dte=max_dte)
 
     def open_interest(self, root, day, max_dte):
         return self._call("option_history_open_interest", symbol=root,
                           expiration="*", date=day, max_dte=max_dte)
+
+    def index_price(self, symbol, day, interval):
+        return self._call("index_history_price", symbol=symbol, date=day,
+                          interval=interval)
 
 
 class _ConcurrencyCappedClient:
@@ -194,16 +209,14 @@ def _right(value):
 
 
 def _chain_row(root, record, snapshot_ms):
-    """A vendor greeks record as a chain-store row, before OI and the
-    underlying level are attached."""
-    iv = _number(record.get("implied_vol"))
+    """A vendor quote record as a chain-store row, before OI, the underlying
+    level and IV are attached."""
     return chain_store.ChainRow(
         root=root, expiry=pd.Timestamp(record["expiration"]).date().isoformat(),
         strike=float(record["strike"]), right=_right(record["right"]),
         snapshot_ms=snapshot_ms, bid=_number(record.get("bid")),
-        ask=_number(record.get("ask")), iv=iv if iv else None, sod_oi=None,
-        vendor_delta=_number(record.get("delta")),
-        vendor_gamma=_number(record.get("gamma")), underlying=None)
+        ask=_number(record.get("ask")), iv=None, sod_oi=None,
+        vendor_delta=None, vendor_gamma=None, underlying=None)
 
 
 def _contract_of(row):
@@ -289,24 +302,34 @@ def parity_level(rows):
     return statistics.median(level for _, level in sorted(pairs)[:PARITY_PAIRS])
 
 
+def _implied_vol(row, level):
+    mid = _mid(row)
+    if mid is None or level is None:
+        return None
+    T = matrix_gex.years_to_expiry(row.expiry, row.root, row.snapshot_ms)
+    if T <= matrix_gex.MIN_T:
+        return None  # expired or expiring now
+    return matrix_gex.implied_vol(mid, level, row.strike, T, matrix_gex.DEFAULT_RATE,
+                                  is_call=row.right == "C")
+
+
 # ---------------------------------------------------------------------------
 # One session
 # ---------------------------------------------------------------------------
-def fetch_session(client, session, expirations, config):
+def fetch_session(client, session, config):
     """[ChainRow, ...] for one session across every configured root."""
     interval = vendor_interval(config.times)
     grid = set(config.times)
     rows = []
     for root in config.roots:
-        expiries = [e for e in expirations[root] if 0 <= (e - session).days <= config.max_dte]
         root_rows = []
-        for expiry in expiries:
-            frame = client.greeks(root, expiry, session, interval)
-            for record in frame.to_dict("records"):
-                stamp = _to_et(record["timestamp"])
-                if stamp.date() == session and (stamp.hour, stamp.minute) in grid:
-                    root_rows.append(_chain_row(root, record,
-                                                _et_ms(session, stamp.hour, stamp.minute)))
+        for record in client.quotes(root, session, interval, config.max_dte).to_dict("records"):
+            stamp = _to_et(record["timestamp"])
+            if stamp.date() != session or (stamp.hour, stamp.minute) not in grid:
+                continue
+            row = _chain_row(root, record, _et_ms(session, stamp.hour, stamp.minute))
+            if 0 <= (date.fromisoformat(row.expiry) - session).days <= config.max_dte:
+                root_rows.append(row)
         if root_rows:
             oi = sod_open_interest(client, root, session, config.max_dte)
             rows += root_rows if oi is None else [
@@ -315,7 +338,8 @@ def fetch_session(client, session, expirations, config):
     for row in rows:
         by_snapshot.setdefault(row.snapshot_ms, []).append(row)
     levels = {ms: parity_level(snapshot) for ms, snapshot in by_snapshot.items()}
-    return [replace(row, underlying=levels[row.snapshot_ms]) for row in rows]
+    return [replace(row, underlying=levels[row.snapshot_ms],
+                    iv=_implied_vol(row, levels[row.snapshot_ms])) for row in rows]
 
 
 # ---------------------------------------------------------------------------
@@ -366,10 +390,8 @@ def run_backfill(client, store_path, sessions, config, redact=str):
                    "parity_mismatches": []}
         if not todo:
             return summary
-        expirations = {root: _dates(client.list_expirations(root), "expiration")
-                       for root in config.roots}
         with ThreadPoolExecutor(max_workers=config.concurrency) as pool:
-            futures = {pool.submit(fetch_session, client, session, expirations, config): session
+            futures = {pool.submit(fetch_session, client, session, config): session
                        for session in todo}
             for future in as_completed(futures):
                 session = futures[future]
@@ -441,24 +463,19 @@ def run_probe(client, probe_date):
     spxw_expirations = _dates(client.list_expirations("SPXW"), "expiration")
     earliest, earliest_served = None, False
     if spxw_expirations:
-        quote_dates = _dates(client.list_dates("SPXW", spxw_expirations[0]), "date")
+        first = spxw_expirations[0]
+        quote_dates = _dates(client.list_dates("SPXW", first), "date")
         earliest = (quote_dates or spxw_expirations)[0]
-        earliest_served = not client.greeks("SPXW", spxw_expirations[0], earliest,
-                                            interval).empty
-    dev_expiry = next((e for e in spxw_expirations if e > PROBE_DEV_START), None)
-    dev_start_served = dev_expiry is not None and not client.greeks(
-        "SPXW", dev_expiry, PROBE_DEV_START, interval).empty
+        earliest_served = not client.quotes("SPXW", earliest, interval,
+                                            (first - earliest).days).empty
+    dev_start_served = not client.quotes("SPXW", PROBE_DEV_START, interval,
+                                         BackfillConfig.max_dte).empty
 
     stamped = _stamping(client.open_interest("SPXW", probe_date, 10), probe_date)
 
-    spx_expiry = next((e for e in _dates(client.list_expirations("SPX"), "expiration")
-                       if e > PROBE_PRE_2022_DATE), None)
-    supplied = False
-    if spx_expiry is not None:
-        frame = client.greeks("SPX", spx_expiry, PROBE_PRE_2022_DATE, interval)
-        if not frame.empty and "underlying_price" in frame:
-            prices = pd.to_numeric(frame["underlying_price"], errors="coerce")
-            supplied = bool((prices > 0).any())
+    frame = client.index_price("SPX", PROBE_PRE_2022_DATE, interval)
+    supplied = (not frame.empty and "price" in frame
+                and bool((pd.to_numeric(frame["price"], errors="coerce") > 0).any()))
     return {"earliest_spxw_date": earliest and earliest.isoformat(),
             "earliest_spxw_date_served": earliest_served,
             "spxw_dev_start_served": dev_start_served,

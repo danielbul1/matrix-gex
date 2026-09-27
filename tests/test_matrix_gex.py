@@ -1,4 +1,5 @@
 """Tests for the canonical Matrix GEX engine (tripity_experiment.matrix_gex)."""
+import math
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -126,6 +127,23 @@ def test_years_to_expiry_one_minute_floor():
 
 
 # ---------- norm_iv ----------
+@pytest.mark.parametrize("is_call", [True, False])
+@pytest.mark.parametrize("strike, years, sigma", [
+    (100.0, 1.0, 0.2), (80.0, 0.02, 0.35), (103.0, 7 / 365.25, 0.12),
+    (100.0, 1 / (365.25 * 24), 0.5), (95.0, 0.25, 1.8)])
+def test_implied_vol_inverts_bs_price(is_call, strike, years, sigma):
+    price = mg.bs_price(S, strike, years, sigma, R, is_call)
+    assert mg.implied_vol(price, S, strike, years, R, is_call) == pytest.approx(sigma, abs=1e-6)
+
+
+def test_implied_vol_none_outside_no_arbitrage_bounds():
+    discounted_k = K * math.exp(-R * T)
+    assert mg.implied_vol(S - discounted_k - 0.01, S, K, T, R, True) is None  # < intrinsic
+    assert mg.implied_vol(S + 0.01, S, K, T, R, True) is None  # > the underlying
+    assert mg.implied_vol(discounted_k + 0.01, S, K, T, R, False) is None  # > PV(strike)
+    assert mg.implied_vol(0.0, S, K, T, R, False) is None
+
+
 def test_norm_iv():
     assert mg.norm_iv(13.5) == pytest.approx(0.135)
     assert mg.norm_iv(0.135) == pytest.approx(0.135)
