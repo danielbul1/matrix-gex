@@ -7,6 +7,8 @@ fills and commissions, and how many contracts the 1% max-loss rule allowed.
 import importlib.util
 import json
 import math
+import random
+import statistics
 import sys
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -71,7 +73,10 @@ def _chain(session, hour, minute, expiry_offsets=(4, 7, 9), leg_quotes=None,
 
 
 def _store(tmp_path, sessions, spx_closes, vix_closes=None):
-    """sessions: {session_date: [ChainRow, ...]}."""
+    """sessions: {session_date: [ChainRow, ...]}. Without vix_closes, VIX
+    closes at 20 the day before every session."""
+    if vix_closes is None:
+        vix_closes = {day - timedelta(days=1): 20.0 for day in sessions}
     path = tmp_path / "chain.sqlite3"
     connection = cs.connect(path)
     for rows in sessions.values():
@@ -79,7 +84,7 @@ def _store(tmp_path, sessions, spx_closes, vix_closes=None):
     cs.write_daily_closes(connection, "SPX",
                           {d.isoformat(): v for d, v in spx_closes.items()})
     cs.write_daily_closes(connection, "VIX", {
-        d.isoformat(): v for d, v in (vix_closes or {}).items()})
+        d.isoformat(): v for d, v in vix_closes.items()})
     connection.close()
     return path
 
@@ -587,7 +592,7 @@ def test_positive_gamma_filter_reports_kept_rejected_and_baseline(tmp_path):
     assert _gex_of(report, MONDAY)["gamma_regime"] == "positive"
     assert _gex_of(report, tuesday)["gamma_regime"] == "negative"
     rows = _filter(report, "positive_gamma")
-    assert set(rows) == {"kept", "rejected", "baseline"}
+    assert set(rows) == {"kept", "rejected", "baseline", "iv_matched_control"}
     assert [t["session"] for t in rows["kept"]["trades"]] == ["2026-03-02"]
     assert [t["session"] for t in rows["rejected"]["trades"]] == ["2026-03-03"]
     assert [t["session"] for t in rows["baseline"]["trades"]] == [
@@ -725,4 +730,161 @@ def test_cli_runs_the_gex_filter_report(tmp_path, capsys):
 def test_cli_gex_filter_and_grid_are_exclusive(tmp_path, capsys):
     with pytest.raises(SystemExit) as raised:
         bt.main(["--store", str(tmp_path / "chain.sqlite3"), "--grid", "--gex-filter"])
+    assert raised.value.code == 2
+
+
+# ---------------------------------------------------------------------------
+# The IV-Matched Control, the regression, the bootstrap and the verdict
+# ---------------------------------------------------------------------------
+def _comparison(report, name):
+    (variant,) = [f for f in report["filters"] if f["filter"] == name]
+    return variant["comparison"]
+
+
+def test_iv_matched_control_trades_the_lowest_vix_sessions(tmp_path):
+    # Monday is kept (positive Gamma Regime) at VIX 25; Tuesday is rejected at
+    # VIX 15. The control trades one session too: the one with the lower VIX.
+    tuesday = MONDAY + timedelta(days=1)
+    sessions = {MONDAY: _chain(MONDAY, 10, 0) + _gamma_calls(MONDAY),
+                tuesday: _chain(tuesday, 10, 0)}
+    closes = {MONDAY: SPOT, tuesday: SPOT, MONDAY + timedelta(days=7): 5010.0,
+              tuesday + timedelta(days=7): 5010.0}
+    # VIX closes are read from the session before: Monday's close is Tuesday's.
+    vix = {MONDAY - timedelta(days=1): 25.0, MONDAY: 15.0, tuesday: 99.0}
+    report = _gex_run(_store(tmp_path, sessions, closes, vix))
+    rows = _filter(report, "positive_gamma")
+    control = rows["iv_matched_control"]
+    assert control["session_count"] == rows["kept"]["session_count"] == 1
+    assert control["vix_threshold"] == 15.0
+    assert [t["session"] for t in control["trades"]] == ["2026-03-03"]
+
+
+def test_session_without_a_vix_close_before_it_is_undecided(tmp_path):
+    tuesday = MONDAY + timedelta(days=1)
+    sessions = {MONDAY: _chain(MONDAY, 10, 0) + _gamma_calls(MONDAY),
+                tuesday: _chain(tuesday, 10, 0)}
+    closes = {MONDAY: SPOT, tuesday: SPOT, MONDAY + timedelta(days=7): 5010.0,
+              tuesday + timedelta(days=7): 5010.0}
+    # Only Tuesday's VIX (Monday's close) is known; Monday's same-day close
+    # must not stand in for Monday itself.
+    report = _gex_run(_store(tmp_path, sessions, closes, {MONDAY: 18.0}))
+    (variant,) = [f for f in report["filters"] if f["filter"] == "positive_gamma"]
+    assert variant["undecided"] == [
+        {"session": "2026-03-02", "reason": "no VIX close before the session"}]
+    rows = _filter(report, "positive_gamma")
+    assert rows["baseline"]["session_count"] == 1
+
+
+# Two years of weekly sessions. Each session's short 4900 put settles `loss`
+# points in the money (never past the 4875 long leg), so its P&L falls
+# linearly with loss.
+FIRST_WEEK = date(2024, 1, 1)
+WEEKS = 104
+
+
+def _weekly_store(tmp_path, weeks):
+    """weeks: [(vix, positive_gamma, loss)], one per weekly session."""
+    days = [FIRST_WEEK + timedelta(weeks=i) for i in range(len(weeks))]
+    sessions, vix = {}, {}
+    for day, (vix_close, positive, _) in zip(days, weeks):
+        sessions[day] = _chain(day, 10, 0, expiry_offsets=(7,)) + (
+            _gamma_calls(day) if positive else [])
+        vix[day - timedelta(days=1)] = vix_close
+    # SPX wiggles every calendar day, so realized vol (and VRP) varies.
+    closes = {}
+    day, i = days[0] - timedelta(days=40), 0
+    while day <= days[-1] + timedelta(days=7):
+        closes[day] = SPOT + 5 * ((i * 7) % 11 - 5)
+        day, i = day + timedelta(days=1), i + 1
+    for day, (_, _, loss) in zip(days, weeks):
+        closes[day + timedelta(days=7)] = SHORT - loss
+    return _store(tmp_path, sessions, closes, vix)
+
+
+@pytest.fixture(scope="module")
+def vix_only_report(tmp_path_factory):
+    """The GEX Filter is a pure function of VIX (positive Gamma Regime exactly
+    when VIX < 20) and P&L depends on VIX alone."""
+    rng = random.Random(1)
+    weeks = []
+    for _ in range(WEEKS):
+        vix = rng.uniform(12, 30)
+        weeks.append((vix, vix < 20, 0.3 * (vix - 12) + rng.uniform(0, 1)))
+    return _gex_run(_weekly_store(tmp_path_factory.mktemp("vix_only"), weeks))
+
+
+@pytest.fixture(scope="module")
+def planted_report(tmp_path_factory):
+    """Gamma Regime is independent of VIX, and negative gamma sessions lose
+    five more points on top of a VIX-driven loss."""
+    rng = random.Random(2)
+    weeks = []
+    for _ in range(WEEKS):
+        vix, positive = rng.uniform(12, 30), rng.random() < 0.5
+        weeks.append((vix, positive, 0.1 * (vix - 12) + rng.uniform(0, 1)
+                      + (0 if positive else 5)))
+    return _gex_run(_weekly_store(tmp_path_factory.mktemp("planted"), weeks))
+
+
+@pytest.mark.parametrize("name", ["positive_gamma", "gex_percentile"])
+def test_iv_matched_control_trades_as_many_sessions_as_its_filter(
+        vix_only_report, planted_report, name):
+    for report in (vix_only_report, planted_report):
+        rows = _filter(report, name)
+        assert rows["kept"]["session_count"] > 0
+        assert rows["iv_matched_control"]["session_count"] == rows["kept"]["session_count"]
+
+
+def test_filter_that_is_a_function_of_vix_adds_nothing(vix_only_report):
+    comparison = _comparison(vix_only_report, "positive_gamma")
+    regression = comparison["regression"]
+    pnls = [t["pnl"] for t in _filter(vix_only_report, "positive_gamma")["baseline"]["trades"]]
+    assert regression["trades"] == len(pnls)
+    assert abs(regression["filter_coef"]) < 0.25 * statistics.stdev(pnls)
+    low, high = regression["filter_ci"]
+    assert low <= 0 <= high
+    for measure in ("sharpe", "mean_pnl"):
+        low, high = comparison["bootstrap"][measure]["ci"]
+        assert low <= 0 <= high
+    assert comparison["verdict"] == "null"
+    assert "adds nothing beyond VIX" in vix_only_report["verdict"]
+
+
+def test_planted_incremental_signal_yields_the_positive_verdict(planted_report):
+    comparison = _comparison(planted_report, "positive_gamma")
+    assert comparison["regression"]["filter_ci"][0] > 0
+    for measure in ("sharpe", "mean_pnl"):
+        assert comparison["bootstrap"][measure]["ci"][0] > 0
+    assert [row["year"] for row in comparison["by_year"]] == [2024, 2025]
+    assert all(row["filter_mean_pnl"] > row["control_mean_pnl"]
+               for row in comparison["by_year"])
+    assert comparison["verdict"] == "positive"
+    assert "beats its IV-Matched Control" in planted_report["verdict"]
+    assert "positive_gamma" in planted_report["verdict"]
+
+
+def test_regression_reports_its_covariates(planted_report):
+    regression = _comparison(planted_report, "positive_gamma")["regression"]
+    assert set(regression["coefficients"]) == {"intercept", "filter", "vix",
+                                               "atm_iv", "vrp"}
+    (row,) = [r for r in planted_report["covariates"] if r["session"] == "2024-03-04"]
+    assert row["atm_iv"] == pytest.approx(IV)
+    assert row["vix"] is not None and row["vrp"] is not None
+
+
+def test_verdict_leads_the_json_and_the_summary(tmp_path, capsys):
+    _, path = _positive_then_negative_store(tmp_path)
+    out, summary = tmp_path / "gex.json", tmp_path / "gex.md"
+    assert bt.main(["--store", str(path), "--gex-filter", "--out", str(out),
+                    "--summary", str(summary)]) == 0
+    report = json.loads(out.read_text())
+    assert list(report)[0] == "verdict"
+    assert report["verdict"].startswith("VERDICT: ")
+    assert summary.read_text().splitlines()[0] == report["verdict"]
+
+
+def test_cli_summary_needs_the_gex_filter(tmp_path, capsys):
+    with pytest.raises(SystemExit) as raised:
+        bt.main(["--store", str(tmp_path / "chain.sqlite3"),
+                 "--summary", str(tmp_path / "gex.md")])
     assert raised.value.code == 2

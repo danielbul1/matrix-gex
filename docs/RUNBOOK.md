@@ -173,7 +173,7 @@ python tools\backtest_spread.py --store C:\path\chain.sqlite3 --grid --out grid.
 ### GEX Filter
 
 ```powershell
-python tools\backtest_spread.py --store C:\path\chain.sqlite3 --gex-filter --out gex.json
+python tools\backtest_spread.py --store C:\path\chain.sqlite3 --gex-filter --out gex.json --summary gex.md
 python tools\backtest_spread.py --store C:\path\chain.sqlite3 --gex-filter --gex-percentile 0.8 --exit-rule managed
 python tools\gex_crosscheck.py --store C:\path\chain.sqlite3
 ```
@@ -188,13 +188,37 @@ python tools\gex_crosscheck.py --store C:\path\chain.sqlite3
   warm.
 - `--gex-filter` runs two filters on one configuration: `positive_gamma`
   (Gamma Regime positive) and `gex_percentile` (percentile above
-  `--gex-percentile`, 0.5 by default). Each gets three rows, `kept`,
-  `rejected` (the Rejected Sessions, replayed as their own strategy) and
-  `baseline`, each with its own Position Cap, metrics over the same
-  calendar, trades and Skipped Sessions. A filter's Undecided Sessions (no
-  Naive GEX, or no percentile yet) are listed under `undecided` and sit in
-  no row, `baseline` included, so the three rows cover the same sessions. `gex` lists every session's Naive GEX, Gamma Regime and
-  percentile.
+  `--gex-percentile`, 0.5 by default). Each gets four rows, `kept`,
+  `rejected` (the Rejected Sessions, replayed as their own strategy),
+  `baseline` and `iv_matched_control`, each with its own Position Cap,
+  metrics over the same calendar, trades and Skipped Sessions. A filter's
+  Undecided Sessions (no Naive GEX, no percentile yet, or no VIX close
+  before the session) are listed under `undecided` and sit in no row,
+  `baseline` included, so `kept` + `rejected` = `baseline`. `gex` lists
+  every session's Naive GEX, Gamma Regime and percentile; `covariates` its
+  VIX, ATM IV and VRP.
+- IV-Matched Control: the `baseline` sessions with the lowest VIX, as many as
+  `kept` holds (ties go to the earlier session); `vix_threshold` is the
+  highest VIX it includes. VIX is the Cboe close of the session before, so
+  nothing after the 10:00 entry is read.
+- `comparison`, per filter:
+  - `regression`: OLS of trade P&L (the `baseline` trades) on the filter
+    flag, with VIX, ATM IV (the entry snapshot's IV at the strike nearest
+    spot, on the 7DTE expiry) and VRP (ATM IV minus the annualized realized
+    vol of the last 20 SPX daily returns) as covariates; a 95% t interval on
+    the flag's coefficient. Trades missing a covariate are dropped and
+    counted.
+  - `bootstrap`: `kept` minus `iv_matched_control`, 95% intervals on the
+    Sharpe difference and the mean-P&L-per-trade difference, from 2000
+    paired resamples of 5-day blocks (fixed seed, so reruns agree).
+  - `by_year`: each side's trades and mean P&L per trade by entry year.
+  - `verdict`: `positive` only when the regression interval and both
+    bootstrap intervals sit above zero and `kept` beats the control's mean
+    P&L in every year both trade; otherwise `null`.
+- The report's first field, and the first line of `--summary` (Markdown
+  tables per filter), is the verdict: the filters that beat their
+  IV-Matched Control, or `GEX adds nothing beyond VIX as a trade filter`.
+  Two filters are tested, so treat a lone marginal positive with suspicion.
 - `gex_crosscheck.py` compares our daily Naive GEX with SqueezeMetrics' free
   daily GEX (the DIX CSV, downloaded unless `--csv` points to a copy) and
   prints the Pearson correlation and the share of sessions with the same

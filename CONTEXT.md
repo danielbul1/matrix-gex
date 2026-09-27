@@ -49,7 +49,7 @@ _Avoid_: VIX filter, control
 The sessions a filter declines to trade, reported alongside the sessions it keeps.
 
 **Undecided Session**:
-A session a filter has no input for: its Naive GEX is missing, or its GEX Percentile has too little past history yet. It sits outside that filter's comparison, neither kept, rejected, nor counted in the Baseline beside them.
+A session a filter has no input for: its Naive GEX is missing, its GEX Percentile has too little past history yet, or no VIX close precedes it. It sits outside that filter's comparison, neither kept, rejected, nor counted in the Baseline beside them.
 _Avoid_: warm-up, unfiltered
 
 **Skipped Session**:
