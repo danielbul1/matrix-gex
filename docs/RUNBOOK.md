@@ -120,18 +120,40 @@ Interpreting the report:
 
 Answers "how much money", where the regime backtest answers "was the Engine
 Label right". It replays the Baseline (a 7DTE SPXW put credit spread entered every
-session at 10:00 ET, held to expiry, settled at the SPX close on the expiry
-date) over the chain store and writes a JSON report: Sharpe, Sortino, max
-drawdown, worst week, CVaR 5%, win rate, average P&L per trade, trade count,
-every trade and every skipped session. Returns are daily, realized at
-settlement, with a zero risk-free rate; drawdown, worst week and CVaR (the
+session at 10:00 ET, at most five open at once) over the chain store and
+writes a JSON report: Sharpe, Sortino, max drawdown, worst week, CVaR 5%, win
+rate, average and total P&L, trade count, every trade and every skipped
+session. Returns are daily, realized when trades close, with a zero risk-free
+rate; drawdown, worst week and CVaR (the
 mean of the worst 5% of daily returns) are fractions of equity.
 
 ```powershell
 pip install -r requirements.txt   # optopsy builds the spreads and fills
 python tools\backtest_spread.py --store C:\path\chain.sqlite3 --out report.json
 python tools\backtest_spread.py --store C:\path\chain.sqlite3 --short-delta 0.10 --width 50 --fill-ratio 1.0
+python tools\backtest_spread.py --store C:\path\chain.sqlite3 --exit-rule managed
+python tools\backtest_spread.py --store C:\path\chain.sqlite3 --grid --out grid.json
 ```
+
+- Exits: `--exit-rule hold` (the default) settles at the SPX close on the
+  expiry date. `--exit-rule managed` buys the spread back at the first
+  intraday snapshot
+  (the store's 30-minute grid) where that costs <= 50% of the credit (take
+  profit) or >= 2x the credit (stop), else holds to expiry. Buy-backs fill
+  under the same `--fill-ratio` as the entry.
+- Grid: `--grid` runs short delta {0.10, 0.16, 0.20} x width {25, 50} x exit
+  rule {hold, managed}, and refuses the single-cell flags. `headline` has one row per cell at the 50% fill;
+  `fill_sensitivity` repeats every cell at mid, 50% and full spread. The fill
+  levels need not rank mid >= 50% >= full. With managed exits, the
+  take-profit is a share of the credit, so a richer mid credit can take profit
+  on a mark where the 50% run holds on and keeps the whole credit. In any
+  variant, a richer credit lowers the risk per spread, so more contracts can
+  fit and a losing trade loses more.
+- Open-position cap: a spread expiring today is still open at the 10:00
+  entry (it settles at 16:00), as in Option Omega and Option Alpha. With
+  7DTE entries every session, a held Baseline settles into five entries,
+  then one Skipped Session; managed exits free slots early, so hold and
+  managed runs can trade different sessions.
 
 - Chain store: `railway-service/src/tripity_experiment/chain_store.py`
   defines the schema (`option_chain_snapshot`, one row per contract per
@@ -141,11 +163,11 @@ python tools\backtest_spread.py --store C:\path\chain.sqlite3 --short-delta 0.10
   closest to `--short-delta`; long strike = short − `--width`.
 - Costs: fills cross `--fill-ratio` of the half-spread from mid (0.5 by
   default); IBKR tiered commission (with the $1.00 order minimum on each leg)
-  plus Cboe SPXW customer fees by premium tier, per contract on entry, none at
-  cash settlement.
+  plus Cboe SPXW customer fees by premium tier, per contract on entry and on a
+  managed exit, none at cash settlement.
 - Sizing: the most contracts whose total max loss, entry costs included,
   fits `--risk-pct` × equity,
-  equity = `--equity` plus P&L settled before the session. With the default
+  equity = `--equity` plus P&L of trades closed before the session. With the default
   1%, one 25-wide SPX spread needs roughly $220k of equity.
 
 ## Chain Store Backfill
