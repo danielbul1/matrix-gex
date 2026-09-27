@@ -122,8 +122,10 @@ Answers "how much money", where the regime backtest answers "was the Engine
 Label right". It replays the Baseline (a 7DTE SPXW put credit spread entered every
 session at 10:00 ET, held to expiry, settled at the SPX close on the expiry
 date) over the chain store and writes a JSON report: Sharpe, Sortino, max
-drawdown, worst week, CVaR 5% (per trade), win rate, average P&L per trade,
-trade count, every trade and every skipped session.
+drawdown, worst week, CVaR 5%, win rate, average P&L per trade, trade count,
+every trade and every skipped session. Returns are daily, realized at
+settlement, with a zero risk-free rate; drawdown, worst week and CVaR (the
+mean of the worst 5% of daily returns) are fractions of equity.
 
 ```powershell
 pip install -r requirements.txt   # optopsy builds the spreads and fills

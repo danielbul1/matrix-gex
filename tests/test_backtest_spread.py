@@ -273,7 +273,12 @@ def test_cli_writes_json_report_over_multi_session_store(tmp_path, capsys):
     pnls = [t["pnl"] for t in report["trades"]]
     assert metrics["win_rate"] == pytest.approx(4 / 5)
     assert metrics["avg_pnl_per_trade"] == pytest.approx(sum(pnls) / 5)
-    assert metrics["cvar_5"] == pytest.approx(min(pnls))  # worst 5% of 5 = 1 trade
+    # Ten days (five sessions, five expiries): the worst 5% is one day, the
+    # 4850 loss settling after the first trade's win.
+    assert metrics["cvar_5"] == pytest.approx(pnls[1] / (1_000_000 + pnls[0]))
+    # Every expiry settles in the same week, whose net P&L is a loss.
+    assert sum(pnls) < 0
+    assert metrics["worst_week"] == pytest.approx(sum(pnls) / 1_000_000)
     assert metrics["max_drawdown"] < 0
     assert math.isfinite(metrics["sharpe"]) and math.isfinite(metrics["sortino"])
     assert json.loads(capsys.readouterr().out) == report

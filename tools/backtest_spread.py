@@ -366,7 +366,12 @@ def size_trades(priced, config):
 # Metrics
 # ---------------------------------------------------------------------------
 def compute_metrics(trades, sessions, initial_equity):
-    """Risk/return summary. Returns are daily, realized at settlement."""
+    """Risk/return summary over daily returns realized at settlement.
+
+    As in empyrical/quantstats: Sharpe and Sortino are annualized with a zero
+    risk-free rate; max drawdown, worst week and CVaR 5% are fractions of
+    equity, CVaR being the mean of the worst 5% of daily returns. Win rate and
+    average P&L are per trade, the average in dollars."""
     pnls = [t["pnl"] for t in trades]
     metrics = {
         "trades": len(trades),
@@ -382,9 +387,14 @@ def compute_metrics(trades, sessions, initial_equity):
     days = sorted(set(sessions) | set(pnl_by_expiry))
     equity = peak = initial_equity
     returns, drawdown = [], 0.0
+    week_open, week_close = {}, {}  # ISO week -> equity before / after it
     for day in days:
-        returns.append(pnl_by_expiry.get(day, 0.0) / equity)
-        equity += pnl_by_expiry.get(day, 0.0)
+        week = day.isocalendar()[:2]
+        week_open.setdefault(week, equity)
+        pnl = pnl_by_expiry.get(day, 0.0)
+        returns.append(pnl / equity)
+        equity += pnl
+        week_close[week] = equity
         peak = max(peak, equity)
         drawdown = min(drawdown, equity / peak - 1)
     mean = statistics.fmean(returns)
@@ -393,13 +403,10 @@ def compute_metrics(trades, sessions, initial_equity):
     downside = math.sqrt(statistics.fmean(min(r, 0.0) ** 2 for r in returns))
     if downside > 0:
         metrics["sortino"] = mean / downside * math.sqrt(TRADING_DAYS)
-    weeks = defaultdict(float)
-    for day, pnl in pnl_by_expiry.items():
-        weeks[day.isocalendar()[:2]] += pnl
-    tail = sorted(pnls)[:max(1, math.ceil(CVAR_TAIL * len(pnls)))]
+    tail = sorted(returns)[:max(1, math.ceil(CVAR_TAIL * len(returns)))]
     metrics.update({
         "max_drawdown": drawdown,
-        "worst_week": min(weeks.values()),
+        "worst_week": min(week_close[w] / week_open[w] - 1 for w in week_open),
         "cvar_5": statistics.fmean(tail),
         "win_rate": sum(p > 0 for p in pnls) / len(pnls),
         "avg_pnl_per_trade": statistics.fmean(pnls),

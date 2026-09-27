@@ -1,4 +1,5 @@
 """Tests for the chain store schema (tripity_experiment.chain_store)."""
+import subprocess
 import sys
 from pathlib import Path
 
@@ -45,3 +46,15 @@ def test_daily_closes_round_trip_per_symbol(tmp_path):
     reopened = cs.connect(path)  # schema creation is idempotent
     assert cs.read_daily_closes(reopened, "SPX") == {"2026-03-09": 5010.5}
     assert cs.read_daily_closes(reopened, "VIX") == {"2026-03-09": 17.2}
+
+
+def test_importable_by_the_railway_service_without_pandas():
+    # The Railway service does not install pandas, numpy or optopsy.
+    code = ("import sys\n"
+            "for name in ('pandas', 'numpy', 'optopsy'):\n"
+            "    sys.modules[name] = None\n"
+            "from tripity_experiment import chain_store\n"
+            "assert chain_store.ChainRow\n")
+    result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
+                            cwd=ROOT / "railway-service" / "src")
+    assert result.returncode == 0, result.stderr
