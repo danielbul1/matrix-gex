@@ -41,6 +41,14 @@ sessions only. Each filter reports its kept sessions, its Rejected Sessions
 and the Baseline side by side, all over the sessions it could decide. tools/gex_crosscheck.py checks the Naive GEX
 series against SqueezeMetrics.
 
+Each filter is then compared with its IV-Matched Control: the Baseline on the
+lowest-VIX sessions (VIX close before the session), as many as the filter
+keeps. The comparison is a regression of trade P&L on the filter flag with
+VIX, ATM IV and VRP as covariates, a paired block bootstrap of the Sharpe and
+mean-P&L differences, and a per-year split. The report opens with the
+verdict: the filter beats its control significantly (every interval above
+zero) and consistently (every year), or GEX adds nothing beyond VIX.
+
 optopsy builds the spreads, applies the fill model and computes the exit
 proceeds. The loader feeds it only the two chosen legs per session plus one
 synthetic exit row per leg on the expiry date, quoted at intrinsic value
@@ -59,11 +67,12 @@ Usage:
 
     python tools/backtest_spread.py --store PATH --gex-filter [--start DATE]
         [--end DATE] [--gex-percentile 0.5] [single-configuration flags]
-        [--out gex.json]
+        [--out gex.json] [--summary gex.md]
 
 The JSON report is printed to stdout (and written to --out when given).
 """
 import argparse
+import bisect
 import json
 import math
 import sqlite3
@@ -75,8 +84,10 @@ from datetime import date, datetime, timedelta
 from itertools import product
 from pathlib import Path
 
+import numpy as np
 import optopsy
 import pandas as pd
+from scipy import stats
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "railway-service" / "src"))
 from tripity_experiment import chain_store
@@ -149,6 +160,24 @@ GEX_HISTORY_CALENDAR_DAYS = 380
 ROW_KEPT = "kept"
 ROW_REJECTED = "rejected"
 ROW_BASELINE = "baseline"
+
+# --- The IV-Matched Control and the verdict ---
+VIX_SYMBOL = "VIX"
+ROW_IV_MATCHED = "iv_matched_control"
+REALIZED_VOL_WINDOW = 20  # past SPX daily returns behind VRP
+REGRESSION_COVARIATES = ("vix", "atm_iv", "vrp")
+CONFIDENCE = 0.95  # regression and bootstrap intervals
+BOOTSTRAP_RESAMPLES = 2000
+# Days per resampled block: a 7DTE trade stays open about five sessions, so
+# neighbouring days' returns are not independent.
+BOOTSTRAP_BLOCK = 5
+BOOTSTRAP_SEED = 7  # the same store always gives the same intervals
+VERDICT_POSITIVE = "positive"
+VERDICT_NULL = "null"
+VERDICT_POSITIVE_LINE = ("VERDICT: the GEX Filter beats its IV-Matched Control"
+                         " significantly and consistently across years ({})."
+                         )
+VERDICT_NULL_LINE = "VERDICT: GEX adds nothing beyond VIX as a trade filter."
 
 
 @dataclass(frozen=True)
@@ -232,6 +261,16 @@ def load_store(path, start=None, end=None):
     for row in rows:
         sessions[_session_of(row.snapshot_ms)].append(row)
     return dict(sessions), {date.fromisoformat(d): c for d, c in closes.items()}
+
+
+def load_closes(path, symbol):
+    """{date: close} for one daily_close symbol."""
+    connection = chain_store.connect(path)
+    try:
+        closes = chain_store.read_daily_closes(connection, symbol)
+    finally:
+        connection.close()
+    return {date.fromisoformat(d): c for d, c in closes.items()}
 
 
 # ---------------------------------------------------------------------------
@@ -538,6 +577,20 @@ def size_trades(positions, config):
 # ---------------------------------------------------------------------------
 # Metrics
 # ---------------------------------------------------------------------------
+def daily_returns(trades, sessions, initial_equity):
+    """{day: return} over every session and trade-close day: the P&L trades
+    realize that day over the equity before it."""
+    pnl_by_day = defaultdict(float)
+    for t in trades:
+        pnl_by_day[date.fromisoformat(t["closed"])] += t["pnl"]
+    returns, equity = {}, initial_equity
+    for day in sorted(set(sessions) | set(pnl_by_day)):
+        pnl = pnl_by_day.get(day, 0.0)
+        returns[day] = pnl / equity
+        equity += pnl
+    return returns
+
+
 def compute_metrics(trades, sessions, initial_equity):
     """Risk/return summary over daily returns realized when trades close.
 
@@ -554,19 +607,14 @@ def compute_metrics(trades, sessions, initial_equity):
     }
     if not trades:
         return metrics
-    pnl_by_day = defaultdict(float)
-    for t in trades:
-        pnl_by_day[date.fromisoformat(t["closed"])] += t["pnl"]
-    days = sorted(set(sessions) | set(pnl_by_day))
+    by_day = daily_returns(trades, sessions, initial_equity)
     equity = peak = initial_equity
-    returns, drawdown = [], 0.0
+    returns, drawdown = list(by_day.values()), 0.0
     week_open, week_close = {}, {}  # ISO week -> equity before / after it
-    for day in days:
+    for day, daily in by_day.items():
         week = day.isocalendar()[:2]
         week_open.setdefault(week, equity)
-        pnl = pnl_by_day.get(day, 0.0)
-        returns.append(pnl / equity)
-        equity += pnl
+        equity *= 1 + daily
         week_close[week] = equity
         peak = max(peak, equity)
         drawdown = min(drawdown, equity / peak - 1)
@@ -739,17 +787,229 @@ def gex_percentiles(series):
     return percentiles
 
 
+# ---------------------------------------------------------------------------
+# The IV-Matched Control, the regression, the bootstrap and the verdict
+# ---------------------------------------------------------------------------
+def _closes_before(closes, session, count):
+    """The last `count` closes strictly before session, oldest first, or
+    None when there are fewer."""
+    days = sorted(closes)
+    end = bisect.bisect_left(days, session)
+    if end < count:
+        return None
+    return [closes[day] for day in days[end - count:end]]
+
+
+def atm_iv(rows, session):
+    """IV at the strike nearest spot, on the expiry nearest TARGET_DTE, at the
+    session's entry snapshot (the mean of call and put), or None."""
+    stamp = entry_snapshot(rows, session)
+    if stamp is None:
+        return None
+    snapshot = [r for r in rows if r.snapshot_ms == stamp and r.underlying
+                and matrix_gex.norm_iv(float(r.iv or 0)) > 0
+                and date.fromisoformat(r.expiry) > session]
+    if not snapshot:
+        return None
+    expiry = min({r.expiry for r in snapshot}, key=lambda e: abs(
+        (date.fromisoformat(e) - session).days - TARGET_DTE))
+    chain = [r for r in snapshot if r.expiry == expiry]
+    spot = statistics.median(r.underlying for r in chain)
+    strike = min({r.strike for r in chain}, key=lambda k: abs(k - spot))
+    return statistics.fmean(matrix_gex.norm_iv(float(r.iv))
+                            for r in chain if r.strike == strike)
+
+
+def session_covariates(sessions, spx_closes, vix_closes):
+    """{session: {"vix", "atm_iv", "vrp"}}, each None when its input is
+    missing. All are known at the 10:00 entry: VIX is the last close before
+    the session; ATM IV comes from the entry snapshot; VRP is ATM IV minus the
+    annualized realized vol of the last REALIZED_VOL_WINDOW SPX daily
+    returns before the session."""
+    covariates = {}
+    for session, rows in sessions.items():
+        vix = _closes_before(vix_closes, session, 1)
+        iv = atm_iv(rows, session)
+        closes = _closes_before(spx_closes, session, REALIZED_VOL_WINDOW + 1)
+        vrp = None
+        if iv is not None and closes is not None:
+            returns = [math.log(b / a) for a, b in zip(closes, closes[1:])]
+            vrp = iv - statistics.stdev(returns) * math.sqrt(TRADING_DAYS)
+        covariates[session] = {"vix": None if vix is None else vix[0],
+                               "atm_iv": iv, "vrp": vrp}
+    return covariates
+
+
+def iv_matched_sessions(decided, count, covariates):
+    """(sessions, VIX threshold): the `count` lowest-VIX sessions among
+    `decided`, ties going to the earlier session, and the highest VIX they
+    include."""
+    chosen = sorted(decided, key=lambda day: (covariates[day]["vix"], day))[:count]
+    return set(chosen), max((covariates[day]["vix"] for day in chosen), default=None)
+
+
+def _interval(values):
+    values = np.asarray(values, dtype=float)
+    values = values[~np.isnan(values)]
+    if not len(values):
+        return None
+    tail = (1 - CONFIDENCE) / 2 * 100
+    return [float(np.percentile(values, tail)), float(np.percentile(values, 100 - tail))]
+
+
+def regression(trades, kept, covariates):
+    """OLS of trade P&L on the filter flag (1 = a kept session) with VIX, ATM
+    IV and VRP as covariates, over the trades whose covariates are all known.
+    The filter coefficient's interval uses Student's t; it is None when the
+    flag is not identified (a constant, or a linear function of the
+    covariates)."""
+    names = ("intercept", "filter") + REGRESSION_COVARIATES
+    X, y = [], []
+    for trade in trades:
+        day = date.fromisoformat(trade["session"])
+        values = [covariates[day][name] for name in REGRESSION_COVARIATES]
+        if None not in values:
+            X.append([1.0, float(day in kept), *values])
+            y.append(trade["pnl"])
+    result = {"trades": len(y), "dropped": len(trades) - len(y),
+              "coefficients": None, "filter_coef": None, "filter_se": None,
+              "filter_ci": None}
+    if not y:
+        return result
+    X, y = np.array(X), np.array(y)
+    rank = np.linalg.matrix_rank(X)
+    dof = len(y) - rank
+    if dof < 1 or np.linalg.matrix_rank(np.delete(X, 1, axis=1)) == rank:
+        return result
+    beta = np.linalg.pinv(X) @ y
+    residuals = y - X @ beta
+    # pinv keeps the flag's variance exact when covariates are collinear.
+    covariance = residuals @ residuals / dof * np.linalg.pinv(X.T @ X)
+    se = math.sqrt(max(covariance[1, 1], 0.0))
+    half = stats.t.ppf(0.5 + CONFIDENCE / 2, dof) * se
+    result.update({
+        "coefficients": dict(zip(names, map(float, beta))),
+        "filter_coef": float(beta[1]), "filter_se": se,
+        "filter_ci": [float(beta[1] - half), float(beta[1] + half)],
+    })
+    return result
+
+
+def _sharpe(returns):
+    """Annualized Sharpe of each row of `returns`; NaN where flat."""
+    std = returns.std(axis=-1, ddof=1)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        ratio = returns.mean(axis=-1) / std
+    return np.where(std > 0, ratio, np.nan) * math.sqrt(TRADING_DAYS)
+
+
+def bootstrap(filter_trades, control_trades, sessions, initial_equity):
+    """Paired moving-block bootstrap of filter minus IV-Matched Control:
+    Sharpe over daily returns, and mean P&L per trade (trades follow their
+    entry day). Both strategies resample the same days."""
+    by_filter = daily_returns(filter_trades, sessions, initial_equity)
+    by_control = daily_returns(control_trades, sessions, initial_equity)
+    calendar = sorted(set(by_filter) | set(by_control))
+    result = {"resamples": BOOTSTRAP_RESAMPLES, "block": BOOTSTRAP_BLOCK,
+              "sharpe": {"difference": None, "ci": None},
+              "mean_pnl": {"difference": None, "ci": None}}
+    if len(calendar) < 2:
+        return result
+    index = {day: i for i, day in enumerate(calendar)}
+    returns = np.array([[by_filter.get(day, 0.0) for day in calendar],
+                        [by_control.get(day, 0.0) for day in calendar]])
+    pnl, count = np.zeros((2, len(calendar))), np.zeros((2, len(calendar)))
+    for side, trades in enumerate((filter_trades, control_trades)):
+        for trade in trades:
+            i = index[date.fromisoformat(trade["session"])]
+            pnl[side, i] += trade["pnl"]
+            count[side, i] += 1
+
+    def mean_pnl(days):
+        with np.errstate(divide="ignore", invalid="ignore"):
+            means = pnl[:, days].sum(axis=-1) / count[:, days].sum(axis=-1)
+        return means[0] - means[1]
+
+    def sharpe(days):
+        return _sharpe(returns[0][days]) - _sharpe(returns[1][days])
+
+    n = len(calendar)
+    block = min(BOOTSTRAP_BLOCK, n)
+    rng = np.random.default_rng(BOOTSTRAP_SEED)
+    starts = rng.integers(0, n - block + 1,
+                          size=(BOOTSTRAP_RESAMPLES, math.ceil(n / block)))
+    resampled = (starts[:, :, None] + np.arange(block)).reshape(
+        BOOTSTRAP_RESAMPLES, -1)[:, :n]
+    for name, measure in (("sharpe", sharpe), ("mean_pnl", mean_pnl)):
+        point = float(measure(np.arange(n)))
+        result[name] = {"difference": None if math.isnan(point) else point,
+                        "ci": _interval(measure(resampled))}
+    return result
+
+
+def _mean_pnl(trades):
+    return statistics.fmean(t["pnl"] for t in trades) if trades else None
+
+
+def by_year(filter_trades, control_trades):
+    """Mean P&L per trade for the filter and its control, by entry year."""
+    def year_of(trade):
+        return date.fromisoformat(trade["session"]).year
+
+    rows = []
+    for year in sorted({year_of(t) for t in filter_trades + control_trades}):
+        kept = [t for t in filter_trades if year_of(t) == year]
+        control = [t for t in control_trades if year_of(t) == year]
+        rows.append({"year": year, "filter_trades": len(kept),
+                     "filter_mean_pnl": _mean_pnl(kept),
+                     "control_trades": len(control),
+                     "control_mean_pnl": _mean_pnl(control)})
+    return rows
+
+
+def compare(kept, rows, covariates, sessions, config):
+    """A filter against its IV-Matched Control. The verdict is positive only
+    when the regression's filter interval and both bootstrap intervals sit
+    above zero, and the filter's mean P&L per trade beats the control's in
+    every year both trade."""
+    filter_trades = rows[ROW_KEPT]["trades"]
+    control_trades = rows[ROW_IV_MATCHED]["trades"]
+    fit = regression(rows[ROW_BASELINE]["trades"], kept, covariates)
+    resampled = bootstrap(filter_trades, control_trades, sessions,
+                          config.initial_equity)
+    years = by_year(filter_trades, control_trades)
+    significant = all(ci is not None and ci[0] > 0 for ci in (
+        fit["filter_ci"], resampled["sharpe"]["ci"], resampled["mean_pnl"]["ci"]))
+    compared = [row for row in years if row["filter_mean_pnl"] is not None
+                and row["control_mean_pnl"] is not None]
+    consistent = bool(compared) and all(
+        row["filter_mean_pnl"] > row["control_mean_pnl"] for row in compared)
+    return {"verdict": VERDICT_POSITIVE if significant and consistent else VERDICT_NULL,
+            "significant": significant, "consistent_across_years": consistent,
+            "regression": fit, "bootstrap": resampled, "by_year": years}
+
+
+def verdict_line(filters):
+    winners = [f["filter"] for f in filters
+               if f["comparison"]["verdict"] == VERDICT_POSITIVE]
+    return VERDICT_POSITIVE_LINE.format(", ".join(winners)) if winners else VERDICT_NULL_LINE
+
+
 def run_gex_filter(store_path, config, start=None, end=None,
                    percentile_threshold=GEX_PERCENTILE_THRESHOLD):
     """Replay the Baseline and every GEX Filter over the chain store; return
     the report dict. start/end are inclusive session dates.
 
     Each filter splits the sessions into kept and Rejected Sessions; both are
-    replayed as a strategy of their own, beside the Baseline. Its Undecided
-    Sessions (no Naive GEX, or no GEX Percentile yet) sit outside the
-    comparison, the Baseline row included, so kept + rejected = Baseline.
-    GEX Percentile history reaches back before start."""
+    replayed as a strategy of their own, beside the Baseline and the filter's
+    IV-Matched Control, and the filter is compared with its control. Its
+    Undecided Sessions (no Naive GEX, no GEX Percentile yet, or no VIX close
+    before the session) sit outside the comparison, the Baseline row
+    included, so kept + rejected = Baseline. GEX Percentile history reaches
+    back before start. The report opens with the verdict line."""
     sessions, closes = load_store(store_path, start, end)
+    covariates = session_covariates(sessions, closes,
+                                    load_closes(store_path, VIX_SYMBOL))
     series = {}
     if sessions:
         series = gex_series(store_path,
@@ -782,24 +1042,87 @@ def run_gex_filter(store_path, config, start=None, end=None,
         kept, rejected, undecided = set(), set(), []
         for day in sorted(sessions):
             keep, reason = decide(day)
+            if keep is not None and covariates[day]["vix"] is None:
+                keep, reason = None, "no VIX close before the session"
             if keep is None:
                 undecided.append(_skip(day, reason))
             else:
                 (kept if keep else rejected).add(day)
-        filters.append({"filter": name, **settings, "rows": [
-            _filter_row(label, days, sessions, marks, priced, skipped, config)
-            for label, days in ((ROW_KEPT, kept), (ROW_REJECTED, rejected),
-                                (ROW_BASELINE, kept | rejected))],
-            "undecided": undecided})
+        control, threshold = iv_matched_sessions(kept | rejected, len(kept), covariates)
+        rows = {label: _filter_row(label, days, sessions, marks, priced, skipped, config)
+                for label, days in ((ROW_KEPT, kept), (ROW_REJECTED, rejected),
+                                    (ROW_BASELINE, kept | rejected),
+                                    (ROW_IV_MATCHED, control))}
+        rows[ROW_IV_MATCHED]["vix_threshold"] = threshold
+        filters.append({"filter": name, **settings, "rows": list(rows.values()),
+                        "comparison": compare(kept, rows, covariates, sessions, config),
+                        "undecided": undecided})
     return {
+        "verdict": verdict_line(filters),
         "config": asdict(config),
         "sessions": len(sessions),
+        "covariates": [{"session": day.isoformat(), **covariates[day]}
+                       for day in sorted(sessions)],
         "gex": [{"session": day.isoformat(), "naive_gex": series[day],
                  "gamma_regime": gamma_regime(series[day]),
                  "gex_percentile": percentiles[day]}
                 for day in sorted(series) if day in sessions],
         "filters": filters,
     }
+
+
+# ---------------------------------------------------------------------------
+# The human-readable summary
+# ---------------------------------------------------------------------------
+def _number(value, digits=2):
+    return "-" if value is None else f"{value:,.{digits}f}"
+
+
+def _range(ci, digits=2):
+    return "-" if ci is None else f"[{_number(ci[0], digits)}, {_number(ci[1], digits)}]"
+
+
+def format_summary(report):
+    """The GEX Filter report as Markdown, opening with the verdict line."""
+    config = report["config"]
+    lines = [report["verdict"], "",
+             f"Short delta {config['short_delta']:g}, width {config['width']:g},"
+             f" exit {config['exit_rule']}, fill ratio {config['fill_ratio']:g};"
+             f" {report['sessions']} sessions."]
+    for variant in report["filters"]:
+        comparison = variant["comparison"]
+        lines += ["", f"## {variant['filter']}", "",
+                  f"Verdict: {comparison['verdict']} (significant:"
+                  f" {'yes' if comparison['significant'] else 'no'}; consistent across"
+                  f" years: {'yes' if comparison['consistent_across_years'] else 'no'})",
+                  "", "| Sessions | Count | Trades | Total P&L | Avg P&L | Win rate"
+                  " | Sharpe | Max drawdown |", "|---|---|---|---|---|---|---|---|"]
+        for row in variant["rows"]:
+            metrics, label = row["metrics"], row["sessions"]
+            if row.get("vix_threshold") is not None:
+                label += f" (VIX <= {row['vix_threshold']:.2f})"
+            lines.append(
+                f"| {label} | {row['session_count']} | {metrics['trades']}"
+                f" | {_number(metrics['total_pnl'])} | {_number(metrics['avg_pnl_per_trade'])}"
+                f" | {_number(metrics['win_rate'], 3)} | {_number(metrics['sharpe'])}"
+                f" | {_number(metrics['max_drawdown'], 4)} |")
+        fit, resampled = comparison["regression"], comparison["bootstrap"]
+        lines += ["",
+                  f"Regression over {fit['trades']} trades ({fit['dropped']} without"
+                  f" covariates): filter coefficient {_number(fit['filter_coef'])}"
+                  f" {_range(fit['filter_ci'])}.",
+                  f"Bootstrap, filter minus IV-Matched Control: Sharpe"
+                  f" {_number(resampled['sharpe']['difference'])}"
+                  f" {_range(resampled['sharpe']['ci'])}; mean P&L per trade"
+                  f" {_number(resampled['mean_pnl']['difference'])}"
+                  f" {_range(resampled['mean_pnl']['ci'])}.",
+                  "", "| Year | Filter trades | Filter avg P&L | Control trades"
+                  " | Control avg P&L |", "|---|---|---|---|---|"]
+        lines += [f"| {row['year']} | {row['filter_trades']}"
+                  f" | {_number(row['filter_mean_pnl'])} | {row['control_trades']}"
+                  f" | {_number(row['control_mean_pnl'])} |"
+                  for row in comparison["by_year"]]
+    return "\n".join(lines) + "\n"
 
 
 # ---------------------------------------------------------------------------
@@ -836,6 +1159,9 @@ def parse_args(argv=None):
                         help="GEX Percentile the percentile filter must exceed, 0..1 "
                              f"(default {GEX_PERCENTILE_THRESHOLD}; --gex-filter only)")
     parser.add_argument("--out", help="Also write the JSON report to this path")
+    parser.add_argument("--summary",
+                        help="Also write a human-readable summary to this path"
+                             " (--gex-filter only)")
     args = parser.parse_args(argv)
     cell_flags = {"--short-delta": args.short_delta, "--width": args.width,
                   "--fill-ratio": args.fill_ratio, "--exit-rule": args.exit_rule}
@@ -845,6 +1171,8 @@ def parse_args(argv=None):
                                  if value is not None))
     if args.gex_percentile is not None and not args.gex_filter:
         parser.error("--gex-percentile needs --gex-filter")
+    if args.summary is not None and not args.gex_filter:
+        parser.error("--summary needs --gex-filter")
     return args
 
 
@@ -872,6 +1200,8 @@ def main(argv=None):
     text = json.dumps(report, indent=2)
     if args.out:
         Path(args.out).write_text(text)
+    if args.summary:
+        Path(args.summary).write_text(format_summary(report), encoding="utf-8")
     print(text)
     if args.grid:
         return 0 if any(row["trades"] for row in report["headline"]) else 1
