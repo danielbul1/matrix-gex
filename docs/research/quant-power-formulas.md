@@ -230,3 +230,43 @@ Full history (3 commits: 2026-04-12, 2026-09-07 ×2) and the rest of the app:
 - **Strike board** (commit `da08e2d`, 2026-09-07): columns Strike, Net GEX, Abs GEX, Notional Delta, Total OI, Call OI, Put OI, Total Vol, cVol, pVol, and "%" (each strike's net GEX as a share of total absolute gamma). Rows at the key levels and at the max-AG / max / min Net GEX strikes are highlighted, as is each column's maximum. It is a third party's design, possibly modelled on his `gex-options-board`, but nothing proves that. It is a candidate input for "עמודות GEX Board ו-Gamma split" (#29), not evidence.
 - **Key levels** there: Call Wall = max call GEX strike, Put Wall = min put GEX strike, and gamma flip = the per-strike Net GEX sign change nearest spot. Matrix uses Net GEX for the walls and the cumulative crossing for the flip. Neither choice is known to be his.
 - **Authorship.** The author's name (Aleksey Vlasenko) is Russian, like the Russian comments in his CSS, and the board commit landed the same day his CSS was last modified (2026-09-07). This is a coincidence-level hint, not evidence that it is his repo. The app uses different ids, has a single page, and links neither to his site nor to the "Quant Power" or "Max Power" names.
+
+## Addendum 2: the same author's `gex_weekly_strategy_validator` holds a fitted Power Zone formula
+
+Same GitHub author (Aleksey Vlasenko). Read 2026-10-26: https://github.com/vlasenkoalexey/gex_weekly_strategy_validator, `docs/power_zone_analysis.md` and its history (commits `e8fb70f`, `814d9b7`, 2026-04-12; `3569449`, 2026-09-29).
+
+**He is not the Quant Power author.** He is a follower who studies the product from outside:
+- the doc lists "Max Power" as one platform among SpotGamma, Menthor Q and Barchart;
+- the repo replays "**Max Power's own 2026 trades**", taken from the recaps in Max Power's videos (`README.md`, "Replay the MaxPower strategies"), next to his own paper strategies;
+- his profile is unrelated work (ML infrastructure), with GEX as a side project.
+
+**Max Power = Quant Power under its earlier name.** The doc links `https://151212aa.pythonanywhere.com/`. Its public shell (`/`, `/_dash-layout` and `/_dash-dependencies`, fetched 2026-10-26, no callbacks called) has:
+- title "Max Power" and Dash 2.18.1;
+- a Russian login by Telegram username ("ПРОВЕРИТЬ ДОСТУП");
+- the same marketing cards, in Russian. The magnet card is titled **"Max Power"**: "уровень магнит, который притягивает к себе цену";
+- the same menu (OI Volume, GEX Analysis, Key Levels, P/C Ratio, How to use GEX, Disclaimer);
+- the same 24 callbacks as Quant Power.
+
+**What he reports, fitted to values he read from the app's charts.** The doc says the values came from the app (trace settings, per-strike numbers for SPX, 2026-04-10 … 04-20). It does not say how he got access. We did not repeat that, and we do not copy his numbers.
+
+- **Power Zone(K) = AG(K) / 8 + TotalVolume(K) × S² / 20000.**
+  - AG = `(|γ_call·OI_call| + |γ_put·OI_put|) × S² × 0.01 × 100`.
+  - TotalVolume is call plus put volume at the strike for the selected expiry.
+  - S is spot.
+  - The volume term equals a uniform gamma of 0.0004 per contract run through the GEX formula, then divided by 8.
+  - He reports it holding on every strike of 6 expiries (error < 1). His first version (`AG/8`) matched only because one date had zero volume.
+- **Drawn** as a yellow spline area (`fill: tozeroy`, smoothing 0.7) on the right axis behind the Net GEX bars. On the price chart it is drawn sideways (`fill: tozerox`, smoothing 0.8, fill `rgba(255,255,0,0.2)`).
+- **Strike window:** about ±1% around spot (27 SPX strikes at $5).
+- **Max Power (the magnet):** the strike with the highest Power Zone.
+- **Levels on the price chart:**
+  - P1: highest positive Net GEX strike.
+  - N1: most negative Net GEX strike.
+  - Call Vol strike and Put Vol strike.
+  - Max Power.
+  - AG strike: highest AG.
+
+**Cross-check with his own thumbnails.**
+- The volume term explains why the Power Zone peak sits at spot in `_aaHSyIOCKA`: 0DTE volume crowds the at-the-money strikes. At S ≈ 6395, about 62k contracts at one strike give about 128M, close to the peak on that chart's right axis.
+- The yellow, red, cyan and dashed lines in `4Q_qDKgtspE` fit the six price-chart levels.
+
+Nothing in either repo covers Volume Spread, the P/C table, the Forecast text or the GEX board columns.
