@@ -1,6 +1,6 @@
-/* Smoke test: load matrix.js with DOM stubs (offline), then verify
-   VIX AM-settlement, real VIX chain aggregation (netVex/netCharm),
-   OI-weighted strikes, and quick-select predicates. */
+/* Smoke test: load matrix.js with DOM stubs (offline) and a synthetic chain,
+   then check the GEX engine, the Strike Chart draw path and the Key Levels
+   screen (four levels only, the Forecast's h3/h4/h5 layout, the price chart). */
 const fs = require('fs');
 const vm = require('vm');
 
@@ -11,25 +11,28 @@ const absorb = new Proxy(function () {}, {
 });
 function makeEl(id) {
   return {
-    id, innerHTML: '', textContent: '', value: '2', disabled: false,
-    style: {}, dataset: {},
+    id, innerHTML: '', textContent: '', value: '', disabled: false,
+    style: {}, dataset: {}, elements: {},
     classList: { add() {}, remove() {}, toggle() {}, contains: () => false },
-    addEventListener() {}, appendChild() {},
-    getContext: () => absorb, clientWidth: 900, clientHeight: 600,
+    addEventListener() {}, appendChild() {}, setAttribute() {}, removeAttribute() {},
+    getContext: () => absorb, clientWidth: 900, clientHeight: 600, offsetWidth: 120, offsetHeight: 80,
     getBoundingClientRect: () => ({ left: 0, top: 0, width: 900, height: 600 }),
   };
 }
 const els = new Map();
 global.document = {
   hidden: true,
+  title: '',
   getElementById: id => { if (!els.has(id)) els.set(id, makeEl(id)); return els.get(id); },
+  querySelector: () => null,
   querySelectorAll: () => [],
   createElement: () => makeEl('created'),
 };
 global.window = {
-  addEventListener() {}, innerWidth: 1280, innerHeight: 800,
-  devicePixelRatio: 1, location: { search: '' },
+  addEventListener() {}, scrollTo() {}, innerWidth: 1280, innerHeight: 800,
+  devicePixelRatio: 1, location: { pathname: '/matrix/disclaimer', search: '' },
 };
+global.history = { pushState() {}, replaceState() {} };
 global.localStorage = { getItem: () => null, setItem() {} };
 global.fetch = () => Promise.reject(new Error('offline smoke test'));
 
@@ -41,99 +44,74 @@ function check(name, cond, detail = '') {
   console.log(`${cond ? 'PASS' : 'FAIL'}  ${name}${detail ? '  — ' + detail : ''}`);
   if (!cond) failures++;
 }
-
-// --- 1. AM settlement: VIX expiry 9:30 ET vs SPY 16:00 ET ---
-const now = Date.UTC(2026, 6, 20, 12, 0, 0);
-const tVix = preciseYearsToExpiry('2026-07-22', 'VIX', now);
-const tVixw = preciseYearsToExpiry('2026-07-22', 'VIXW', now);
-const tSpy = preciseYearsToExpiry('2026-07-22', 'SPY', now);
-check('VIX is AM-settled (shorter T than PM-settled)', tVix < tSpy, `vix=${(tVix * 365.25 * 24).toFixed(1)}h spy=${(tSpy * 365.25 * 24).toFixed(1)}h`);
-check('VIXW matches VIX AM settlement', tVix === tVixw);
-
-// --- 2. Real VIX chain through the engine ---
-const vix = JSON.parse(fs.readFileSync(process.env.TEMP + '/vix.json', 'utf8'));
-const OCC = /([A-Z]+)(\d{6})([CP])(\d{8})/;
-const today = new Date();
-const opts = [];
-for (const o of vix.data.options) {
-  const m = OCC.exec(o.option || '');
-  if (!m) continue;
-  const exp = `20${m[2].slice(0, 2)}-${m[2].slice(2, 4)}-${m[2].slice(4, 6)}`;
-  const dte = Math.max(0, Math.round((Date.parse(exp + 'T00:00:00Z') - Date.now()) / 86400000));
-  const spot = vix.data.current_price;
-  const strike = parseInt(m[4], 10) / 1000;
-  if (Math.abs(strike - spot) / spot > 0.25) continue;
-  if (!(o.open_interest > 0)) continue;
-  opts.push({ k: strike, t: m[3], root: m[1], exp, dte, iv: o.iv || 0, oi: o.open_interest | 0, vol: o.volume | 0, g: o.gamma || 0, d: o.delta || 0 });
+function noThrow(fn) {
+  try { fn(); return true; } catch (e) { console.log('  error:', e.message); return false; }
 }
-const rec = { spot: vix.data.current_price, asof: new Date().toISOString(), mult: 100, opts, source: 'smoke' };
-const chain = buildChainRealFromRecord('VIX', rec, null);
-const R = calcGEX(chain, 'full');
-check('VIX chain parsed', opts.length > 100, `${opts.length} options kept (within +/-25% of spot)`);
-check('VIX strikes aggregated', R.strikes.length > 10, `${R.strikes.length} strikes`);
-const hasVex = R.strikes.some(s => Math.abs(s.netVex) > 0);
-const hasCharm = R.strikes.some(s => Math.abs(s.netCharm) > 0);
-check('netVex populated per strike', hasVex);
-check('netCharm populated per strike', hasCharm);
-const roots = new Set(opts.map(o => o.root));
-check('VIX+VIXW roots present', roots.has('VIX'), [...roots].join(','));
 
-// --- 3. OI-weighted strikes ---
-const w = oiWeightedStrikes(R);
-check('weighted strikes finite', Number.isFinite(w.call) && Number.isFinite(w.put) && Number.isFinite(w.total),
-  `call=${w.call?.toFixed(1)} put=${w.put?.toFixed(1)} total=${w.total?.toFixed(1)} spot=${R.spot}`);
-const ks = R.strikes.map(s => s.strike);
-check('weighted strikes within strike range',
-  w.call >= Math.min(...ks) && w.call <= Math.max(...ks) && w.total >= Math.min(...ks) && w.total <= Math.max(...ks));
+// --- 1. AM settlement: SPX expiry 9:30 ET vs SPY 16:00 ET ---
+const now = Date.UTC(2026, 6, 20, 12, 0, 0);
+check('SPX is AM-settled (shorter T than SPY)',
+  preciseYearsToExpiry('2026-07-22', 'SPX', now) < preciseYearsToExpiry('2026-07-22', 'SPY', now));
 
-// --- 4. Quick-select predicates ---
-check('0DTE predicate', expiryQuickPredicate('0dte')(0) === true && expiryQuickPredicate('0dte')(1) === false);
-check('Week predicate', expiryQuickPredicate('week')(7) === true && expiryQuickPredicate('week')(8) === false);
-check('All predicate', expiryQuickPredicate('all')(45) === true);
-
-// --- 5. METRICS wiring ---
-check('net_vex/net_charm bar metrics exist', METRICS.net_vex.kind === 'bar' && METRICS.net_charm.kind === 'bar');
-check('weighted is overlay kind', METRICS.weighted.kind === 'overlay');
-check('BAR_METRIC_BY_CHART maps vex/chex', BAR_METRIC_BY_CHART.vexChart === 'net_vex' && BAR_METRIC_BY_CHART.chexChart === 'net_charm');
-check('chartTargets vex/chex ids', chartTargets('vexChart').tooltipId === 'vexTooltip' && chartTargets('chexChart').legendId === 'chexChartLegend');
-check('Weighted overlay keeps only Total W', WEIGHTED_LINES.length === 1 && WEIGHTED_LINES[0].key === 'total');
-
-// --- 5b. DEX|GEX|VEX|CHEX switcher on the main gexChart ---
-check('gexChart bar metric defaults to net_gex', chartBarMetricKey('gexChart') === 'net_gex' && GEX_CHART_BAR_METRIC === 'net_gex');
-check('fixed charts unchanged', chartBarMetricKey('dexChart') === 'net_dex' && chartBarMetricKey('matrixGexChart') === null);
-let switchOk = true;
-try {
-  for (const key of ['net_dex', 'net_vex', 'net_charm', 'net_gex']) {
-    GEX_CHART_BAR_METRIC = key;
-    const st = chartActiveMetrics('gexChart');
-    if (!st.hasBar || st.active[0] !== key) throw new Error(`bad active state for ${key}`);
-    if (st.active.some(m => BAR_METRIC_KEYS.includes(m) && m !== key)) throw new Error(`foreign bar metric leaked for ${key}`);
-    drawChart(R, 'gexChart');
+// --- 2. Synthetic chain through the engine ---
+const spot = 7480;
+const exp = new Date(Date.now() + 3 * 86400000).toISOString().slice(0, 10);
+const opts = [];
+for (let k = 7300; k <= 7660; k += 5) {
+  for (const t of ['C', 'P']) {
+    // calls heavier above spot, puts heavier below, so walls sit on either side
+    const oi = Math.round(2000 * Math.exp(-Math.abs(k - (t === 'C' ? 7550 : 7400)) / 60)) + 20;
+    opts.push({ k, t, root: 'SPXW', exp, dte: 3, iv: 0.15, oi, vol: Math.round(oi / 3), g: 0, d: 0 });
   }
-} catch (e) { switchOk = false; console.log('switcher error:', e.message); }
-check('switcher swaps gexChart bars (all 4 metrics, no-throw)', switchOk);
-GEX_CHART_BAR_METRIC = 'net_gex';
-const gexOff = (ACTIVE.delete('net_gex'), chartActiveMetrics('gexChart'));
-check('Net GEX pbtn still hides bars when GEX selected', gexOff.hasBar === false && !gexOff.active.includes('net_gex'));
-ACTIVE.add('net_gex');
+}
+REAL.SPX = { spot, asof: new Date().toISOString(), mult: 100, opts, source: 'smoke' };
+const R = calcGEX(buildChainReal('SPX'));
+check('strikes aggregated', R.strikes.length > 50, `${R.strikes.length} strikes`);
+check('call wall above put wall', R.callWall > R.putWall, `call=${R.callWall} put=${R.putWall}`);
+check('zero gamma found inside the strike range', R.flip > 7300 && R.flip < 7660, `flip=${R.flip?.toFixed(1)}`);
 
-// --- 6. VEX/CHEX draw path does not throw (absorbing canvas stub) ---
-let drawOk = true;
-try {
-  drawChart(R, 'vexChart');
-  drawChart(R, 'chexChart');
-  renderGreekExposureKpis(R, 'vex');
-  renderGreekExposureKpis(R, 'chex');
-} catch (e) { drawOk = false; console.log('draw error:', e.message); }
-check('vex/chex draw + KPI render no-throw', drawOk);
+// --- 3. Strike Chart ---
+check('quick-select predicates',
+  expiryQuickPredicate('0dte')(0) && !expiryQuickPredicate('0dte')(1)
+  && expiryQuickPredicate('week')(7) && !expiryQuickPredicate('week')(8) && expiryQuickPredicate('all')(45));
+check('his seven parameter buttons',
+  Object.keys(METRICS).join() === 'net_gex,ag,call_oi,put_oi,call_vol,put_vol,power');
+R.expectedMove = calcExpectedMove(buildChainReal('SPX'));
+check('Strike Chart draws', noThrow(() => drawChart(R)));
 
-// --- 7. Weighted overlay draw path on gexChart ---
-let wOk = true;
-try {
-  ACTIVE.add('weighted');
-  drawChart(R, 'gexChart');
-  ACTIVE.delete('weighted');
-} catch (e) { wOk = false; console.log('weighted draw error:', e.message); }
-check('weighted overlay draw no-throw', wOk);
+// --- 4. Key Levels ---
+const KR = keyLevelsGex('SPX');
+const levels = keyLevels(KR);
+check('exactly the four Key Levels',
+  levels.map(l => l.label).sort().join() === 'Call Wall,Max Gamma,Put Wall,Zero Gamma',
+  levels.map(l => `${l.label} ${fmtPrice(l.price)}`).join(', '));
+check('a missing level is dropped, not drawn at 0',
+  keyLevels({ ...KR, flip: null }).every(l => l.label !== 'Zero Gamma' && l.price > 0));
+const below = nearestKeyLevel(KR, 'below'), above = nearestKeyLevel(KR, 'above');
+check('scenario levels straddle the price', below.price < KR.spot && above.price > KR.spot,
+  `below=${below.label} above=${above.label}`);
+
+const html = forecastHtml(KR);
+check('Forecast: one h3 title', (html.match(/<h3>/g) || []).length === 1 && html.includes('Forecast for SPX'));
+check('Forecast: h4 sections Market Read and Scenario Ladder',
+  /<h4>Market Read<\/h4>/.test(html) && /<h4>Scenario Ladder<\/h4>/.test(html));
+check('Forecast: h5 sub-heads', (html.match(/<h5>/g) || []).length >= 4);
+check('Forecast names no level but the four', !/max pain|P1|N1|AG Strike|Call Vol|Put Vol/i.test(html));
+
+const candles = Array.from({ length: 120 }, (_, i) => {
+  const open = spot - 20 + Math.sin(i / 9) * 15;
+  return { time: 1792785540 + i * 300, open, high: open + 4, low: open - 4, close: open + (i % 2 ? 2 : -2) };
+});
+activeView = KEY_LEVELS_VIEW;
+check('Key Levels chart draws with candles', noThrow(() => drawKeyLevelsChart({ R: KR, candles })));
+check('Key Levels chart draws with no candles', noThrow(() => drawKeyLevelsChart({ R: KR, candles: [] })));
+check('legend lists the four levels',
+  ['Call Wall', 'Put Wall', 'Zero Gamma', 'Max Gamma'].every(l => byId('klLegend').innerHTML.includes(l)));
+keyLevelsState = { symbol: 'SPX', R: KR, candles };
+check('render fills the Forecast', noThrow(renderKeyLevels) && byId('forecast').innerHTML.includes('<h3>'));
+check('tooltip shows a candle', noThrow(() => {
+  byId('keyLevelsChart')._klPlot = { ...byId('keyLevelsChart')._klPlot, candles };
+  showKeyLevelsTooltip({ clientX: 300, clientY: 200 });
+}) && byId('klTooltip').innerHTML.includes('Close'));
 
 process.exit(failures ? 1 : 0);

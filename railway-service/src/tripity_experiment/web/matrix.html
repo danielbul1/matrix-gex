@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Matrix</title>
-<link rel="stylesheet" href="/matrix/matrix.css?v=20261026-shell">
+<link rel="stylesheet" href="/matrix/matrix.css?v=20261026-key-levels">
 </head>
 <body>
 <header id="sidebar">
@@ -106,7 +106,21 @@
         <span class="ticker-status" aria-live="polite"></span>
       </form>
     </div>
-    <div class="coming-soon"><h2>Key Levels</h2><p>Coming soon.</p></div>
+
+    <div class="card chartcard kl-card">
+      <div class="charttop">
+        <span class="symlabel" id="klSymLabel"></span>
+        <span class="chartlegend kl-legend" id="klLegend"></span>
+      </div>
+      <div class="chartwrap">
+        <div class="watermark">Matrix</div>
+        <div class="chart-crosshair-x" id="klCrosshairX"></div>
+        <div class="chart-tooltip" id="klTooltip"></div>
+        <canvas id="keyLevelsChart" height="560"></canvas>
+      </div>
+    </div>
+
+    <div class="card forecast-card" id="forecast" aria-live="polite"></div>
   </section>
 
   <section class="app-view" id="view-options-summary" data-title="P/C Ratio">
@@ -122,6 +136,6 @@
   </section>
 </main>
 
-<script src="/matrix/matrix.js?v=20261026-shell"></script>
+<script src="/matrix/matrix.js?v=20261026-key-levels"></script>
 </body>
 </html>
