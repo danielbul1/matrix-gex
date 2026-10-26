@@ -93,6 +93,37 @@ Gotchas learned the hard way (2026-07-19):
 
 ## Session Log (every agent MUST append — newest first)
 
+### 2026-10-26 — Tastytrade feed probe (not wired into the host)
+- **Why:** researched George (georgefi.trade), Quant Data and open-source GEX/flow
+  projects. What we lack is a real-time option trade tape; Tastytrade's API (free with
+  a funded account) streams it over DXLink. Its TimeAndSale event is not officially
+  supported, so `tools/tasty_probe.py` checks it before anything is built on it.
+- **Probe:** streams SPX 0DTE (±30 strikes) for N minutes and reports: quote lag
+  (real-time or delayed), tape coverage vs Trade day volume, bid/ask present on
+  prints, feed aggressor side vs side from quote, sweep-like clusters, Greeks cadence,
+  open interest. Needs `TASTY_CLIENT_SECRET` + `TASTY_REFRESH_TOKEN` (read scope);
+  `pip install "tastytrade>=13,<14"` (not in requirements.txt yet).
+- **Terms to respect:** personal use only, no display to third parties, no bulk
+  "data collection" (ToS §8) — stream near-the-money strikes, not whole chains.
+- **Railway:** the three `TASTY_*` vars sit on `backend` (values redacted to agents).
+  A separate one-shot service `tasty-probe` (restart NEVER) builds this branch and runs
+  the probe with references to them; read its result with `railway logs`. `backend` is
+  untouched. Delete `tasty-probe` once the feed decision is made.
+- `--check` tests login, chain and stream at any hour; the full run needs market hours.
+- **First full run (SPX 0DTE, ±30 strikes, 15 min, 2026-10-26 11:01 ET):** 77,767
+  TimeAndSale prints on 111/122 contracts, 99.9% with bid/ask, 100% valid, aggressor side
+  always BUY/SELL (never undefined), 35% spread legs; every print on exchange C (SPXW is
+  Cboe-only, so no multi-exchange sweeps there). Greeks update about every 79 s (compute
+  our own for live GEX). OI on all contracts. That run's lag and coverage numbers were
+  wrong (Quote times are empty; coverage skipped spread legs): fixed, rerun with `--symbol`.
+- **Rerun (SPY then SPX, 8 min each, 11:51 ET):** the feed is **15 minutes delayed**
+  (print time vs wall clock, median 900.7 s on both), although the SDK uses
+  `/api-quote-tokens`. Likely the account (unfunded, or market-data agreements not
+  signed); recheck once that is fixed. Tape covers 100% of the day-volume change on both.
+  SPY prints span 19 exchanges; the probe's sweep rule (2+ exchanges, same side, 500 ms)
+  found 2,532 clusters in 8 min, far too loose to be a signal: a real classifier needs
+  whale-options' stricter rules. Greeks update every 75-110 s.
+
 ### 2026-10-26 — Like his: shell, multi-date Strike Chart, GEX board from his screenshot
 - **Evidence:** three frames from his videos (sent by the owner) show the Strike Chart's
   multi-date Expiration dropdown and his whole GEX board. Written up in
