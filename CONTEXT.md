@@ -87,7 +87,7 @@ _Avoid_: test set, out-of-sample, OOS
 ## Dashboard
 
 **Strike Chart**:
-The home screen: one ticker and one or more expiries summed per strike, with Net GEX, AG, OI, volume and Power Zone drawn per strike beside the price. A ticker starts on the expiries of the current week through Friday.
+The home screen: one ticker and one or more expiries summed per strike, with Net GEX, AG, OI, volume and Power Zone drawn per strike beside the price. A ticker starts on the nearest expiry alone, and the trader adds more from a list of every open expiry.
 _Avoid_: GEX view, main chart
 
 **Strike Window**:
@@ -100,7 +100,7 @@ _Avoid_: OI page, volume view
 
 **GEX Board**:
 The screen for one ticker over a set of selected expiries: a strike table beside a Gamma Total, a Gamma Split and a price chart. Its menu label is "GEX Analysis", and its board is titled "Options Chain Board".
-- It has no ticker box. The ticker comes from a "Select Ticker:" row of buttons (SPX, SPY and QQQ), and the expiries from one button per expiry, each showing its Expiry Share, with Select All and Clear All. A ticker starts on the expiries of the current week through Friday.
+- It has no ticker box. The ticker comes from a "Select Ticker:" row of buttons (SPX, SPY and QQQ), and the expiries from one button per expiry, each showing its Expiry Share, with Select All and Clear All. A ticker starts on the nearest expiry alone, and the trader adds more.
 - The table has one row per strike, summed over the selected expiries. Its columns read Strike, Net GEX, Abs GEX (the AG), Notional Delta, Total OI, Call OI, Put OI, Total Vol, cVol, pVol and %, where % is the strike's Net GEX as a share of the total AG.
 - It covers strikes within 5% of spot. It runs from the highest strike down, scrolls, and sorts by any column.
 - A dot marks each column's largest value, and every row holding one is shaded. Net GEX counts by size, so its most negative strike can be the one.

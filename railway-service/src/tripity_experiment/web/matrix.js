@@ -886,33 +886,18 @@ function syncTickerInput(view,value=screenTickers[view]){
 
 // ---------- Expiration (Strike Chart) ----------
 // Like his Expiration dropdown: several dates at once, shown as removable chips, summed
-// per strike. The list holds the six nearest dates (a guess from one sample of his list).
-// A ticker starts on the dates of the current week through Friday, as both of his
-// screenshots show (14-18 Sep on the Strike Chart, 28 Sep-2 Oct on the GEX board).
-const EXPIRATION_COUNT = 6;
+// per strike. The menu lists every open expiry, so the trader can add any of them. A
+// ticker starts on the nearest expiry only, and the trader adds more (owner's choice).
 function chainExpirations(chain){
   const todayIso = new Date().toISOString().slice(0,10);
-  return [...new Set(chain.quotes.map(q=>q.exp).filter(exp=>exp && exp >= todayIso))].sort().slice(0,EXPIRATION_COUNT);
-}
-function marketTodayIso(){
-  return new Intl.DateTimeFormat('en-CA',{timeZone:'America/New_York',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
-}
-// The expiries of the current trading week through Friday (next week's on a weekend),
-// or the nearest one when the week has none left.
-function weekExpirations(expiries){
-  const [y,m,d] = marketTodayIso().split('-').map(Number);
-  const dow = new Date(Date.UTC(y,m-1,d)).getUTCDay();
-  const toFriday = dow===6 ? 6 : dow===0 ? 5 : 5-dow;
-  const friday = new Date(Date.UTC(y,m-1,d+toFriday)).toISOString().slice(0,10);
-  const week = expiries.filter(exp=>exp<=friday);
-  return week.length ? week : expiries.slice(0,1);
+  return [...new Set(chain.quotes.map(q=>q.exp).filter(exp=>exp && exp >= todayIso))].sort();
 }
 let homeExpiries = [];
 function populateExpirations(chain){
   homeExpiries = chainExpirations(chain);
   selectedExpirations = selectedExpirations
     ? new Set([...selectedExpirations].filter(exp=>homeExpiries.includes(exp)))
-    : new Set(weekExpirations(homeExpiries));
+    : new Set(homeExpiries.slice(0,1));
   renderExpirationPicker();
 }
 function renderExpirationPicker(){
@@ -2268,8 +2253,8 @@ async function refreshGexBoard(symbol){
   gb.expiries = oiVolumeExpiries(chain);
   gb.shares = gexBoardExpiryShares({...chain, quotes:chain.quotes.filter(q=>gb.expiries.includes(q.exp))});
   const kept = [...gb.selected].filter(exp=>gb.expiries.includes(exp));
-  // A new ticker starts on the current week through Friday, as his screenshot shows.
-  gb.selected = new Set(changed || !kept.length ? weekExpirations(gb.expiries) : kept);
+  // A new ticker starts on the nearest expiry only; the trader adds more (owner's choice).
+  gb.selected = new Set(changed || !kept.length ? gb.expiries.slice(0,1) : kept);
   if(activeView===GB_VIEW) history.replaceState(null,'',screenUrl(GB_VIEW));
   renderGexBoard(true);
   setGbStatus(result.ok ? '' : `Refresh failed. Showing the last data for ${symbol}.`, result.ok ? '' : 'error');

@@ -72,10 +72,7 @@ check('call wall above put wall', R.callWall > R.putWall, `call=${R.callWall} pu
 check('zero gamma found inside the strike range', R.flip > 7300 && R.flip < 7660, `flip=${R.flip?.toFixed(1)}`);
 
 // --- 3. Strike Chart ---
-// Several expirations at once, starting on the current week through Friday
-check('the current week is the default', JSON.stringify(weekExpirations([marketTodayIso(), '2099-01-01'])) === JSON.stringify([marketTodayIso()]));
-check('no date this week falls back to the nearest', JSON.stringify(weekExpirations(['2099-01-01', '2099-01-02'])) === '["2099-01-01"]');
-check('no dates gives none', weekExpirations([]).length === 0);
+// Several expirations at once; the menu lists every open date and the trader picks
 check('dropdown lists future dates once, sorted',
   JSON.stringify(chainExpirations({ quotes: [{ exp: '2099-01-02' }, { exp: '2000-01-01' }, { exp: '2099-01-01' }, { exp: '2099-01-01' }] }))
   === '["2099-01-01","2099-01-02"]');
@@ -83,9 +80,9 @@ check('his seven parameter buttons',
   Object.keys(METRICS).join() === 'net_gex,ag,call_oi,put_oi,call_vol,put_vol,power');
 R.expectedMove = calcExpectedMove(buildChainReal('SPX'));
 check('Strike Chart draws', noThrow(() => drawChart(R)));
-check('dropdown lists only the six nearest dates',
+check('the dropdown lists every open date, not just the nearest few',
   JSON.stringify(chainExpirations({ quotes: ['2099-01-08', '2099-01-01', '2099-01-03', '2099-01-02', '2099-01-05', '2099-01-04', '2099-01-07', '2099-01-06'].map(exp => ({ exp })) }))
-  === JSON.stringify(['2099-01-01', '2099-01-02', '2099-01-03', '2099-01-04', '2099-01-05', '2099-01-06']));
+  === JSON.stringify(['2099-01-01', '2099-01-02', '2099-01-03', '2099-01-04', '2099-01-05', '2099-01-06', '2099-01-07', '2099-01-08']));
 check('AG and Power Zone share the GEX axis; OI and volume get their own',
   METRICS.ag.axis === 'gex' && METRICS.power.axis === 'gex'
   && ['call_oi', 'put_oi', 'call_vol', 'put_vol'].every(m => METRICS[m].axis === 'count'));

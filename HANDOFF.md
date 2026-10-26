@@ -93,6 +93,12 @@ Gotchas learned the hard way (2026-07-19):
 
 ## Session Log (every agent MUST append — newest first)
 
+### 2026-10-26 — Expirations: start on the nearest only, list every date (owner)
+- The owner wants to choose the dates: the Strike Chart and the GEX board now start on
+  the nearest expiry alone, not the current week, and the menu lists every open expiry
+  (the Strike Chart's six-date cap is gone). `weekExpirations`/`marketTodayIso` removed.
+- Tests and the smoke script updated; 228 pytest green, smoke green. Deployed after merge.
+
 ### 2026-10-26 — Like his: shell, multi-date Strike Chart, GEX board from his screenshot
 - **Evidence:** three frames from his videos (sent by the owner) show the Strike Chart's
   multi-date Expiration dropdown and his whole GEX board. Written up in

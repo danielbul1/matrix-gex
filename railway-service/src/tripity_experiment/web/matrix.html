@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Matrix</title>
-<link rel="stylesheet" href="/matrix/matrix.css?v=20261026-like-his-2">
+<link rel="stylesheet" href="/matrix/matrix.css?v=20261026-dates">
 </head>
 <body>
 <header id="sidebar">
@@ -294,11 +294,11 @@
 
       <h2>The screens</h2>
       <h3>Strike Chart (home)</h3>
-      <p>One ticker and one or more expirations, added together. Type a ticker and press <strong>Search</strong> or Enter. The expirations of the current week are chosen at first; × removes a date and the menu adds one. The chart shows strikes within about 1% of spot for SPX and NDX, and about 3% for other tickers. The buttons turn layers on and off: <strong>Net GEX</strong> as bars, and <strong>AG</strong>, OI, volume and <strong>Power Zone</strong> as areas. Beside it are the day's 1-minute candles and a simplified price line. The candle chart carries the Price Lines of the chosen expirations.</p>
+      <p>One ticker and one or more expirations, added together. Type a ticker and press <strong>Search</strong> or Enter. The nearest date is chosen at first; the menu lists every open expiry, so you add the ones you want and × removes a date. The chart shows strikes within about 1% of spot for SPX and NDX, and about 3% for other tickers. The buttons turn layers on and off: <strong>Net GEX</strong> as bars, and <strong>AG</strong>, OI, volume and <strong>Power Zone</strong> as areas. Beside it are the day's 1-minute candles and a simplified price line. The candle chart carries the Price Lines of the chosen expirations.</p>
       <h3>OI Volume</h3>
       <p>Open interest and today's volume per strike for one expiration. <strong>Volume Spread</strong> is call volume minus put volume: blue where calls traded more, red where puts did. The price chart marks the strikes with the most call OI, put OI, call volume and put volume.</p>
       <h3>GEX Analysis</h3>
-      <p>The board for SPX, SPY or QQQ over several expirations at once. Pick a ticker button, then click expiration buttons, or use <strong>Select All</strong> and <strong>Clear All</strong>. Each expiration button shows its share of the ticker's gamma. The line above them gives spot, Total Gamma and the regime. It shows:</p>
+      <p>The board for SPX, SPY or QQQ over several expirations at once. Pick a ticker button; it starts on the nearest expiry. Click expiration buttons to add or remove dates, or use <strong>Select All</strong> and <strong>Clear All</strong>. Each expiration button shows its share of the ticker's gamma. The line above them gives spot, Total Gamma and the regime. It shows:</p>
       <ul>
         <li>A table of every strike within 5% of spot. Click a column header to sort. A green dot marks each column's largest value, and its row is shaded.</li>
         <li><strong>Net Gamma</strong>: Net GEX per strike, with an Abs GEX line.</li>
@@ -374,6 +374,6 @@
   </section>
 </main>
 
-<script src="/matrix/matrix.js?v=20261026-like-his-2"></script>
+<script src="/matrix/matrix.js?v=20261026-dates"></script>
 </body>
 </html>
