@@ -280,6 +280,19 @@ REAL.SPX = synthRecord(5000, [exp0]);
 gb.selected = new Set([exp0]);
 check('GEX Board reads its own copy of the chain', computeGexBoard('SPX').spot === 6000);
 
+// --- 9. His Zero Gamma, price label and colours (round 2) ---
+{
+  const zg = calcGEX({ symbol: 'SPX', spot: 6000, mult: 100, quotes: [
+    { K: 5900, isCall: false, oi: 500, vol: 0, exp: 'x', g: { gamma: 0.002 } },   // far crossing below
+    { K: 5950, isCall: true, oi: 500, vol: 0, exp: 'x', g: { gamma: 0.002 } },
+    { K: 5990, isCall: false, oi: 300, vol: 0, exp: 'x', g: { gamma: 0.002 } },
+    { K: 6010, isCall: true, oi: 100, vol: 0, exp: 'x', g: { gamma: 0.002 } },    // nearest crossing: 5990 -> 6010
+  ] });
+  check('Zero Gamma is the sign change nearest spot', zg.flip > 5990 && zg.flip < 6010, `${zg.flip}`);
+  check('the Strike Chart price label has two decimals', /"Price: "\+R\.spot\.toFixed\(2\)/.test(fs.readFileSync('railway-service/src/tripity_experiment/web/matrix.js', 'utf8')));
+  check('his button colours', [METRICS.net_gex, METRICS.ag, METRICS.call_oi, METRICS.put_oi, METRICS.call_vol, METRICS.put_vol, METRICS.power].map(m => m.color).join()
+    === '#22b5ff,#915bf8,#02d432,#f32d35,#003cfe,#e55f04,#e8ca01');
+}
 // --- 8. Power Zone and the Price Lines (#39) ---
 {
   const pzChain = { symbol: 'SPX', spot: 6000, mult: 100, quotes: [

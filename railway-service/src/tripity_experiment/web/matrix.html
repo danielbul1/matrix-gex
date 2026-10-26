@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Matrix</title>
-<link rel="stylesheet" href="/matrix/matrix.css?v=20261026-power-zone">
+<link rel="stylesheet" href="/matrix/matrix.css?v=20261026-like-his">
 </head>
 <body>
 <header id="sidebar">
@@ -42,13 +42,13 @@
 
     <div class="params">
       <span class="plabel">Parameters:</span>
-      <button class="pbtn active" data-metric="net_gex"  style="--c:#22b8ff">Net GEX</button>
-      <button class="pbtn active" data-metric="ag"       style="--c:#ab7df6">AG</button>
-      <button class="pbtn"        data-metric="call_oi"  style="--c:#26c281">Call OI</button>
-      <button class="pbtn"        data-metric="put_oi"   style="--c:#ef5350">Put OI</button>
-      <button class="pbtn"        data-metric="call_vol" style="--c:#2f73ff">Call Vol</button>
-      <button class="pbtn"        data-metric="put_vol"  style="--c:#ff8a3d">Put Vol</button>
-      <button class="pbtn"        data-metric="power"    style="--c:#ffc107">Power Zone</button>
+      <button class="pbtn active" data-metric="net_gex"  style="--c:#22b5ff">Net GEX</button>
+      <button class="pbtn active" data-metric="ag"       style="--c:#915bf8">AG</button>
+      <button class="pbtn"        data-metric="call_oi"  style="--c:#02d432">Call OI</button>
+      <button class="pbtn"        data-metric="put_oi"   style="--c:#f32d35">Put OI</button>
+      <button class="pbtn"        data-metric="call_vol" style="--c:#003cfe">Call Vol</button>
+      <button class="pbtn"        data-metric="put_vol"  style="--c:#e55f04">Put Vol</button>
+      <button class="pbtn"        data-metric="power"    style="--c:#e8ca01;--t:#000">Power Zone</button>
     </div>
 
     <div class="card chartcard">
@@ -111,11 +111,11 @@
 
     <div class="params" id="oivParams">
       <span class="plabel">Parameters:</span>
-      <button class="pbtn active" data-oiv-metric="volume_spread" style="--c:#22b8ff">Volume Spread</button>
-      <button class="pbtn"        data-oiv-metric="call_oi"       style="--c:#26c281">Call OI</button>
-      <button class="pbtn"        data-oiv-metric="put_oi"        style="--c:#ef5350">Put OI</button>
-      <button class="pbtn"        data-oiv-metric="call_vol"      style="--c:#2f73ff">Call Vol</button>
-      <button class="pbtn"        data-oiv-metric="put_vol"       style="--c:#ff8a3d">Put Vol</button>
+      <button class="pbtn active" data-oiv-metric="volume_spread" style="--c:#22b5ff">Volume Spread</button>
+      <button class="pbtn"        data-oiv-metric="call_oi"       style="--c:#02d432">Call OI</button>
+      <button class="pbtn"        data-oiv-metric="put_oi"        style="--c:#f32d35">Put OI</button>
+      <button class="pbtn"        data-oiv-metric="call_vol"      style="--c:#003cfe">Call Vol</button>
+      <button class="pbtn"        data-oiv-metric="put_vol"       style="--c:#e55f04">Put Vol</button>
     </div>
 
     <div class="card chartcard">
@@ -315,7 +315,7 @@
             <tr><td><strong>Power Zone</strong></td><td>AG plus a share of today's volume, near spot only</td><td>The zone where hedging is heaviest right now</td></tr>
             <tr><td><strong>Volume Spread</strong></td><td>Call volume minus put volume</td><td>Which side is more active at each strike today</td></tr>
             <tr><td><strong>Notional Delta</strong></td><td>|Delta| × OI × 100 × spot, calls and puts both positive</td><td>How much underlying the hedges at a strike stand for</td></tr>
-            <tr><td><strong>Zero Gamma</strong></td><td>Where Net GEX, summed from the lowest strike up, changes sign</td><td>The line between the positive- and negative-gamma sides of the chain</td></tr>
+            <tr><td><strong>Zero Gamma</strong></td><td>Where Net GEX changes sign between two strikes, the crossing nearest the price</td><td>The line between the negative-gamma side and the positive-gamma side</td></tr>
             <tr><td><strong>Max Gamma</strong></td><td>The strike with the largest Net GEX, either sign</td><td>The strongest single strike</td></tr>
             <tr><td><strong>Call Wall / Put Wall</strong></td><td>The largest positive / most negative Net GEX</td><td>Often act as resistance / support</td></tr>
             <tr><td><strong>P1 / N1</strong></td><td>Price Lines at the largest positive / most negative Net GEX</td><td>Usually the same strikes as the walls, drawn on price</td></tr>
@@ -366,6 +366,6 @@
   </section>
 </main>
 
-<script src="/matrix/matrix.js?v=20261026-power-zone"></script>
+<script src="/matrix/matrix.js?v=20261026-like-his"></script>
 </body>
 </html>

@@ -107,7 +107,7 @@ def test_strike_chart_labels_like_his():
     script = (host.MATRIX_WEB_DIR / "matrix.js").read_text(encoding="utf-8")
     start = script.index("function drawChart(")
     draw = script[start:script.index("\nfunction fmtAxis", start)]
-    assert 'const priceLabel = "Price: "+fmtPrice(R.spot);' in draw
+    assert 'const priceLabel = "Price: "+R.spot.toFixed(2);' in draw
     assert "linkedMarketPrice" not in draw
     assert 'ctx.fillText("STRIKE"' in draw
     assert "splineTo(ctx,pts,top,bottom)" in draw
@@ -118,7 +118,7 @@ def test_strike_chart_labels_like_his():
 def test_power_zone_one_color_and_his_default_buttons():
     page = (host.MATRIX_WEB_DIR / "matrix.html").read_text(encoding="utf-8")
     script = (host.MATRIX_WEB_DIR / "matrix.js").read_text(encoding="utf-8")
-    button = re.search(r'data-metric="power"\s+style="--c:(#[0-9a-f]{6})"', page).group(1)
+    button = re.search(r'data-metric="power"\s+style="--c:(#[0-9a-f]{6})', page).group(1)
     line = re.search(r'power:\s*\{label:"Power Zone",\s*color:"(#[0-9a-f]{6})"', script).group(1)
     assert button == line
     active = re.findall(r'<button class="pbtn active"[^>]*data-metric="([a-z_]+)"', page)
