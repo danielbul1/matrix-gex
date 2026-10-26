@@ -410,16 +410,17 @@ function drawChart(R,chartId='gexChart'){
       ctx.fillText(fmtAxis(rMax*f), W-padR+8, yy); }
   }
 
-  // ----- area overlays -----
+  // ----- area overlays: a smoothed spline with markers, filled to zero, like his -----
   areas.forEach(m=>{
     const M=METRICS[m], own=ownMax[m];
     const yA=v=>bottom-(v/own)*0.92*plotH;
-    ctx.beginPath(); ctx.moveTo(xCenter(0),bottom);
-    data.forEach((s,i)=>ctx.lineTo(xCenter(i),yA(M.val(s))));
-    ctx.lineTo(xCenter(data.length-1),bottom); ctx.closePath();
+    const pts=data.map((s,i)=>[xCenter(i),yA(M.val(s))]);
+    ctx.beginPath(); ctx.moveTo(pts[0][0],bottom); ctx.lineTo(pts[0][0],pts[0][1]);
+    splineTo(ctx,pts,top,bottom);
+    ctx.lineTo(pts[pts.length-1][0],bottom); ctx.closePath();
     ctx.fillStyle=hexA(M.color,.33); ctx.fill();
-    ctx.beginPath();
-    data.forEach((s,i)=>{const x=xCenter(i),y=yA(M.val(s)); i?ctx.lineTo(x,y):ctx.moveTo(x,y);});
+    ctx.beginPath(); ctx.moveTo(pts[0][0],pts[0][1]);
+    splineTo(ctx,pts,top,bottom);
     ctx.strokeStyle=M.color; ctx.lineWidth=1.6; ctx.stroke();
     ctx.fillStyle=M.color;
     data.forEach((s,i)=>{ctx.beginPath();ctx.arc(xCenter(i),yA(M.val(s)),1.8,0,7);ctx.fill();});
@@ -471,10 +472,8 @@ function drawChart(R,chartId='gexChart'){
   ctx.strokeStyle="#d58b16"; ctx.lineWidth=2;
   ctx.beginPath(); ctx.moveTo(px,padT-6); ctx.lineTo(px,bottom); ctx.stroke();
   ctx.fillStyle="#d58b16"; ctx.font=(mobile ? "bold 10px Segoe UI" : "bold 12px Segoe UI"); ctx.textBaseline="alphabetic";
-  const linkedSpot = linkedMarketPrice(R.spot,R);
-  const priceLabel = linkedSpot == null
-    ? "Price: "+fmtPrice(R.spot)
-    : `${R.symbol}: ${fmtPrice(R.spot)} / ${linkedSpot.symbol}: ${fmtLinkedMarketPrice(linkedSpot)}`;
+  // His label is just "Price: <spot>".
+  const priceLabel = "Price: "+fmtPrice(R.spot);
   const labelWidth = ctx.measureText(priceLabel).width;
   const alignRight = px>W-labelWidth-12;
   ctx.textAlign = alignRight?"right":"left";
@@ -488,7 +487,21 @@ function drawChart(R,chartId='gexChart'){
     ctx.fillStyle="#d0d0d0"; ctx.font=(mobile ? "bold 11px Segoe UI" : "bold 13px Segoe UI"); ctx.textAlign="center";
     ctx.fillText(METRICS[dom].label,0,0); ctx.restore(); }
   ctx.fillStyle="#d0d0d0"; ctx.font=(mobile ? "bold 10px Segoe UI" : "bold 12px Segoe UI"); ctx.textAlign="center"; ctx.textBaseline="bottom";
-  ctx.fillText("Strike",padL+plotW/2,H-4);
+  ctx.fillText("STRIKE",padL+plotW/2,H-4);
+}
+// Draws a smoothed curve through pts (the pen already sits on pts[0]).
+// Catmull-Rom segments as Bezier curves, kept inside the plot so the fill never dips below zero.
+const SPLINE_SMOOTHING = 0.7;
+function splineTo(ctx,pts,top,bottom){
+  const k=SPLINE_SMOOTHING/6;
+  const clampY=y=>Math.max(top,Math.min(bottom,y));
+  for(let i=0;i<pts.length-1;i++){
+    const p0=pts[Math.max(0,i-1)], p1=pts[i], p2=pts[i+1], p3=pts[Math.min(pts.length-1,i+2)];
+    ctx.bezierCurveTo(
+      p1[0]+(p2[0]-p0[0])*k, clampY(p1[1]+(p2[1]-p0[1])*k),
+      p2[0]-(p3[0]-p1[0])*k, clampY(p2[1]-(p3[1]-p1[1])*k),
+      p2[0], p2[1]);
+  }
 }
 function fmtAxis(v){
   const a=Math.abs(v);
@@ -535,12 +548,9 @@ function showChartTooltip(ev){
     if(m==='power') return row('Power Zone',fmtNum(s.powerZone || 0));
     return '';
   }).join('');
-  const linkedStrike = linkedMarketPrice(s.strike,R);
-  const linkedRow = linkedStrike == null ? '' : `<div class="tt-row spy-row"><span>${esc(linkedStrike.symbol)} Price</span><span class="pos">${fmtLinkedMarketPrice(linkedStrike)}</span></div>`;
   tt.innerHTML = `
     <div class="tt-title">${R?.symbol || ''} Strike ${fmtPrice(s.strike)}</div>
     ${metricRows || row('No metric selected','')}
-    ${linkedRow}
   `;
   tt.style.display='block';
   cross.style.display='block';

@@ -99,3 +99,17 @@ def test_expiration_change_redraws_only_the_strike_chart():
     handler = script[start:script.index("});", start)]
     assert "run()" in handler
     assert "Price" not in handler and "refreshHome" not in handler
+
+
+def test_strike_chart_labels_like_his():
+    """His thumbnails: an orange "Price: <spot>" line, an X axis titled STRIKE,
+    and AG / Power Zone drawn as smoothed splines. No linked SPY/QQQ price."""
+    script = (host.MATRIX_WEB_DIR / "matrix.js").read_text(encoding="utf-8")
+    start = script.index("function drawChart(")
+    draw = script[start:script.index("\nfunction fmtAxis", start)]
+    assert 'const priceLabel = "Price: "+fmtPrice(R.spot);' in draw
+    assert "linkedMarketPrice" not in draw
+    assert 'ctx.fillText("STRIKE"' in draw
+    assert "splineTo(ctx,pts,top,bottom)" in draw
+    tooltip = script[script.index("function showChartTooltip("):script.index("function hideChartTooltip(")]
+    assert "linkedMarketPrice" not in tooltip
