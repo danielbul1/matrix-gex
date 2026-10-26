@@ -99,3 +99,55 @@ def test_expiration_change_redraws_only_the_strike_chart():
     handler = script[start:script.index("});", start)]
     assert "run()" in handler
     assert "Price" not in handler and "refreshHome" not in handler
+
+
+def test_strike_chart_labels_like_his():
+    """His thumbnails: an orange "Price: <spot>" line, an X axis titled STRIKE,
+    and AG / Power Zone drawn as smoothed splines. No linked SPY/QQQ price."""
+    script = (host.MATRIX_WEB_DIR / "matrix.js").read_text(encoding="utf-8")
+    start = script.index("function drawChart(")
+    draw = script[start:script.index("\nfunction fmtAxis", start)]
+    assert 'const priceLabel = "Price: "+fmtPrice(R.spot);' in draw
+    assert "linkedMarketPrice" not in draw
+    assert 'ctx.fillText("STRIKE"' in draw
+    assert "splineTo(ctx,pts,top,bottom)" in draw
+    tooltip = script[script.index("function showChartTooltip("):script.index("function hideChartTooltip(")]
+    assert "linkedMarketPrice" not in tooltip
+
+
+def test_power_zone_one_color_and_his_default_buttons():
+    page = (host.MATRIX_WEB_DIR / "matrix.html").read_text(encoding="utf-8")
+    script = (host.MATRIX_WEB_DIR / "matrix.js").read_text(encoding="utf-8")
+    button = re.search(r'data-metric="power"\s+style="--c:(#[0-9a-f]{6})"', page).group(1)
+    line = re.search(r'power:\s*\{label:"Power Zone",\s*color:"(#[0-9a-f]{6})"', script).group(1)
+    assert button == line
+    active = re.findall(r'<button class="pbtn active"[^>]*data-metric="([a-z_]+)"', page)
+    assert active == ["net_gex", "ag"]
+    assert 'let ACTIVE = new Set(["net_gex","ag"]);' in script
+
+
+def test_home_price_message_is_not_hidden_by_oi_volume_rule():
+    css = (host.MATRIX_WEB_DIR / "matrix.css").read_text(encoding="utf-8")
+    home = _home_section()
+    assert 'class="home-price-empty" id="priceEmpty"' in home
+    assert ".home-price-empty{" in css
+    assert "price-empty\"" not in home.replace("home-price-empty", "")
+
+
+def test_page_loads_each_asset_once():
+    """Parallel screen merges must not leave two script or stylesheet tags."""
+    page = (host.MATRIX_WEB_DIR / "matrix.html").read_text(encoding="utf-8")
+    assert page.count('src="/matrix/matrix.js') == 1
+    assert page.count('href="/matrix/matrix.css') == 1
+    assert "<<<<<<<" not in page and ">>>>>>>" not in page
+
+
+def test_right_axes_and_six_dates():
+    """AG and Power Zone share one GEX-unit axis; OI and volume get their own
+    scale (a guess). The date list holds the six nearest dates (a guess)."""
+    script = (host.MATRIX_WEB_DIR / "matrix.js").read_text(encoding="utf-8")
+    axes = dict(re.findall(r'\n  (\w+):\s+\{[^\n]*axis:"(\w+)"', script))
+    assert axes == {"ag": "gex", "power": "gex", "call_oi": "count", "put_oi": "count",
+                    "call_vol": "count", "put_vol": "count"}
+    assert "const EXPIRATION_COUNT = 6;" in script
+    assert ".slice(0,EXPIRATION_COUNT)" in script
