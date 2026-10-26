@@ -153,16 +153,18 @@ function calcGEX(chain){
     }
   }
 
-  // 5. zero-gamma flip - cumulative net GEX zero crossing + interpolation
-  let flip=null;
-  let cum=0, prevCum=null, prevK=null;
-  for(const s of strikes){
-    const newCum = cum + s.netGex;
-    if(prevCum!==null && prevCum*newCum<0){
-      const ratio = Math.abs(prevCum)/(Math.abs(prevCum)+Math.abs(newCum));
-      flip = prevK + ratio*(s.strike-prevK); break;
+  // 5. Zero Gamma: where Net GEX changes sign between two neighbouring strikes, the
+  //    crossing nearest spot (interpolated). His charts mark it there: the boundary
+  //    where the bars turn from red to blue next to the price line ("Bear territory").
+  //    Strikes with exactly zero Net GEX sit on the line between their neighbours.
+  let flip=null, prev=null;
+  for(const b of strikes){
+    if(!b.netGex) continue;
+    if(prev && prev.netGex*b.netGex<0){
+      const x = prev.strike + Math.abs(prev.netGex)/(Math.abs(prev.netGex)+Math.abs(b.netGex))*(b.strike-prev.strike);
+      if(flip===null || Math.abs(x-spot)<Math.abs(flip-spot)) flip=x;
     }
-    prevCum=newCum; prevK=s.strike; cum=newCum;
+    prev=b;
   }
 
   // 6. call wall (max +netGex), put wall (most -netGex)
@@ -277,13 +279,13 @@ function layerPoints(M,data,spot){
   return data.map((s,i)=>({s,i})).filter(({s})=>!M.window || Math.abs(s.strike-spot)/spot<=M.window);
 }
 const METRICS = {
-  net_gex:  {label:"Net GEX",     color:"#22b8ff", kind:"bar",  signed:true,  val:s=>s.netGex},
-  ag:       {label:"AG",          color:"#ab7df6", kind:"area", axis:"gex", val:s=>Math.abs(s.callGex)+Math.abs(s.putGex)},
-  call_oi:  {label:"Call OI",     color:"#26c281", kind:"area", axis:"count", val:s=>s.callOI},
-  put_oi:   {label:"Put OI",      color:"#ef5350", kind:"area", axis:"count", val:s=>s.putOI},
-  call_vol: {label:"Call Volume", color:"#2f73ff", kind:"area", axis:"count", val:s=>s.callVol},
-  put_vol:  {label:"Put Volume",  color:"#ff8a3d", kind:"area", axis:"count", val:s=>s.putVol},
-  power:    {label:"Power Zone",  color:"#ffc107", kind:"area", axis:"gex", val:s=>s.powerZone || 0, window:POWER_ZONE_WINDOW},
+  net_gex:  {label:"Net GEX",     color:"#22b5ff", kind:"bar",  signed:true,  val:s=>s.netGex},
+  ag:       {label:"AG",          color:"#915bf8", kind:"area", axis:"gex", fill:.45, val:s=>Math.abs(s.callGex)+Math.abs(s.putGex)},
+  call_oi:  {label:"Call OI",     color:"#02d432", kind:"area", axis:"count", val:s=>s.callOI},
+  put_oi:   {label:"Put OI",      color:"#f32d35", kind:"area", axis:"count", val:s=>s.putOI},
+  call_vol: {label:"Call Volume", color:"#003cfe", kind:"area", axis:"count", val:s=>s.callVol},
+  put_vol:  {label:"Put Volume",  color:"#e55f04", kind:"area", axis:"count", val:s=>s.putVol},
+  power:    {label:"Power Zone",  color:"#e8ca01", kind:"area", axis:"gex", fill:.5, val:s=>s.powerZone || 0, window:POWER_ZONE_WINDOW},
 };
 // Active metrics in button order; the Net GEX bars draw only while its button is on.
 function chartActiveMetrics(){
@@ -397,7 +399,7 @@ function drawChart(R,chartId='gexChart'){
     ctx.beginPath(); ctx.moveTo(pts[0][0],bottom); ctx.lineTo(pts[0][0],pts[0][1]);
     splineTo(ctx,pts,top,bottom);
     ctx.lineTo(pts[pts.length-1][0],bottom); ctx.closePath();
-    ctx.fillStyle=hexA(M.color,.33); ctx.fill();
+    ctx.fillStyle=hexA(M.color,M.fill||.33); ctx.fill();
     ctx.beginPath(); ctx.moveTo(pts[0][0],pts[0][1]);
     splineTo(ctx,pts,top,bottom);
     ctx.strokeStyle=M.color; ctx.lineWidth=1.6; ctx.stroke();
@@ -414,7 +416,7 @@ function drawChart(R,chartId='gexChart'){
       const x=xCenter(i)-bw/2;
       const y=Math.min(yy,y0);
       const h=Math.max(1,Math.abs(yy-y0));
-      ctx.fillStyle = v>=0 ? "#22aaf2" : "#ff2417";
+      ctx.fillStyle = v>=0 ? "#22b5ff" : "#ff0000";
       ctx.fillRect(x, y, bw, h);
       hitBars[i]={x,y,w:bw,h,s};
     });
@@ -450,8 +452,8 @@ function drawChart(R,chartId='gexChart'){
   ctx.strokeStyle="#d58b16"; ctx.lineWidth=2;
   ctx.beginPath(); ctx.moveTo(px,padT-6); ctx.lineTo(px,bottom); ctx.stroke();
   ctx.fillStyle="#d58b16"; ctx.font=(mobile ? "bold 10px Segoe UI" : "bold 12px Segoe UI"); ctx.textBaseline="alphabetic";
-  // His label is just "Price: <spot>".
-  const priceLabel = "Price: "+fmtPrice(R.spot);
+  // His label is just "Price: <spot>", with two decimals ("Price: 6408.40").
+  const priceLabel = "Price: "+R.spot.toFixed(2);
   const labelWidth = ctx.measureText(priceLabel).width;
   const alignRight = px>W-labelWidth-12;
   ctx.textAlign = alignRight?"right":"left";
@@ -549,12 +551,12 @@ function hideChartTooltip(){
 // chartLabel is how his price chart names each line (research Addendum 5); his magnet
 // label is the product name, so ours reads "Matrix" (#26).
 const PRICE_LINE_STYLES = [
-  {label:'P1',        chartLabel:'P1 Strike',       color:'#22b8ff'},
+  {label:'P1',        chartLabel:'P1 Strike',       color:'#22b5ff'},
   {label:'N1',        chartLabel:'N1 Strike',       color:'#ff453a'},
-  {label:'Call Vol',  chartLabel:'Call Vol Strike', color:'#2f73ff'},
-  {label:'Put Vol',   chartLabel:'Put Vol Strike',  color:'#ff8a3d'},
-  {label:'Matrix',    chartLabel:'Matrix',          color:'#ffc107'},
-  {label:'AG Strike', chartLabel:'AG Strike',       color:'#ab7df6'},
+  {label:'Call Vol',  chartLabel:'Call Vol Strike', color:'#003cfe'},
+  {label:'Put Vol',   chartLabel:'Put Vol Strike',  color:'#e55f04'},
+  {label:'Matrix',    chartLabel:'Matrix',          color:'#e8ca01'},
+  {label:'AG Strike', chartLabel:'AG Strike',       color:'#915bf8'},
 ];
 // His line values carry two decimals ("6800.00").
 function fmtLineValue(v){ return Number(v).toFixed(2); }
@@ -584,7 +586,7 @@ const PRICE_CHARTS = {
   priceChart:       {kind:'candles', symbolId:'priceSymLabel',       tooltipId:'priceTooltip',       crosshairId:'priceCrosshairX',       emptyId:'priceEmpty',       legendId:'priceLegend',       legend:'Price'},
   priceSimpleChart: {kind:'line',    symbolId:'priceSimpleSymLabel', tooltipId:'priceSimpleTooltip', crosshairId:'priceSimpleCrosshairX', emptyId:'priceSimpleEmpty', legendId:'priceSimpleLegend', legend:'Simplified price'},
 };
-const PRICE_UP = '#3d9970', PRICE_DOWN = '#ff4136', PRICE_LINE = '#22b8ff';
+const PRICE_UP = '#3d9970', PRICE_DOWN = '#ff4136', PRICE_LINE = '#22b5ff';
 const MARKET_TZ = 'America/New_York';
 // Per ticker: {candles:[...]} or {error:'...'}.
 let PRICE = {};
@@ -750,7 +752,7 @@ function drawPriceChart(chartId,symbol){
       ctx.fillStyle='rgba(255,193,7,0.2)'; ctx.fill();
       ctx.beginPath(); ctx.moveTo(pts[0][0],pts[0][1]);
       splineTo(ctx,pts,top,bottom,0.8);
-      ctx.strokeStyle='#ffc107'; ctx.lineWidth=2; ctx.stroke();
+      ctx.strokeStyle='#e8ca01'; ctx.lineWidth=2; ctx.stroke();
     }
     // The Price Lines; lines on the same strike share one line and one label.
     const groups=[];
@@ -1109,7 +1111,7 @@ const KEY_LEVELS_VIEW = 'key-levels';
 const KEY_LEVELS_CANDLES = {interval:'5m', range:'5d'};
 // The four Key Levels, in the colours Matrix already used for them.
 const KEY_LEVEL_STYLES = [
-  {key:'callWall',       label:'Call Wall',  color:'#22b8ff'},
+  {key:'callWall',       label:'Call Wall',  color:'#22b5ff'},
   {key:'putWall',        label:'Put Wall',   color:'#ff453a'},
   {key:'flip',           label:'Zero Gamma', color:'#f5f5f5'},
   {key:'maxGammaStrike', label:'Max Gamma',  color:'#8b5fe8'},
@@ -1399,11 +1401,11 @@ const OIV_VIEW = 'oi-volume';
 // Volume Spread = call volume minus put volume per strike, for the session so far
 // (map #21, #24). It is our guess: no public source defines it. Bars in Net GEX colours.
 const OIV_METRICS = {
-  volume_spread: {label:'Volume Spread', color:'#22b8ff', kind:'bar',  val:s=>s.volumeSpread},
-  call_oi:       {label:'Call OI',       color:'#26c281', kind:'area', val:s=>s.callOI},
-  put_oi:        {label:'Put OI',        color:'#ef5350', kind:'area', val:s=>s.putOI},
-  call_vol:      {label:'Call Vol',      color:'#2f73ff', kind:'area', val:s=>s.callVol},
-  put_vol:       {label:'Put Vol',       color:'#ff8a3d', kind:'area', val:s=>s.putVol},
+  volume_spread: {label:'Volume Spread', color:'#22b5ff', kind:'bar',  val:s=>s.volumeSpread},
+  call_oi:       {label:'Call OI',       color:'#02d432', kind:'area', val:s=>s.callOI},
+  put_oi:        {label:'Put OI',        color:'#f32d35', kind:'area', val:s=>s.putOI},
+  call_vol:      {label:'Call Vol',      color:'#003cfe', kind:'area', val:s=>s.callVol},
+  put_vol:       {label:'Put Vol',       color:'#e55f04', kind:'area', val:s=>s.putVol},
 };
 const OIV_ACTIVE = new Set(['volume_spread']);
 const MATRIX_CANDLES_URL = 'https://api.trytripity.site/api/matrix/candles';
@@ -1548,7 +1550,7 @@ function drawOiVolumeChart(R){
     data.forEach((s,i)=>{
       const v=barMetric.val(s), yy=yL(v);
       const x=xCenter(i)-bw/2;
-      ctx.fillStyle = v>=0 ? '#22aaf2' : '#ff2417';
+      ctx.fillStyle = v>=0 ? '#22b5ff' : '#ff0000';
       ctx.fillRect(x, Math.min(yy,y0), bw, Math.max(1,Math.abs(yy-y0)));
     });
     ctx.strokeStyle='rgba(255,255,255,.18)'; ctx.lineWidth=1;
@@ -1575,7 +1577,7 @@ function drawOiVolumeChart(R){
   ctx.strokeStyle='#d58b16'; ctx.lineWidth=2;
   ctx.beginPath(); ctx.moveTo(px,padT-6); ctx.lineTo(px,bottom); ctx.stroke();
   ctx.fillStyle='#d58b16'; ctx.font=(mobile?'bold 10px Segoe UI':'bold 12px Segoe UI'); ctx.textBaseline='alphabetic';
-  const priceLabel='Price: '+fmtPrice(R.spot);
+  const priceLabel='Price: '+R.spot.toFixed(2);
   const alignRight=px>W-ctx.measureText(priceLabel).width-12;
   ctx.textAlign=alignRight?'right':'left';
   ctx.fillText(priceLabel, px+(alignRight?-6:6), padT-9);
@@ -1780,7 +1782,7 @@ const GB_COLUMNS = [
 // Columns whose largest value is highlighted.
 const GB_MAX_COLUMNS = ['netGex','ag','notionalDelta','totalOI','callOI','putOI','totalVol','callVol','putVol'];
 // Gamma Split: one colour per selected expiry, in date order.
-const GB_EXPIRY_COLORS = ['#22b8ff','#ab7df6','#26c281','#ffc107','#ff8a3d','#ef5350','#7ec8ff','#f06292','#9ccc65','#4dd0e1'];
+const GB_EXPIRY_COLORS = ['#22b5ff','#915bf8','#02d432','#e8ca01','#e55f04','#f32d35','#7ec8ff','#f06292','#9ccc65','#4dd0e1'];
 const GB_CHARTS = {
   Total: {canvas:'gbTotalChart', wrap:'gbTotalWrap'},
   Split: {canvas:'gbSplitChart', wrap:'gbSplitWrap'},
@@ -1971,7 +1973,7 @@ function drawGexBoardBars(key, B){
   if(legend) legend.innerHTML = split
     ? B.expiries.slice(0,6).map(exp=>`<span><span class="sq" style="background:${colorOf(exp)}"></span>${esc(exp.slice(5))}</span>`).join('')
       + (B.expiries.length>6 ? `<span>+${B.expiries.length-6} more</span>` : '')
-    : '<span><span class="sq" style="background:#22b8ff"></span>Net GEX</span>';
+    : '<span><span class="sq" style="background:#22b5ff"></span>Net GEX</span>';
   const data = B.rows;
   setGbEmpty(key, data.length ? '' : (B.expiries.length ? 'No strikes within 5% of spot' : 'Select at least one expiration'));
   if(!data.length) return;
@@ -2004,7 +2006,7 @@ function drawGexBoardBars(key, B){
     const x = xCenter(i)-bw/2;
     if(!split){
       const v = s.netGex, yy = y(v);
-      ctx.fillStyle = v>=0 ? '#22aaf2' : '#ff2417';
+      ctx.fillStyle = v>=0 ? '#22b5ff' : '#ff0000';
       ctx.fillRect(x, Math.min(yy,y0), bw, Math.max(1, Math.abs(yy-y0)));
       return;
     }

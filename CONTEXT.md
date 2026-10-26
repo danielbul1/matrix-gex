@@ -120,6 +120,9 @@ _Avoid_: DEX, net delta, delta exposure
 
 **Key Level**:
 One of the four prices the Key Levels screen marks from a ticker's GEX profile: Zero Gamma, Max Gamma, Call Wall and Put Wall. Max Pain is not a Key Level.
+- Zero Gamma: where Net GEX changes sign between two neighbouring strikes, the crossing nearest spot.
+- Max Gamma: the strike with the largest Net GEX of either sign.
+- Call Wall and Put Wall: the largest positive and the most negative Net GEX.
 _Avoid_: support/resistance, levels
 
 **AG**:

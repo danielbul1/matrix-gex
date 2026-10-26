@@ -40,3 +40,21 @@ Both repos were read only. No code was copied.
 Nothing about Volume Spread, the P/C table, the Forecast text, the Key Levels page itself, the Gamma Total and Gamma Split charts, or the OI Volume page.
 
 The author's own trading rules are in the follower's uncommitted files, not in the repo. What the repo does show is that he trades SPX and SPY spreads and condors with weekly expiries, from his video recaps. The video transcripts remain the best source for these.
+
+## Answers from his own sources (2026-10-26)
+
+We checked each open question against Max Power's own public material: his `styles.css` and all 29 YouTube thumbnails, which are cropped screenshots of the signed-in app. gex_dashboard was used only where he shows nothing.
+
+1. **Zero Gamma: the per-strike sign change nearest spot.**
+   - In `Or2MWArTLu8` he writes "Bear territory" and points it at the strike where the Net GEX bars turn from red to blue, next to the price line.
+   - Across the other thumbnails that boundary always sits near the price line.
+   - This matches gex_dashboard's definition. Matrix now uses it, and treats a strike with exactly zero Net GEX as lying on the crossing.
+   - On live data it puts Zero Gamma at 7,685.6 (SPX), 764.4 (SPY), 712.2 (QQQ) and 29,293.9 (NDX), all next to spot. The old cumulative definition gave none for three of the four.
+2. **Call Wall and Put Wall: unchanged (Net GEX).**
+   - He reads levels off the Net GEX bars: "Resistance" on the large positive bars above price (`Or2MWArTLu8`), and "Target" on the largest negative bar.
+   - Nothing of his uses call-only or put-only GEX.
+3. **Price label: two decimals.** "Spot: $6000.19" (`WsKWDGZDT3Q`), "Price: 6408.40" (`8CzB0eVLtQo`), "Price: 764.29" (`mvYGUkDg9kc`).
+4. **Colours: his.**
+   - Sampled pixels match his CSS: positive Net GEX bars ≈ `#22b5ff`, negative bars pure red, AG `#915bf8` filled at about 45%, and Power Zone yellow at about 50%.
+   - His buttons (CSS): Net GEX `#22b5ff`, AG `#915bf8`, Call OI `#02d432`, Put OI `#f32d35`, Call Vol `#003cfe`, Put Vol `#e55f04`, Power Zone `#e8ca01` with black text; 16px text, 10px padding, at least 70px wide; the active one scales to 0.92 with a soft inner glow.
+   - This replaces the colour decision in #23, under the standing rule "like him".
