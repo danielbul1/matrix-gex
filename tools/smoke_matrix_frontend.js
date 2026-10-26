@@ -1,6 +1,7 @@
 /* Smoke test: load matrix.js with DOM stubs (offline) and a synthetic chain,
-   then check the GEX engine, the Strike Chart draw path and the Key Levels
-   screen (four levels only, the Forecast's h3/h4/h5 layout, the price chart). */
+   then check the GEX engine, the Strike Chart draw path, the P/C Ratio table
+   and the Key Levels screen (four levels only, the Forecast's h3/h4/h5 layout,
+   the price chart). */
 const fs = require('fs');
 const vm = require('vm');
 
@@ -113,5 +114,23 @@ check('tooltip shows a candle', noThrow(() => {
   byId('keyLevelsChart')._klPlot = { ...byId('keyLevelsChart')._klPlot, candles };
   showKeyLevelsTooltip({ clientX: 300, clientY: 200 });
 }) && byId('klTooltip').innerHTML.includes('Close'));
+
+// --- 5. P/C Ratio table ---
+check('P/C rows follow SPX, NDX, SPY, QQQ', PC_TICKERS.join(',') === 'SPX,NDX,SPY,QQQ');
+check('P/C ratio is put over call', Math.abs(pcRatio(150, 100) - 1.5) < 1e-12 && pcRatio(5, 0) === null);
+const pcData = {
+  SPX: { spot: 6000.5, asof: '2026-10-26', totals: { call_oi: 1000, put_oi: 1500, call_vol: 400, put_vol: 200 } },
+  NDX: { spot: 21000, totals: { call_oi: 0, put_oi: 10, call_vol: 0, put_vol: 0 } },
+};
+renderPcTable(pcData);
+const pcHtml = document.getElementById('pcTableBody').innerHTML;
+const pcRows = pcHtml.split('<tr>').slice(1);
+check('P/C table has one row per ticker', pcRows.length === 4, `${pcRows.length} rows`);
+const spxCells = [...pcRows[0].matchAll(/<td[^>]*>([^<]*)<\/td>/g)].map(m => m[1]);
+check('SPX row: ticker, spot, P/C OI, P/C Vol, call/put OI, call/put vol',
+  JSON.stringify(spxCells) === JSON.stringify(['SPX', '6,000.50', '1.50', '0.50', '1,000', '1,500', '400', '200']),
+  spxCells.join(' | '));
+check('No calls shows a dash, not Infinity', pcRows[1].includes('—') && !pcRows[1].includes('Infinity'));
+check('Missing ticker shows dashes', /SPY<\/td>(<td class="pc-missing">—<\/td>){7}/.test(pcRows[2]));
 
 process.exit(failures ? 1 : 0);
