@@ -110,6 +110,12 @@ Gotchas learned the hard way (2026-07-19):
   the probe with references to them; read its result with `railway logs`. `backend` is
   untouched. Delete `tasty-probe` once the feed decision is made.
 - `--check` tests login, chain and stream at any hour; the full run needs market hours.
+- **First full run (SPX 0DTE, ±30 strikes, 15 min, 2026-10-26 11:01 ET):** 77,767
+  TimeAndSale prints on 111/122 contracts, 99.9% with bid/ask, 100% valid, aggressor side
+  always BUY/SELL (never undefined), 35% spread legs; every print on exchange C (SPXW is
+  Cboe-only, so no multi-exchange sweeps there). Greeks update about every 79 s (compute
+  our own for live GEX). OI on all contracts. That run's lag and coverage numbers were
+  wrong (Quote times are empty; coverage skipped spread legs): fixed, rerun with `--symbol`.
 
 ### 2026-10-26 — Shell, menu and a path per screen (map #21, task #32)
 - **Frontend:** sidebar in Quant Power's order (the "Matrix" brand link is home = Strike

@@ -12,6 +12,7 @@ or print them):
 Run during US market hours:
     pip install "tastytrade>=13,<14"
     python tools/tasty_probe.py --minutes 10 --strikes 30 --out tasty_probe.json
+    python tools/tasty_probe.py --symbol SPY --minutes 8   # multi-exchange, shows sweeps
     python tools/tasty_probe.py --check     # login + chain + stream only, any time
 """
 
@@ -71,12 +72,12 @@ def median_or_none(values):
     return round(statistics.median(values), 3) if values else None
 
 
-def summarize(prints, quote_lags_s, greek_times, day_volumes, open_interest, subscribed, counts) -> dict:
+def summarize(prints, tape_lags_s, greek_times, day_volumes, open_interest, subscribed, counts) -> dict:
     sides = Counter(p["side"] for p in prints)
     aggressor = Counter(p["aggressor"] for p in prints)
     tape_volume: dict[str, int] = defaultdict(int)
     for p in prints:
-        if p["valid"] and not p["spread_leg"]:
+        if p["valid"]:
             tape_volume[p["symbol"]] += p["size"]
     coverage = []
     for sym, (first, last) in day_volumes.items():
@@ -91,8 +92,8 @@ def summarize(prints, quote_lags_s, greek_times, day_volumes, open_interest, sub
     return {
         "subscribed_contracts": subscribed,
         "events": dict(counts),
-        "quote_lag_seconds_median": median_or_none(quote_lags_s),
-        "realtime": (median_or_none(quote_lags_s) or 999) < 60,
+        "tape_lag_seconds_median": median_or_none(tape_lags_s),
+        "realtime": (median_or_none(tape_lags_s) or 999) < 60,
         "tape": {
             "prints": len(prints),
             "contracts_with_prints": len({p["symbol"] for p in prints}),
@@ -116,22 +117,24 @@ def summarize(prints, quote_lags_s, greek_times, day_volumes, open_interest, sub
     }
 
 
-def pick_contracts(chain, spot: float, strikes: int):
+def pick_contracts(chain, spot: float, strikes: int, underlying: str = "SPX"):
     today = date.today()
     expiries = sorted(d for d in chain if d >= today)
     if not expiries:
-        raise SystemExit("No SPX expiries found in the chain.")
+        raise SystemExit(f"No {underlying} expiries found in the chain.")
     expiry = expiries[0]
-    options = [o for o in chain[expiry] if o.streamer_symbol.startswith(".SPXW")] or chain[expiry]
+    options = chain[expiry]
+    if underlying == "SPX":
+        options = [o for o in options if o.streamer_symbol.startswith(".SPXW")] or options
     by_strike = sorted({float(o.strike_price) for o in options}, key=lambda k: abs(k - spot))[: strikes * 2 + 1]
     keep = set(by_strike)
     return expiry, [o.streamer_symbol for o in options if float(o.strike_price) in keep]
 
 
-async def spx_spot(streamer, Summary, Trade) -> float | None:
-    """Last SPX trade, or the latest close when the index is not printing."""
-    await streamer.subscribe(Trade, ["SPX"])
-    await streamer.subscribe(Summary, ["SPX"])
+async def underlying_spot(streamer, Summary, Trade, underlying: str) -> float | None:
+    """Last trade of the underlying, or the latest close when it is not printing."""
+    await streamer.subscribe(Trade, [underlying])
+    await streamer.subscribe(Summary, [underlying])
     try:
         trade = await asyncio.wait_for(streamer.get_event(Trade), timeout=20)
         if trade.price:
@@ -160,7 +163,7 @@ async def connection_check(streamer, Greeks, Quote, Summary, symbols, spot, expi
     return {"check": "ok", "spot": spot, "expiry": str(expiry), "contracts": len(symbols), "first_event": seen}
 
 
-async def run(minutes: float, strikes: int, check_only: bool = False) -> dict:
+async def run(minutes: float, strikes: int, check_only: bool = False, underlying: str = "SPX") -> dict:
     from tastytrade import DXLinkStreamer, Session
     from tastytrade.dxfeed import Greeks, Quote, Summary, TimeAndSale, Trade
     from tastytrade.instruments import get_option_chain
@@ -171,10 +174,10 @@ async def run(minutes: float, strikes: int, check_only: bool = False) -> dict:
         raise SystemExit("Set TASTY_CLIENT_SECRET and TASTY_REFRESH_TOKEN first.")
 
     session = Session(secret, refresh)
-    chain = await get_option_chain(session, "SPX")
+    chain = await get_option_chain(session, underlying)
 
     prints: list[dict] = []
-    quote_lags: list[float] = []
+    tape_lags: list[float] = []
     greek_times: dict[str, list[int]] = defaultdict(list)
     day_volumes: dict[str, list[int]] = {}
     open_interest: dict[str, int] = {}
@@ -182,11 +185,11 @@ async def run(minutes: float, strikes: int, check_only: bool = False) -> dict:
     last_quote: dict[str, tuple] = {}
 
     async with DXLinkStreamer(session) as streamer:
-        spot = await spx_spot(streamer, Summary, Trade)
+        spot = await underlying_spot(streamer, Summary, Trade, underlying)
         if not spot:
-            raise SystemExit("No SPX price from the streamer; is the account fully onboarded?")
-        expiry, symbols = pick_contracts(chain, spot, strikes)
-        print(f"SPX {spot:.2f}, expiry {expiry}, {len(symbols)} contracts", file=sys.stderr)
+            raise SystemExit(f"No {underlying} price from the streamer; is the account fully onboarded?")
+        expiry, symbols = pick_contracts(chain, spot, strikes, underlying)
+        print(f"{underlying} {spot:.2f}, expiry {expiry}, {len(symbols)} contracts", file=sys.stderr)
         if check_only:
             return await connection_check(streamer, Greeks, Quote, Summary, symbols, spot, expiry)
 
@@ -198,9 +201,6 @@ async def run(minutes: float, strikes: int, check_only: bool = False) -> dict:
             async for q in streamer.listen(Quote):
                 counts["Quote"] += 1
                 last_quote[q.event_symbol] = (q.bid_price, q.ask_price)
-                stamp = max(q.bid_time or 0, q.ask_time or 0)
-                if stamp:
-                    quote_lags.append(time.time() - stamp / 1000)
 
         async def greeks():
             async for g in streamer.listen(Greeks):
@@ -227,6 +227,8 @@ async def run(minutes: float, strikes: int, check_only: bool = False) -> dict:
         async def tape():
             async for p in streamer.listen(TimeAndSale):
                 counts["TimeAndSale"] += 1
+                if p.time:
+                    tape_lags.append(time.time() - p.time / 1000)
                 bid, ask = p.bid_price, p.ask_price
                 if not bid and not ask and p.event_symbol in last_quote:
                     bid, ask = last_quote[p.event_symbol]
@@ -248,7 +250,8 @@ async def run(minutes: float, strikes: int, check_only: bool = False) -> dict:
         for t in tasks:
             t.cancel()
 
-    report = summarize(prints, quote_lags, greek_times, day_volumes, open_interest, len(symbols), counts)
+    report = summarize(prints, tape_lags, greek_times, day_volumes, open_interest, len(symbols), counts)
+    report["underlying"] = underlying
     report["spot"] = spot
     report["expiry"] = str(expiry)
     report["minutes"] = minutes
@@ -260,11 +263,12 @@ def main() -> None:
     parser.add_argument("--minutes", type=float, default=10)
     parser.add_argument("--strikes", type=int, default=30, help="strikes each side of spot")
     parser.add_argument("--out", help="also write the report to this JSON file")
+    parser.add_argument("--symbol", default="SPX", help="underlying, e.g. SPX, SPY, QQQ")
     parser.add_argument("--check", action="store_true", help="only test login, chain and stream (works when closed)")
     args = parser.parse_args()
-    report = asyncio.run(run(args.minutes, args.strikes, args.check))
-    text = json.dumps(report, indent=2, default=lambda v: float(v) if isinstance(v, Decimal) else str(v))
-    print(text)
+    report = asyncio.run(run(args.minutes, args.strikes, args.check, args.symbol.upper()))
+    text = json.dumps(report, default=lambda v: float(v) if isinstance(v, Decimal) else str(v))
+    print("PROBE_REPORT " + text, flush=True)
     if args.out:
         with open(args.out, "w", encoding="utf-8") as fh:
             fh.write(text)
