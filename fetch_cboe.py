@@ -50,50 +50,55 @@ def parse_symbol(s):
     return root, exp, cp, int(strike) / 1000.0
 
 
+def fetch_chain(cboe_sym, today):
+    """Fetch one Cboe chain and compact it into the cboe_data.json record."""
+    d = fetch(cboe_sym)
+    spot = d.get("current_price") or d.get("close")
+    opts = []
+    for o in d["options"]:
+        p = parse_symbol(o["option"])
+        if not p:
+            continue
+        root, exp, cp, K = p
+        if exp < today:
+            continue
+        if spot and abs(K - spot) / spot > RANGE:
+            continue
+        oi = o.get("open_interest") or 0
+        if oi <= 0:
+            continue
+        dte = max(0, (exp - today).days)
+        opts.append({
+            "k": round(K, 2),
+            "t": cp,                         # "C" / "P"
+            "root": root,                    # SPX/SPXW, NDX/NDXP, etc.
+            "exp": exp.isoformat(),          # expiration date YYYY-MM-DD
+            "dte": dte,
+            "iv": round(o.get("iv") or 0, 4),
+            "oi": int(oi),
+            "vol": int(o.get("volume") or 0),
+            "g": round(o.get("gamma") or 0, 7),   # gamma from CBOE
+            "d": round(o.get("delta") or 0, 4),
+        })
+    return {
+        "spot": round(spot, 2) if spot else None,
+        "asof": d.get("last_trade_time") or str(today),
+        "mult": 100,
+        "opts": opts,
+    }
+
+
 def main():
     # Use US Eastern date for expiry filtering, not the machine's local date.
     today = datetime.datetime.now(ET).date()
     out = {}
     for cboe_sym, display_sym in SYMBOLS:
         try:
-            d = fetch(cboe_sym)
+            out[display_sym] = fetch_chain(cboe_sym, today)
         except Exception as e:
             print(f"  {display_sym}: FAILED ({e})", file=sys.stderr)
             continue
-        spot = d.get("current_price") or d.get("close")
-        opts = []
-        for o in d["options"]:
-            p = parse_symbol(o["option"])
-            if not p:
-                continue
-            root, exp, cp, K = p
-            if exp < today:
-                continue
-            if spot and abs(K - spot) / spot > RANGE:
-                continue
-            oi = o.get("open_interest") or 0
-            if oi <= 0:
-                continue
-            dte = max(0, (exp - today).days)
-            opts.append({
-                "k": round(K, 2),
-                "t": cp,                         # "C" / "P"
-                "root": root,                    # SPX/SPXW, NDX/NDXP, etc.
-                "exp": exp.isoformat(),          # expiration date YYYY-MM-DD
-                "dte": dte,
-                "iv": round(o.get("iv") or 0, 4),
-                "oi": int(oi),
-                "vol": int(o.get("volume") or 0),
-                "g": round(o.get("gamma") or 0, 7),   # gamma from CBOE
-                "d": round(o.get("delta") or 0, 4),
-            })
-        out[display_sym] = {
-            "spot": round(spot, 2) if spot else None,
-            "asof": d.get("last_trade_time") or str(today),
-            "mult": 100,
-            "opts": opts,
-        }
-        print(f"  {display_sym}: spot={spot}  kept={len(opts)} options")
+        print(f"  {display_sym}: spot={out[display_sym]['spot']}  kept={len(out[display_sym]['opts'])} options")
 
     if not out:
         # Mirror fetch_lse.py: never clobber cboe_data.json with an empty

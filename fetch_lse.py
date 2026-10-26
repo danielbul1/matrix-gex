@@ -1,8 +1,10 @@
 """
-Fetch options chains and candles from London Strategic Edge (LSE).
+Fetch the Matrix data files: options chains (Cboe) and candles (LSE Data 3.0).
 
-This is the PRIMARY data source for Matrix. It does NOT fall back to CBOE or Yahoo.
-Set LSE_API_KEY in your environment or in a .env file.
+LSE moved to its Data 3.0 API in October 2026 and its option chain no longer
+carries open interest, which GEX needs, so the chains come from Cboe's free
+delayed snapshot (OI, IV and greeks per contract). Candles still come from
+London Strategic Edge. Set LSE_API_KEY in your environment or in a .env file.
 
 Modes:
   (no flags)        fetch options chains AND candles (backward compatible)
@@ -11,13 +13,14 @@ Modes:
 
 The split modes let the scheduler refresh GEX options data more often than
 candles without one mode ever overwriting the other mode's file. LSE free
-plan budget: ~10 historical downloads/hour total.
+plan: 60 calls a minute and one export download at a time.
 """
 import argparse
+import csv
 import datetime as dt
+import io
 import json
 import os
-import re
 import sys
 import time
 import urllib.error
@@ -25,6 +28,8 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 from zoneinfo import ZoneInfo
+
+import fetch_cboe
 
 
 try:
@@ -37,35 +42,37 @@ except Exception:
 # -----------------------------------------------------------------------------
 # Configuration
 # -----------------------------------------------------------------------------
-BASE_URL = "https://api.londonstrategicedge.com"
-OPTIONS_ENDPOINT = "x_options_snapshot"
-CANDLES_ENDPOINT = "x_candles_15m"  # LSE does not expose 5m candles
+BASE_URL = "https://download.londonstrategicedge.com/v3"
+CANDLES_TIMEFRAME = "15m"
+CANDLES_LOOKBACK_DAYS = 14   # ~10 trading days of 15m bars
+CANDLES_KEEP = 1000
+# LSE's intraday index history has gaps; drop a symbol whose newest candle is
+# older than this rather than publish a stale chart.
+CANDLES_MAX_AGE_SECONDS = 4 * 24 * 3600
 
-# Dashboard supports these underlyings.  NDX/SPX must be queried by their
-# common underlying symbol; the option ticker itself carries the real root.
-SYMBOLS = {
-    "NDX": "NDX",      # NAS100
-    "SPX": "SPX",      # SPX500
+# Dashboard underlyings -> Cboe chain symbol (index chains take a leading "_").
+OPTIONS_SYMBOLS = {
+    "NDX": "_NDX",
+    "SPX": "_SPX",
     "SPY": "SPY",
     "QQQ": "QQQ",
 }
-
-OPTIONS_SYMBOLS = {k: v for k, v in SYMBOLS.items() if not v.endswith("=F")}
-CANDLE_SYMBOLS = SYMBOLS
+# Dashboard underlyings -> (LSE v3 market, LSE v3 symbol) for candles.
+CANDLE_SYMBOLS = {
+    "NDX": ("indices", "NDX"),
+    "SPX": ("indices", "SPX"),
+    "SPY": ("us_stocks", "SPY"),
+    "QQQ": ("us_stocks", "QQQ"),
+}
 
 OUTPUT_OPTIONS = Path("cboe_data.json")
 OUTPUT_CANDLES = Path("candles_data.json")
 
-# LSE Registered plan limits from /keys/plans (adjust if your plan differs).
-# The historical-download budget (free plan: ~10 downloads/hour) is enforced
-# by the scheduler cadence, not here; this limiter only smooths request rate.
+# LSE free plan: 60 calls a minute. This limiter only smooths request rate.
 REQ_PER_MIN = 60
 REQ_PER_DAY = 15000
 
 ET = ZoneInfo("America/New_York")
-
-# Parse OCC-style option ticker: ROOT + YYMMDD + C/P + STRIKE*1000
-OCC_RE = re.compile(r"^([A-Z]+)(\d{6})([CP])(\d{8})$")
 
 
 # -----------------------------------------------------------------------------
@@ -111,46 +118,29 @@ def get_api_key() -> str:
     return key
 
 
-def lse_request(path: str, params: dict | None = None) -> dict | list:
-    """Make a GET request to LSE and return JSON."""
+def lse_get_text(path: str, params: dict | None = None) -> str:
+    """GET an LSE v3 call and return the body as text (JSON or CSV)."""
     _LIMITER.wait()
 
     url = f"{BASE_URL}/{path}"
     if params:
-        query = urllib.parse.urlencode(params)
-        url = f"{url}?{query}"
+        url = f"{url}?{urllib.parse.urlencode(params)}"
 
     req = urllib.request.Request(
         url,
         headers={
-            "x-api-key": get_api_key(),
-            "Accept": "application/json",
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+            "X-API-Key": get_api_key(),
+            "Accept": "application/json, text/csv",
+            "User-Agent": "Matrix GEX data pipeline (+https://github.com/danielbul1/matrix-gex)",
         },
     )
 
     try:
         with urllib.request.urlopen(req, timeout=60) as resp:
-            return json.load(resp)
+            return resp.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="ignore")[:500]
         raise RuntimeError(f"LSE API error {exc.code}: {body}") from exc
-
-
-# -----------------------------------------------------------------------------
-# Options parsing
-# -----------------------------------------------------------------------------
-def parse_option_ticker(ticker: str):
-    """Return (root, expiry_date, call_put, strike) or None."""
-    if not ticker:
-        return None
-    m = OCC_RE.match(ticker.upper())
-    if not m:
-        return None
-    root, date_s, cp, strike_s = m.groups()
-    exp = dt.date(2000 + int(date_s[:2]), int(date_s[2:4]), int(date_s[4:6]))
-    strike = int(strike_s) / 1000.0
-    return root, exp, cp, strike
 
 
 def today_us() -> dt.date:
@@ -158,146 +148,71 @@ def today_us() -> dt.date:
 
 
 # -----------------------------------------------------------------------------
-# Options fetch
+# Options fetch (Cboe delayed chain: the only free source here with OI)
 # -----------------------------------------------------------------------------
-def fetch_options_for_symbol(symbol: str) -> dict:
-    """Fetch LSE options snapshot and convert to dashboard format."""
-    today = today_us()
-    params = {
-        "underlying": f"eq.{symbol}",
-        "order": "ticker.asc",
-        "limit": "30000",
-        "select": "ticker,underlying,last_price,volume,open_interest,iv,delta,gamma,theta,vega,underlying_price",
-    }
-    rows = lse_request(OPTIONS_ENDPOINT, params)
-
-    if not isinstance(rows, list):
-        raise RuntimeError(f"unexpected LSE options response type: {type(rows)}")
-
-    # LSE sometimes splits an underlying across multiple option roots
-    # (e.g. SPX/SPXW, SPY/SPY7).  We keep every contract and let downstream
-    # code aggregate by strike; the 'root' field records the real root.
-    opts = []
-    spot = None
-    asof_ts = None
-
-    for row in rows:
-        ticker = (row.get("ticker") or "").strip()
-        parsed = parse_option_ticker(ticker)
-        if not parsed:
-            continue
-        root, exp, cp, strike = parsed
-
-        if exp < today:
-            continue
-
-        oi = int(row.get("open_interest") or 0)
-        if oi <= 0:
-            continue
-
-        iv_raw = row.get("iv") or 0
-        # LSE may return IV as a percentage (e.g. 13.5) or decimal (0.135).
-        # Anything above 3 (300%) is treated as a percent; below that,
-        # decimal. Matches norm_iv() in server.py.
-        iv = float(iv_raw)
-        if iv > 3:
-            iv = iv / 100.0
-
-        gamma = float(row.get("gamma") or 0)
-        delta = float(row.get("delta") or 0)
-        volume = int(row.get("volume") or 0)
-
-        # Spot from LSE; use the first valid value we see.
-        if spot is None:
-            spot = float(row.get("underlying_price") or 0) or None
-
-        # Use the row's last trade time if present, otherwise build one.
-        if asof_ts is None and row.get("last_price") is not None:
-            asof_ts = dt.datetime.now(dt.timezone.utc).isoformat()
-
-        dte = max(0, (exp - today).days)
-
-        opts.append({
-            "k": round(strike, 2),
-            "t": cp,                         # "C" / "P"
-            "root": root,                    # SPX, SPXW, SPY, SPY7, etc.
-            "exp": exp.isoformat(),          # YYYY-MM-DD
-            "dte": dte,
-            "iv": round(iv, 4),
-            "oi": oi,
-            "vol": volume,
-            "g": round(gamma, 7),
-            "d": round(delta, 4),
-        })
-
-    if not opts:
-        raise RuntimeError(f"no valid options parsed for {symbol}")
-
-    return {
-        "spot": round(spot, 2) if spot else None,
-        "asof": asof_ts or dt.datetime.now(dt.timezone.utc).isoformat(),
-        "mult": 100,
-        "opts": opts,
-    }
-
-
 def fetch_all_options() -> dict:
+    today = today_us()
     out = {}
-    for display_sym, lse_sym in OPTIONS_SYMBOLS.items():
+    for display_sym, cboe_sym in OPTIONS_SYMBOLS.items():
         try:
-            out[display_sym] = fetch_options_for_symbol(lse_sym)
-            print(f"  {display_sym}: spot={out[display_sym]['spot']} kept={len(out[display_sym]['opts'])} options")
+            record = fetch_cboe.fetch_chain(cboe_sym, today)
+            if not record["opts"]:
+                raise RuntimeError(f"no valid options parsed for {display_sym}")
+            out[display_sym] = record
+            print(f"  {display_sym}: spot={record['spot']} kept={len(record['opts'])} options")
         except Exception as e:
             print(f"  {display_sym}: FAILED ({e})", file=sys.stderr)
     if not out:
-        raise RuntimeError("no option data fetched from LSE")
+        raise RuntimeError("no option data fetched from Cboe")
     return out
 
 
 # -----------------------------------------------------------------------------
-# Candles fetch
+# Candles fetch (LSE v3 export, CSV)
 # -----------------------------------------------------------------------------
-def fetch_candles_for_symbol(symbol: str) -> dict:
-    """Fetch 15m candles from LSE and convert to dashboard format."""
-    params = {
-        "symbol": f"eq.{symbol}",
-        "order": "timestamp.desc",
-        "limit": "1000",  # ~10 trading days of 15m bars
-    }
-    rows = lse_request(CANDLES_ENDPOINT, params)
+def parse_candle_time(text: str) -> int:
+    """LSE v3 candle times are UTC 'YYYY-MM-DD HH:MM:SS'."""
+    parsed = dt.datetime.fromisoformat(text.strip().replace(" ", "T").replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=dt.timezone.utc)
+    return int(parsed.timestamp())
 
-    if not isinstance(rows, list):
-        raise RuntimeError(f"unexpected LSE candles response type: {type(rows)}")
+
+def fetch_candles_for_symbol(market: str, symbol: str) -> dict:
+    """Fetch 15m candles from LSE v3 and convert to dashboard format."""
+    today = dt.datetime.now(dt.timezone.utc).date()
+    text = lse_get_text("export", {
+        "market": market,
+        "symbol": symbol,
+        "timeframe": CANDLES_TIMEFRAME,
+        "data": "candles",
+        "format": "csv",
+        "from": (today - dt.timedelta(days=CANDLES_LOOKBACK_DAYS)).isoformat(),
+        "to": today.isoformat(),
+    })
 
     candles = []
-    for row in rows:
-        ts = row.get("timestamp")
-        if not ts:
-            continue
+    for row in csv.DictReader(io.StringIO(text)):
         try:
-            values = {
-                "open": float(row["open"]),
-                "high": float(row["high"]),
-                "low": float(row["low"]),
-                "close": float(row["close"]),
-            }
+            values = {name: float(row[name]) for name in ("open", "high", "low", "close")}
+            ts = parse_candle_time(row["time"])
         except (KeyError, TypeError, ValueError):
             continue
         if not all(v > 0 for v in values.values()):
             continue
-        candles.append({
-            "time": int(ts),
-            **{name: round(value, 4) for name, value in values.items()},
-        })
+        candles.append({"time": ts, **{name: round(value, 4) for name, value in values.items()}})
 
     candles.sort(key=lambda c: c["time"])
+    candles = candles[-CANDLES_KEEP:]
     if not candles:
         raise RuntimeError(f"no valid candles for {symbol}")
+    if candles[-1]["time"] < time.time() - CANDLES_MAX_AGE_SECONDS:
+        raise RuntimeError(f"newest {symbol} candle is stale ({candles[-1]['time']})")
 
     return {
         "source": "London Strategic Edge",
         "ticker": symbol,
-        "interval": "15m",
+        "interval": CANDLES_TIMEFRAME,
         "exchangeTimezone": "America/New_York",
         "asof": dt.datetime.fromtimestamp(candles[-1]["time"], dt.timezone.utc).isoformat(),
         "candles": candles,
@@ -306,9 +221,9 @@ def fetch_candles_for_symbol(symbol: str) -> dict:
 
 def fetch_all_candles() -> dict:
     out = {}
-    for display_sym, lse_sym in CANDLE_SYMBOLS.items():
+    for display_sym, (market, lse_sym) in CANDLE_SYMBOLS.items():
         try:
-            out[display_sym] = fetch_candles_for_symbol(lse_sym)
+            out[display_sym] = fetch_candles_for_symbol(market, lse_sym)
             print(f"  {display_sym}: {len(out[display_sym]['candles'])} candles")
         except Exception as e:
             print(f"  {display_sym}: FAILED ({e})", file=sys.stderr)
@@ -322,7 +237,7 @@ def fetch_all_candles() -> dict:
 # -----------------------------------------------------------------------------
 def main():
     parser = argparse.ArgumentParser(
-        description="Fetch options chains and/or candles from London Strategic Edge.")
+        description="Fetch options chains (Cboe) and/or candles (London Strategic Edge).")
     parser.add_argument("--options-only", action="store_true",
                         help="fetch only the options chains (writes cboe_data.json only)")
     parser.add_argument("--candles-only", action="store_true",
@@ -336,7 +251,7 @@ def main():
     want_candles = not args.options_only
 
     if want_options:
-        print("Fetching options from LSE...")
+        print("Fetching options from Cboe...")
         options_data = fetch_all_options()
         OUTPUT_OPTIONS.write_text(json.dumps(options_data, separators=(",", ":")), encoding="utf-8")
         print(f"wrote {OUTPUT_OPTIONS} ({len(options_data)} symbols)")

@@ -21,7 +21,7 @@ Expected healthy states:
 
 Actionable unhealthy states:
 
-- `stale`: LSE data is too old during US market hours.
+- `stale`: the options data is too old during US market hours.
 - `future`: data timestamp is ahead of the current market clock.
 - `unknown` or `missing`: status generation or data parsing failed.
 
@@ -70,7 +70,7 @@ git diff --check
 ## GitHub Actions
 
 - `Smoke Check` validates dashboard/data contracts on code and data changes.
-- `Update LSE Data` fetches options chains and candles from London Strategic Edge, regenerates `data_status.json`, runs strict smoke validation, and commits only validated data.
+- `Update LSE Data` fetches options chains from Cboe and candles from London Strategic Edge (Data 3.0), regenerates `data_status.json`, runs strict smoke validation, and commits only validated data.
 
 ## Regime Backtest
 

@@ -6,21 +6,19 @@ on:
     branches: [main]
     paths:
       - "fetch_lse.py"
+      - "fetch_cboe.py"
       - "tools/build_data_status.py"
       - "tools/build_exposure_history.py"
       - "tools/smoke_check.py"
       - ".github/workflows/update-cboe.yml"
   schedule:
     # Every 30 minutes during US market hours (13-20 UTC, Mon-Fri).
-    # LSE FREE plan budget: ~10 historical downloads/hour total.
-    #   - minute 13 of every hour: options-only run   (4 downloads)
-    #   - minute 43 of most hours: options-only run   (4 downloads)
-    #   - minute 43 of hours 13/16/19 UTC: candles-only run (4 downloads),
-    #     REPLACING that slot's options run so no rolling 60-minute window
-    #     ever exceeds 8 downloads — safely under the 10/hour ceiling.
-    # Result: options (GEX) refresh every 30 min (with three 60-min gaps per
-    # day), candles every 3 hours. Manual workflow_dispatch runs BOTH kinds
-    # (full refresh, 8 downloads).
+    #   - minute 13 and 43: options-only run (Cboe delayed chains, no key)
+    #   - minute 43 of hours 13/16/19 UTC: candles-only run (LSE Data 3.0),
+    #     replacing that slot's options run.
+    # Options moved to Cboe in 2026-10: LSE Data 3.0 chains carry no open
+    # interest. The LSE free plan (60 calls/min) no longer limits this cadence;
+    # it is kept as is. Manual workflow_dispatch runs BOTH kinds (full refresh).
     - cron: "13,43 13-20 * * 1-5"
 
 permissions:
@@ -44,7 +42,7 @@ jobs:
           python-version: "3.12"
 
       - name: Compile validation scripts
-        run: python -m py_compile fetch_lse.py tools/build_data_status.py tools/build_exposure_history.py tools/smoke_check.py
+        run: python -m py_compile fetch_lse.py fetch_cboe.py tools/build_data_status.py tools/build_exposure_history.py tools/smoke_check.py
 
       - name: Decide fetch mode
         id: mode

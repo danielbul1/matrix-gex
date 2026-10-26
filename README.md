@@ -4,7 +4,9 @@ Options GEX dashboard for NDX, SPX, SPY, and QQQ.
 
 The live dashboard is at https://api.trytripity.site/matrix/ (served by the Railway backend). GitHub Pages now only redirects there.
 
-Data is sourced from **London Strategic Edge (LSE)** and refreshed by `.github/workflows/update-cboe.yml`.
+Options chains (open interest, IV, greeks) come from **Cboe's free delayed snapshot**; prices, candles,
+options flow and the live WebSocket come from **London Strategic Edge (LSE) Data 3.0**. The published data
+files are refreshed by `.github/workflows/update-cboe.yml`.
 Operational status is published in `data_status.json` for lightweight external monitoring.
 When using the Flask server, the same status is available at `/status`; it returns HTTP 200 for `fresh`/`off_hours` and HTTP 503 for `stale`, `future`, `unknown`, or missing status data.
 
@@ -33,16 +35,20 @@ Three pipelines exist in/around this repo:
 
 ## LSE plan limits
 
-The LSE free plan allows **~10 historical downloads per hour** and **up to 16
-simultaneous WebSocket stream symbols**. How this repo stays within limits:
+LSE moved to its **Data 3.0** API (`https://download.londonstrategicedge.com/v3`,
+key in the `X-API-Key` header) in October 2026; the old `/vault/*` and `x_*`
+calls answer 410/404. The free plan allows **60 calls a minute**, **one export
+download at a time** and a 12.5 GiB weekly export allowance (`GET /v3/usage`
+shows them). Its option chain carries no open interest and its Greeks are
+computed twice a day, which is why the chains and OI stay on Cboe.
 
-- Pipeline A runs **every 30 minutes** (cron `13,43 13-20 * * 1-5`); one full
-  refresh uses ~8 downloads (4 options snapshots + 4 candles) across the 4
-  streamed symbols — within the 16-symbol cap and the hourly download cap.
-  If the key is upgraded to a registered/paid plan, the workflow comment in
-  `update-cboe.yml` explains how to restore 15-minute cadence.
-- `server.py` caches LSE snapshots for 60 seconds and warns when upstream
-  fetches exceed 8/hour; it never blocks requests.
+- Pipeline A runs **every 30 minutes** (cron `13,43 13-20 * * 1-5`): options from
+  Cboe (no key), candles from LSE every 3 hours.
+- The Railway host serializes its LSE candle exports (one download at a time)
+  and falls back to Yahoo when LSE has no fresh candles, which happens for the
+  intraday index history.
+- `server.py` still calls the retired `x_options_snapshot` endpoint and needs
+  moving to Cboe before it works again.
 
 ### On-demand US option symbols
 

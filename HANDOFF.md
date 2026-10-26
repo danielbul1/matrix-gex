@@ -24,14 +24,24 @@ Owner + his father are the only users. Live dashboard: https://api.trytripity.si
     railway.toml           → startCommand for Railway (DO NOT DELETE)
 ```
 
-## Data source: London Strategic Edge (LSE) — FREE plan limits
+## Data sources
 
-- **10 historical downloads/hour** (options snapshots + candles each count).
-- **16 simultaneous WebSocket stream symbols**; we use 4 base underlyings
-  (SPY, QQQ, SPX500/USD, NAS100/USD) plus at most 1 active on-demand stock.
-- API key lives ONLY in env vars (`LSE_API_KEY` / `TRIPITY_MATRIX_LSE_API_KEY`). Never commit it.
-- The Actions workflow respects the budget by design: options every 30 min, candles every 3 h,
-  never more than 8 downloads in any 60-minute window.
+- **Cboe delayed snapshot** (`cdn-api.cboe.com`, free, no key): the option chains with
+  open interest, IV and greeks. GEX needs the OI, so chains always come from here.
+- **London Strategic Edge Data 3.0** (`https://download.londonstrategicedge.com/v3`,
+  `X-API-Key` header): REST prices (`/v3/preview`), candles (`/v3/export`, CSV),
+  options flow (`/v3/options/flow`) and the chain's live volume (`/v3/options/chain`).
+  The old `/vault/*` and `x_*` calls answer 410/404 since October 2026.
+  - FREE plan: **60 calls/minute**, **one export download at a time**, 12.5 GiB/week of
+    exports; `GET /v3/usage` shows the key's limits.
+  - v3 chains carry **no open interest**, and their greeks are computed twice a day (a
+    session old), so the host keeps Cboe's greeks and only overlays volume/last price.
+  - Intraday index candles (SPX/NDX) have gaps on LSE; the host falls back to Yahoo when
+    the newest LSE candle is over 4 days old.
+- **LSE WebSocket** (`wss://data-ws.londonstrategicedge.com`, unchanged): 16 simultaneous
+  stream symbols; we use 4 base underlyings (SPY, QQQ, SPX500/USD, NAS100/USD) plus at
+  most 1 active on-demand stock.
+- API keys live ONLY in env vars (`LSE_API_KEY` / `TRIPITY_MATRIX_LSE_API_KEY`). Never commit them.
 
 ## Live architecture (Railway)
 
@@ -57,6 +67,11 @@ Owner + his father are the only users. Live dashboard: https://api.trytripity.si
   (matrix.js) so levels move live; replay UI mirrors Net Drift & Flow.
 
 ## How to deploy (any machine)
+
+Since 2026-10-26 the `backend` service builds from GitHub (`danielbul1/matrix-gex`, root
+`/railway-service`, config `/railway-service/railway.toml`), **pinned to one commit**: pushes
+to `main` do not deploy. To deploy a new commit, re-pin the service source to it in Railway
+(Settings → Source) or run `railway up` as below.
 
 ```bash
 npm i -g @railway/cli
@@ -95,6 +110,25 @@ Gotchas learned the hard way (2026-07-19):
    b. Always append an entry to the Session Log below (newest on top).
 
 ## Session Log (every agent MUST append — newest first)
+
+### 2026-10-26 — LSE Data 3.0 migration
+- **Outage:** LSE retired its old REST API. `x_options_snapshot`/`x_candles_15m` answer
+  401/404 and `/vault/*` 410, so the Actions pipeline had committed nothing since
+  2026-07-16 and the host's LSE chain overlay, candles, flow and REST spots were failing
+  (the dashboard fell back to Cboe/Yahoo). The `LSE_API_KEY` repo secret was re-added.
+- **Host:** chain → `/v3/options/chain` (overlay keeps Cboe greeks, takes `volume_today`
+  and last price), flow → `/v3/options/flow` (`from` instead of `start`; no call before
+  the open, which v3 refuses), spots → newest 1m candle from `/v3/preview`, candles →
+  `/v3/export` CSV behind a lock (one download at a time) with a 4-day staleness guard
+  that falls back to Yahoo. `MATRIX_LSE_PRICE_SYMBOLS` now maps to (market, symbol).
+- **Pipeline:** `fetch_lse.py` takes options from Cboe (via `fetch_cboe.fetch_chain`,
+  extracted from `fetch_cboe.main`) and candles from `/v3/export`; `data_status.json`
+  source is now "Cboe delayed options snapshot" (smoke check accepts the old label too).
+- **Not done:** `server.py` (local Flask) still calls `x_options_snapshot`; the WebSocket
+  index names (SPX500/USD, NAS100/USD) still need checking during market hours; LSE v3
+  also serves VIX live, which could replace the Cboe delayed VIX quote later.
+- Verified against the live API: spots, candles, chain overlay and flow; full pipeline
+  run + strict smoke check pass; 193 pytest green.
 
 ### 2026-10-26 — Cboe CDN host move fixed; optopsy pinned below 2.3
 - **Outage:** Cboe moved its delayed-quotes CDN from `cdn.cboe.com` to
