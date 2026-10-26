@@ -287,12 +287,14 @@ function bind(id,event,handler,opts){
 
 function hideAllHoverHelpers(){
   hideChartTooltip();
+  hideKeyLevelsTooltip();
   hideOiVolumeTooltip();
 }
 // Single view -> renderer dispatch, shared by renderImpl, setView and the resize handler.
 const VIEW_RENDERERS = {
   'gex': R=>R && drawChart(R),
   'oi-volume': ()=>renderOiVolume(),
+  'key-levels': ()=>renderKeyLevels(),
 };
 function renderImpl(R){
   window._lastR=R;
@@ -713,6 +715,10 @@ function applyLocation(){
     else refreshOiVolume(symbol);
     return;
   }
+  if(view===KEY_LEVELS_VIEW){
+    showKeyLevels();
+    return;
+  }
   if(view!==HOME_VIEW) return;
   const symbol=urlTicker || currentSymbol();
   if(symbol===currentSymbol() && REAL[symbol]) run();
@@ -738,6 +744,10 @@ function search(view,raw){
   }
   if(view===OIV_VIEW){
     refreshOiVolume(symbol);
+    return;
+  }
+  if(view===KEY_LEVELS_VIEW){
+    loadKeyLevels(symbol);
     return;
   }
   screenTickers[view]=symbol;
@@ -843,6 +853,308 @@ async function refreshHome(symbol){
   }
   run();
   setTickerStatus(HOME_VIEW,result.ok?'':`Refresh failed. Showing the last data for ${symbol}.`,result.ok?'':'error');
+}
+
+// ---------- Key Levels ----------
+// Price for the searched ticker with its four Key Levels, and the Forecast under it.
+// One Search loads both, the way his Key Levels page fills chart and text together.
+const KEY_LEVELS_VIEW = 'key-levels';
+// Guess: his bar size and time span are not public. 5-minute bars over five days
+// show where price sits against levels built from every open expiry.
+const KEY_LEVELS_CANDLES = {interval:'5m', range:'5d'};
+// The four Key Levels, in the colours Matrix already used for them.
+const KEY_LEVEL_STYLES = [
+  {key:'callWall',       label:'Call Wall',  color:'#22b8ff'},
+  {key:'putWall',        label:'Put Wall',   color:'#ff453a'},
+  {key:'flip',           label:'Zero Gamma', color:'#f5f5f5'},
+  {key:'maxGammaStrike', label:'Max Gamma',  color:'#8b5fe8'},
+];
+// Levels further than this from spot stay in the legend but off the chart,
+// so one far wall cannot squash the candles into a line.
+const KEY_LEVELS_MAX_DISTANCE = 0.08;
+let keyLevelsState = null;  // {symbol, R, candles}
+let _keyLevelsRequest = 0;
+
+function keyLevels(R){
+  return KEY_LEVEL_STYLES
+    .map(style=>({...style, price:R?.[style.key]==null ? NaN : Number(R[style.key])}))
+    .filter(level=>Number.isFinite(level.price) && level.price>0);
+}
+// No expiry choice on this screen: the GEX profile spans every open expiry (a guess;
+// his page has no expiry control).
+function keyLevelsGex(symbol){
+  const chain=buildChainReal(symbol);
+  const todayIso=new Date().toISOString().slice(0,10);
+  const open=chain.quotes.filter(q=>!q.exp || q.exp>=todayIso);
+  const R=calcGEX(open.length ? {...chain, quotes:open} : chain);
+  R.asof=REAL[symbol]?.asof;
+  return R;
+}
+
+// ----- Forecast -----
+// Placeholder text: the rule-based Market Read and Scenario Ladder Matrix had before,
+// laid out as his #market-forecast is (h3 title, h4 sections, h5 sub-heads).
+// Build 9 replaces the content.
+function levelDisplayPrice(value,R){
+  if(value == null || !Number.isFinite(Number(value))) return '--';
+  const base = fmtPrice(Number(value));
+  const linked = linkedMarketPrice(Number(value),R);
+  if(!linked || linked.price == null) return base;
+  return `${base} / ${linked.symbol} ${fmtLinkedMarketPrice(linked)}`;
+}
+function nearestKeyLevel(R,side){
+  return keyLevels(R)
+    .filter(level=>side==='above' ? level.price>R.spot : level.price<R.spot)
+    .sort((a,b)=>side==='above' ? a.price-b.price : b.price-a.price)[0] || null;
+}
+function buildForecast(R){
+  const gross = Math.abs(R.totalCallGex)+Math.abs(R.totalPutGex)||1;
+  const gexRatio = R.totalGex/gross;
+  let bias = 'Neutral';
+  let biasClass = 'neutral';
+  if(R.regime === 'positive_gamma'){
+    bias = 'Range / Mean Reversion';
+    biasClass = 'range';
+  } else if(R.regime === 'negative_gamma'){
+    bias = 'Trend Risk / Momentum';
+    biasClass = 'trend';
+  }
+  if(Math.abs(gexRatio) < 0.04){
+    bias = 'Chop / Low Signal';
+    biasClass = 'neutral';
+  }
+  const confidence = Math.min(100,Math.round(Math.abs(gexRatio)*260 + Math.min(35,Math.abs(R.distPct)*7)));
+  const summary = biasClass === 'range'
+    ? 'Dealers are more likely to dampen moves near current levels. Favor level-to-level reads until a wall breaks.'
+    : biasClass === 'trend'
+      ? 'Dealer hedging can amplify direction. Watch breaks above resistance or below support for acceleration.'
+      : 'Current gamma signal is weak. Treat levels as reference zones and wait for confirmation.';
+  const below = nearestKeyLevel(R,'below');
+  const above = nearestKeyLevel(R,'above');
+  const negative = R.regime === 'negative_gamma';
+  return {
+    bias, confidence, summary,
+    scenarios:[
+      {label:'Below', level:below, text:below
+        ? `Below ${below.label} ${levelDisplayPrice(below.price,R)}: ${negative ? 'sell pressure can accelerate' : 'support hedge may appear'}.`
+        : 'No Key Level below the current price.'},
+      {label:'Now', level:{label:'Price', price:R.spot}, text:`At ${levelDisplayPrice(R.spot,R)}: ${bias}. Confidence ${confidence}%.`},
+      {label:'Above', level:above, text:above
+        ? `Above ${above.label} ${levelDisplayPrice(above.price,R)}: ${negative ? 'buy pressure can chase' : 'resistance hedge may cap'}.`
+        : 'No Key Level above the current price.'},
+    ],
+  };
+}
+function forecastHtml(R){
+  const f = buildForecast(R);
+  const regime = String(R.regime||'').replace('_',' ');
+  const scenarios = f.scenarios.map(s=>{
+    const head = s.level ? `${s.label}: ${s.level.label} ${levelDisplayPrice(s.level.price,R)}` : s.label;
+    return `<h5>${esc(head)}</h5><p>${esc(s.text)}</p>`;
+  }).join('');
+  return `
+    <h3>Forecast for ${esc(R.symbol)}</h3>
+    <h4>Market Read</h4>
+    <h5>${esc(f.bias)}</h5>
+    <p>${esc(f.summary)}</p>
+    <ul>
+      <li>Confidence: <b>${f.confidence}%</b></li>
+      <li>Regime: <b>${esc(regime)}</b></li>
+      <li>Net GEX: <b class="${R.totalGex>=0?'pos':'neg'}">${fmtNum(R.totalGex)}</b></li>
+      <li>PCR: <b>${R.pcr.toFixed(2)}</b></li>
+    </ul>
+    <h4>Scenario Ladder</h4>
+    ${scenarios}
+  `;
+}
+
+// ----- Price chart -----
+function keyLevelsTimeLabel(time,withDay){
+  const opts = withDay
+    ? {timeZone:'America/New_York',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',hour12:false}
+    : {timeZone:'America/New_York',hour:'2-digit',minute:'2-digit',hour12:false};
+  return new Date(time*1000).toLocaleString('en-US',opts);
+}
+function drawKeyLevelsChart(state){
+  const cv = byId('keyLevelsChart');
+  if(!cv || !state) return;
+  const {R, candles} = state;
+  const dpr = window.devicePixelRatio||1;
+  const W = cv.clientWidth;
+  if(!W) return;
+  const mobile = W < 640;
+  const H = mobile ? Math.max(380, Math.min(520, window.innerHeight - 240)) : Math.max(520, Math.min(720, window.innerHeight - 260));
+  cv.width=W*dpr; cv.height=H*dpr; cv.style.height=H+"px";
+  const ctx = cv.getContext('2d'); ctx.setTransform(dpr,0,0,dpr,0,0);
+  ctx.clearRect(0,0,W,H);
+
+  const levels = keyLevels(R);
+  const onChart = levels.filter(level=>Math.abs(level.price-R.spot)/R.spot<=KEY_LEVELS_MAX_DISTANCE);
+  const symLabel = byId('klSymLabel');
+  if(symLabel) symLabel.textContent = R.symbol;
+  const legend = byId('klLegend');
+  if(legend) legend.innerHTML = levels.map(level=>
+    `<span><i class="dashed" style="border-color:${level.color}"></i>${esc(level.label)} ${fmtPrice(level.price)}${onChart.includes(level)?'':' (off chart)'}</span>`
+  ).join('') || '<span style="color:#7d8799">No Key Levels for this ticker</span>';
+
+  const padL = mobile ? 50 : 72;
+  const padR = mobile ? 70 : 132;
+  const padT = mobile ? 20 : 26;
+  const padB = mobile ? 44 : 50;
+  const plotW = W-padL-padR, plotH = H-padT-padB;
+  const top = padT, bottom = padT+plotH;
+
+  const prices = [R.spot, ...candles.flatMap(c=>[c.low,c.high]), ...onChart.map(l=>l.price)].filter(Number.isFinite);
+  let minPrice = Math.min(...prices), maxPrice = Math.max(...prices);
+  const pad = Math.max((maxPrice-minPrice)*.06, R.spot*.002, .01);
+  minPrice -= pad; maxPrice += pad;
+  const y = price=>top+(maxPrice-price)/(maxPrice-minPrice)*plotH;
+
+  // grid + price axis
+  ctx.font = mobile ? "bold 10px Segoe UI" : "bold 12px Segoe UI";
+  ctx.textBaseline = "middle";
+  for(let t=0;t<=6;t++){
+    const yy = top+plotH*t/6, price = maxPrice-(maxPrice-minPrice)*t/6;
+    ctx.strokeStyle = "rgba(255,255,255,.04)"; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(padL,yy); ctx.lineTo(padL+plotW,yy); ctx.stroke();
+    ctx.fillStyle = "#c4c4c4"; ctx.textAlign = "right";
+    ctx.fillText(fmtPrice(price), padL-8, yy);
+  }
+
+  // candles, one slot each so nights and weekends leave no gaps
+  const slot = plotW/Math.max(candles.length,1);
+  const xAt = i=>padL+slot*(i+.5);
+  if(candles.length){
+    // several days: a divider and the date at each day's first bar; one day: times
+    const days = candles.map(c=>keyLevelsTimeLabel(c.time,true).split(',')[0]);
+    const multiDay = days[0]!==days[days.length-1];
+    const labelEvery = Math.max(1, Math.ceil(candles.length/(mobile?4:8)));
+    ctx.textBaseline = "top"; ctx.textAlign = "left";
+    ctx.fillStyle = "#b9c0c5";
+    candles.forEach((c,i)=>{
+      const newDay = i>0 && days[i]!==days[i-1];
+      if(newDay){
+        ctx.strokeStyle = "rgba(255,255,255,.08)"; ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(padL+slot*i,top); ctx.lineTo(padL+slot*i,bottom); ctx.stroke();
+      }
+      if(multiDay ? (i===0 || newDay) : i%labelEvery===0){
+        ctx.fillText(multiDay ? days[i] : keyLevelsTimeLabel(c.time,false), padL+slot*i+3, bottom+8);
+      }
+    });
+    const bodyW = Math.max(1, Math.min(9, slot*.65));
+    candles.forEach((c,i)=>{
+      const x = xAt(i), color = c.close>=c.open ? '#26a69a' : '#ef5350';
+      ctx.strokeStyle = color; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(x,y(c.high)); ctx.lineTo(x,y(c.low)); ctx.stroke();
+      const bodyTop = Math.min(y(c.open),y(c.close));
+      ctx.fillStyle = color;
+      ctx.fillRect(x-bodyW/2, bodyTop, bodyW, Math.max(1, Math.abs(y(c.close)-y(c.open))));
+    });
+  } else {
+    ctx.fillStyle = "#8d969c"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.font = mobile ? "bold 12px Segoe UI" : "bold 14px Segoe UI";
+    ctx.fillText(`No price data for ${R.symbol}`, padL+plotW/2, top+plotH/2);
+  }
+
+  // the four Key Levels across the chart, labelled on the right
+  ctx.font = mobile ? "bold 10px Segoe UI" : "bold 12px Segoe UI";
+  ctx.textAlign = "left"; ctx.textBaseline = "middle";
+  const labelYs = [];
+  [...onChart].sort((a,b)=>b.price-a.price).forEach(level=>{
+    const yy = y(level.price);
+    ctx.save(); ctx.setLineDash([7,5]); ctx.strokeStyle = level.color; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(padL,yy); ctx.lineTo(padL+plotW,yy); ctx.stroke(); ctx.restore();
+    // nudge labels apart when two levels sit close together
+    let ly = yy;
+    while(labelYs.some(other=>Math.abs(other-ly)<14)) ly += 14;
+    labelYs.push(ly);
+    ctx.fillStyle = level.color;
+    // on narrow screens the name alone; the legend above carries the prices
+    ctx.fillText(mobile ? level.label : `${level.label} ${fmtPrice(level.price)}`, padL+plotW+5, ly);
+  });
+
+  // current price
+  const py = y(R.spot);
+  ctx.save(); ctx.setLineDash([3,4]); ctx.strokeStyle = "#d58b16"; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.moveTo(padL,py); ctx.lineTo(padL+plotW,py); ctx.stroke(); ctx.restore();
+  ctx.fillStyle = "#d58b16"; ctx.textAlign = "left"; ctx.textBaseline = "bottom";
+  ctx.fillText(`Price ${fmtPrice(R.spot)}`, padL+4, py-3);
+
+  cv._klPlot = {padL, plotW, top, bottom, slot, candles, symbol:R.symbol};
+}
+function showKeyLevelsTooltip(ev){
+  const cv = byId('keyLevelsChart'), tt = byId('klTooltip'), cross = byId('klCrosshairX');
+  const plot = cv?._klPlot;
+  if(!tt || !cross || !plot || !plot.candles.length) return;
+  const rect = cv.getBoundingClientRect();
+  const point = ev.touches && ev.touches[0] ? ev.touches[0] : ev;
+  const x = point.clientX-rect.left, y = point.clientY-rect.top;
+  if(x<plot.padL || x>plot.padL+plot.plotW || y<plot.top || y>plot.bottom){ hideKeyLevelsTooltip(); return; }
+  const i = Math.max(0, Math.min(plot.candles.length-1, Math.floor((x-plot.padL)/plot.slot)));
+  const c = plot.candles[i];
+  const row = (label,value) => `<div class="tt-row"><span>${label}</span><span>${value}</span></div>`;
+  tt.innerHTML = `
+    <div class="tt-title">${esc(plot.symbol)} · ${esc(keyLevelsTimeLabel(c.time,true))}</div>
+    ${row('Open',fmtPrice(c.open))}${row('High',fmtPrice(c.high))}${row('Low',fmtPrice(c.low))}${row('Close',fmtPrice(c.close))}
+  `;
+  tt.style.display = 'block';
+  cross.style.display = 'block';
+  cross.style.left = (plot.padL+plot.slot*(i+.5))+'px';
+  const tw = tt.offsetWidth, th = tt.offsetHeight;
+  let left = x+14, topPx = y+14;
+  if(left+tw>rect.width) left = x-tw-14;
+  if(topPx+th>rect.height) topPx = y-th-14;
+  tt.style.left = Math.max(6,left)+'px';
+  tt.style.top = Math.max(6,topPx)+'px';
+}
+function hideKeyLevelsTooltip(){
+  ['klTooltip','klCrosshairX'].forEach(id=>{const el=byId(id); if(el) el.style.display='none';});
+}
+
+// ----- Loading (Search, Enter, or opening the screen with nothing loaded) -----
+async function fetchKeyLevelsCandles(symbol){
+  const {interval, range} = KEY_LEVELS_CANDLES;
+  const data = await fetchLiveData(`${MATRIX_CANDLES_URL}?symbol=${encodeURIComponent(symbol)}&interval=${interval}&range=${range}&t=${Date.now()}`);
+  if(!data?.ok || !Array.isArray(data.candles)) return null;
+  return data.candles.filter(c=>[c.time,c.open,c.high,c.low,c.close].every(Number.isFinite));
+}
+function renderKeyLevels(){
+  if(activeView!==KEY_LEVELS_VIEW || !keyLevelsState) return;
+  drawKeyLevelsChart(keyLevelsState);
+  const host = byId('forecast');
+  if(host) host.innerHTML = forecastHtml(keyLevelsState.R);
+}
+async function loadKeyLevels(symbol){
+  const request = ++_keyLevelsRequest;
+  syncTickerInput(KEY_LEVELS_VIEW,symbol);
+  setTickerStatus(KEY_LEVELS_VIEW,`Loading ${symbol}…`);
+  const [result, candles] = await Promise.all([
+    isCoreSymbol(symbol) ? loadCoreData() : loadDynamicSymbol(symbol),
+    fetchKeyLevelsCandles(symbol),
+  ]);
+  if(request!==_keyLevelsRequest) return;  // a newer Search took over
+  if(!REAL[symbol]){
+    // Nothing to show: keep the ticker that is on screen.
+    if(keyLevelsState) screenTickers[KEY_LEVELS_VIEW] = keyLevelsState.symbol;
+    syncTickerInput(KEY_LEVELS_VIEW);
+    setTickerStatus(KEY_LEVELS_VIEW,result.detail || `${symbol}: no data.`,'error');
+    return;
+  }
+  keyLevelsState = {symbol, R:keyLevelsGex(symbol), candles:candles || []};
+  screenTickers[KEY_LEVELS_VIEW] = symbol;
+  if(activeView===KEY_LEVELS_VIEW){
+    syncTickerInput(KEY_LEVELS_VIEW);
+    history.replaceState(null,'',screenUrl(KEY_LEVELS_VIEW));
+  }
+  renderKeyLevels();
+  if(!result.ok) setTickerStatus(KEY_LEVELS_VIEW,`Refresh failed. Showing the last data for ${symbol}.`,'error');
+  else if(!candles) setTickerStatus(KEY_LEVELS_VIEW,`${symbol}: price chart is unavailable right now.`,'error');
+  else setTickerStatus(KEY_LEVELS_VIEW,'');
+}
+function showKeyLevels(){
+  const symbol = screenTickers[KEY_LEVELS_VIEW];
+  if(keyLevelsState?.symbol===symbol) renderKeyLevels();
+  else loadKeyLevels(symbol);
 }
 
 // ---------- OI Volume ----------
@@ -1283,5 +1595,10 @@ bind('oiVolumeChart','touchend',()=>setTimeout(hideOiVolumeTooltip,1200),{passiv
   bind(id,'touchmove',showChartTooltip,{passive:true});
   bind(id,'touchend',()=>setTimeout(hideChartTooltip,1200),{passive:true});
 });
+bind('keyLevelsChart','mousemove',showKeyLevelsTooltip);
+bind('keyLevelsChart','mouseleave',hideKeyLevelsTooltip);
+bind('keyLevelsChart','touchstart',showKeyLevelsTooltip,{passive:true});
+bind('keyLevelsChart','touchmove',showKeyLevelsTooltip,{passive:true});
+bind('keyLevelsChart','touchend',()=>setTimeout(hideKeyLevelsTooltip,1200),{passive:true});
 
 applyLocation();
