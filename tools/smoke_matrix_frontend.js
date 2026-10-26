@@ -72,11 +72,10 @@ check('call wall above put wall', R.callWall > R.putWall, `call=${R.callWall} pu
 check('zero gamma found inside the strike range', R.flip > 7300 && R.flip < 7660, `flip=${R.flip?.toFixed(1)}`);
 
 // --- 3. Strike Chart ---
-// One expiration at a time, nearest by default
-check('nearest date is the default', pickExpiration(['2026-10-27', '2026-10-28'], null) === '2026-10-27');
-check('a listed date is kept', pickExpiration(['2026-10-27', '2026-10-28'], '2026-10-28') === '2026-10-28');
-check('an unlisted date falls back to the nearest', pickExpiration(['2026-10-27'], '2026-07-17') === '2026-10-27');
-check('no dates gives none', pickExpiration([], '2026-10-27') === null);
+// Several expirations at once, starting on the current week through Friday
+check('the current week is the default', JSON.stringify(weekExpirations([marketTodayIso(), '2099-01-01'])) === JSON.stringify([marketTodayIso()]));
+check('no date this week falls back to the nearest', JSON.stringify(weekExpirations(['2099-01-01', '2099-01-02'])) === '["2099-01-01"]');
+check('no dates gives none', weekExpirations([]).length === 0);
 check('dropdown lists future dates once, sorted',
   JSON.stringify(chainExpirations({ quotes: [{ exp: '2099-01-02' }, { exp: '2000-01-01' }, { exp: '2099-01-01' }, { exp: '2099-01-01' }] }))
   === '["2099-01-01","2099-01-02"]');
@@ -237,12 +236,16 @@ const B1 = computeGexBoard('SPX');
 gb.selected = new Set([exp0, exp1]);
 const B2 = computeGexBoard('SPX');
 check('GEX Board has the agreed columns in order',
-  GB_COLUMNS.map(c => c.label).join() === 'Strike,Net GEX,AG,Notional Delta,Total OI,Call OI,Put OI,Total Vol,Call Vol,Put Vol,%');
-check('GEX Board has his four ticker buttons', GB_TICKERS.join() === 'SPX,NDX,SPY,QQQ');
+  GB_COLUMNS.map(c => c.label).join() === 'Strike,Net GEX,Abs GEX,Notional Delta,Total OI,Call OI,Put OI,Total Vol,cVol,pVol,%');
+check('GEX Board has his three ticker buttons', GB_TICKERS.join() === 'SPX,SPY,QQQ');
 check('GEX Board keeps strikes within 5% of spot', B2.rows.length > 0 && B2.rows.every(s => Math.abs(s.strike - 6000) / 6000 <= 0.05));
 const s1 = B1.rows.find(s => s.strike === 6000), s2 = B2.rows.find(s => s.strike === 6000);
-check('rows sum over the selected expiries', Math.abs(s2.callOI - 2 * s1.callOI) < 1e-9 && Math.abs(s2.netGex - (s2.byExpiry[exp0] + s2.byExpiry[exp1])) < 1e-6,
+check('rows sum over the selected expiries', Math.abs(s2.callOI - 2 * s1.callOI) < 1e-9 && Math.abs(s2.netGex - 2 * s1.netGex) < 1e-6,
   `${s1.callOI} -> ${s2.callOI}`);
+check('the charts reach 10% of spot, wider than the table', B2.chartRows.length >= B2.rows.length
+  && B2.chartRows.every(s => Math.abs(s.strike - 6000) / 6000 <= 0.10));
+const shares = gexBoardExpiryShares(buildChainReal('SPX'));
+check('expiry shares add up to 100%', Math.abs([...shares.values()].reduce((a, v) => a + v, 0) - 100) < 1e-9 && shares.size === 2);
 check('Net GEX, AG and totals add up', Math.abs(s2.netGex - (s2.callGex + s2.putGex)) < 1e-6
   && Math.abs(s2.ag - (Math.abs(s2.callGex) + Math.abs(s2.putGex))) < 1e-6 && s2.totalOI === s2.callOI + s2.putOI);
 check('Notional Delta counts calls and puts as positive', s2.notionalDelta > 0
@@ -323,14 +326,21 @@ check('GEX Board reads its own copy of the chain', computeGexBoard('SPX').spot =
   check('with no volume the Power Zone peak is the AG Strike', pzPeak.strike === agPeak.strike && pzPeak.strike === 6000);
   check('his chart labels and two decimals', PL.map(l => l.chartLabel).join() === 'P1 Strike,N1 Strike,Call Vol Strike,Put Vol Strike,Matrix,AG Strike'
     && fmtLineValue(6800) === '6800.00');
-  check('the Strike Chart shows only strikes within 1% of spot',
-    visibleStrikeData({ spot: 6000, strikes: [5900, 5945, 6000, 6060, 6100].map(strike => ({ strike })) }, POWER_ZONE_WINDOW).map(s => s.strike).join() === '5945,6000,6060');
+  check('the Strike Window is 1% for SPX and 3% for SPY',
+    visibleStrikeData({ spot: 6000, strikes: [5900, 5945, 6000, 6060, 6100].map(strike => ({ strike })) }, strikeWindow('SPX')).map(s => s.strike).join() === '5945,6000,6060'
+    && strikeWindow('SPY') === 0.03 && strikeWindow('NDX') === 0.01);
   const prof = powerZoneProfile([{ strike: 6000, powerZone: 10 }, { strike: 6005, powerZone: 20 }]);
   check('Power Zone profile is sampled every $2.50', prof.map(p => p.price).join() === '6000,6002.5,6005' && prof[1].value === 15);
   REAL.SPX = synthRecord(6000, [exp0, exp1]);
   homeRecord = REAL.SPX; screenTickers[HOME_VIEW] = 'SPX'; activeView = HOME_VIEW;
+  selectedExpirations = new Set([exp0]);
+  const HL1 = homePriceLevels();
+  selectedExpirations = new Set([exp0, exp1]);
   const HL = homePriceLevels();
-  check('home price lines come from the nearest expiry', HL && HL.expiry === exp0 && HL.lines.length >= 4, HL && HL.expiry);
+  check('home price lines follow the chosen expirations', HL1 && HL && HL.lines.length >= 4 && HL.profile.length === HL1.profile.length);
+  selectedExpirations = new Set();
+  check('no chosen expiration gives no price lines', homePriceLevels() === null);
+  selectedExpirations = new Set([exp0, exp1]);
   PRICE.SPX = { candles: Array.from({ length: 60 }, (_, i) => ({ time: 1761573000 + i * 60, open: 5995 + i / 10, high: 5998 + i / 10, low: 5993 + i / 10, close: 5996 + i / 10 })) };
   check('home price chart draws the lines and profile (no-throw)', noThrow(() => drawPriceCharts('SPX')) && byId('priceLegend').innerHTML.includes('Matrix'));
 }
