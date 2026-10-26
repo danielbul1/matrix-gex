@@ -216,3 +216,10 @@ The dashboard screenshots fall into two UI generations:
 
 - **Video transcripts** (lessons #1–4 would likely explain his reading of AG, Power Zone and the magnet): YouTube watch pages redirect to a bot check, and the public `timedtext` list returned empty. Getting around the bot check was refused by the sandbox's permission system, and I did not try other ways. A human watching lessons #1–#4 and `_aaHSyIOCKA` / `4Q_qDKgtspE` is the cheapest next step.
 - **Wayback CDX and archive.today**: not reachable (proxy reset or 429), see S14 and S15.
+
+## Addendum: `vlasenkoalexey/gex_dashboard` (opened 2026-10-26 at the user's request)
+
+A public Dash app (https://github.com/vlasenkoalexey/gex_dashboard, last commit 2026-09-07) that mirrors Quant Power's strike-chart controls: the same button ids (`btn-net-gex`, `btn-ag`, … `btn-power-zone`) and the **same per-button colours as his `styles.css`** (`#915BF8`, `#E8CA01`, …). Its README does not mention Quant Power. It tells us nothing about his formula:
+
+- **Power Zone** there is **the AG series redrawn** (`y=df["ag"]`, `app.py:1171-1177`) as a yellow smoothed spline. It is a placeholder, not a definition. It also peaks at the AG walls, unlike his screenshots, where the peak sits at spot.
+- **AG** there is `call_gex − put_gex` with put GEX negated (`ib_data.py:192`), that is `|call GEX| + |put GEX|`. This is the same as Matrix and consistent with his "ABS GEX (AG)" legend.
