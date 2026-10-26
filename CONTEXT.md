@@ -91,8 +91,20 @@ The home screen: one ticker and one expiry, with Net GEX, AG, OI, volume and Pow
 _Avoid_: GEX view, main chart
 
 **GEX Board**:
-The screen that shows one ticker's strike table and its gamma total, gamma split and price charts over a set of selected expiries. Its menu label is "GEX Analysis".
+The screen for one ticker over a set of selected expiries: a strike table beside a Gamma Total, a Gamma Split and a price chart. Its menu label is "GEX Analysis".
+- The table has one row per strike, summed over the selected expiries, with the columns Strike, Net GEX, AG, Call OI, Put OI, Call Vol and Put Vol.
+- It lists every strike, scrolls, and opens with the spot row in the middle.
+- The price chart carries the Price Lines, computed over the selected expiries.
+
 _Avoid_: GEX Analysis page, heat map
+
+**Gamma Total**:
+The GEX Board chart of Net GEX summed per expiry: one bar for each of the ticker's expiries, whichever expiries are selected.
+_Avoid_: total GEX, gamma by strike
+
+**Gamma Split**:
+The GEX Board chart of each strike's call GEX and put GEX, over the selected expiries, drawn on opposite sides of zero.
+_Avoid_: AG, split by expiry
 
 **Key Level**:
 One of the four prices the Key Levels screen marks from a ticker's GEX profile: Zero Gamma, Max Gamma, Call Wall and Put Wall. Max Pain is not a Key Level.
@@ -111,7 +123,7 @@ The strike with the highest Power Zone: the level that price is drawn to. It is 
 _Avoid_: Matrix Power, Max Power, magnet, Quant Power level
 
 **Price Line**:
-One of the six strikes drawn across the Strike Chart's price chart:
+One of the six strikes drawn across the price charts of the Strike Chart and the GEX Board:
 - P1: the largest positive Net GEX.
 - N1: the most negative Net GEX.
 - Call Vol: the most call volume.
