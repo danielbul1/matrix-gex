@@ -84,6 +84,21 @@ check('his seven parameter buttons',
   Object.keys(METRICS).join() === 'net_gex,ag,call_oi,put_oi,call_vol,put_vol,power');
 R.expectedMove = calcExpectedMove(buildChainReal('SPX'));
 check('Strike Chart draws', noThrow(() => drawChart(R)));
+check('dropdown lists only the six nearest dates',
+  JSON.stringify(chainExpirations({ quotes: ['2099-01-08', '2099-01-01', '2099-01-03', '2099-01-02', '2099-01-05', '2099-01-04', '2099-01-07', '2099-01-06'].map(exp => ({ exp })) }))
+  === JSON.stringify(['2099-01-01', '2099-01-02', '2099-01-03', '2099-01-04', '2099-01-05', '2099-01-06']));
+check('AG and Power Zone share the GEX axis; OI and volume get their own',
+  METRICS.ag.axis === 'gex' && METRICS.power.axis === 'gex'
+  && ['call_oi', 'put_oi', 'call_vol', 'put_vol'].every(m => METRICS[m].axis === 'count'));
+check('Strike Chart draws with both right axes', noThrow(() => { ['call_oi', 'power'].forEach(m => ACTIVE.add(m)); drawChart(R); ['call_oi', 'power'].forEach(m => ACTIVE.delete(m)); }));
+check('Net GEX and AG start on', ACTIVE.has('net_gex') && ACTIVE.has('ag') && ACTIVE.size === 2);
+// Each screen keeps its own chain: a Search elsewhere replacing REAL leaves the Strike Chart alone.
+homeRecord = REAL.SPX;
+REAL.SPX = { ...REAL.SPX, spot: 1234 };
+activeView = HOME_VIEW;
+run();
+check('Strike Chart reads its own copy of the chain', window._lastR.spot === spot, `spot=${window._lastR.spot}`);
+REAL.SPX = homeRecord;
 
 // Price charts keep the latest regular session (09:30-16:00 ET)
 const et = (day, hh, mm) => zonedDateTimeToUtc(2026, 10, day, hh, mm, 'America/New_York') / 1000;
@@ -185,7 +200,7 @@ check('Volume Spread = call vol - put vol per strike', agg.length === 2 && agg[0
   JSON.stringify(agg.map(s => [s.strike, s.volumeSpread])));
 check('OI and volume sum per strike', agg[1].callOI === 5 && agg[1].callVol === 6);
 check('OI Volume lists future expirations only, sorted', JSON.stringify(oiVolumeExpiries(buildChainReal('SPX'))) === JSON.stringify([exp0, exp1]));
-const O = computeOiVolume('SPX', exp1);
+const O = computeOiVolume('SPX', exp1, REAL.SPX);
 check('OI Volume uses one expiration', O.strikes.length === 21 && O.strikes.every(s => s.callOI > 0));
 const lines = oiVolumePriceLines(O.strikes);
 check('price chart lines: Call OI, Put OI, Call Vol, Put Vol', JSON.stringify(lines.map(l => l.label)) === JSON.stringify(['Call OI', 'Put OI', 'Call Vol', 'Put Vol']));
@@ -193,7 +208,7 @@ check('Call Vol line sits at the top call-volume strike', lines[2].price === 605
 let oivOk = true;
 try {
   activeView = OIV_VIEW;
-  oiv.symbol = 'SPX'; oiv.expiry = exp0;
+  oiv.symbol = 'SPX'; oiv.record = REAL.SPX; oiv.expiry = exp0;
   oiv.candles = [{ time: 1761573000, open: 5990, high: 6010, low: 5985, close: 6005 }, { time: 1761573060, open: 6005, high: 6012, low: 6000, close: 6001 }];
   for (const m of Object.keys(OIV_METRICS)) OIV_ACTIVE.add(m);
   renderOiVolume();
@@ -201,5 +216,15 @@ try {
   OIV_ACTIVE.clear(); renderOiVolume(); OIV_ACTIVE.add('volume_spread');
 } catch (e) { oivOk = false; console.log('oi volume draw error:', e.stack); }
 check('OI Volume strike and price charts draw (no-throw)', oivOk);
+oiv.record = REAL.SPX;
+REAL.SPX = synthRecord(5000, [exp0]);
+check('OI Volume reads its own copy of the chain', computeOiVolume('SPX', exp1).spot === 6000);
+oiv.symbol = 'SPX'; oiv.expiry = '2000-01-01';
+renderOiVolume();
+check('a gone expiration falls back to the nearest one', oiv.expiry === exp0, oiv.expiry);
+check('every ticker may have a price chart (no ticker list)', typeof CANDLE_SYMBOLS === 'undefined');
+const etSec = (h, m) => Date.UTC(2026, 9, 23, h + 4, m) / 1000;  // 2026-10-23, EDT = UTC-4
+const sess = latestSessionCandles([[9, 29], [9, 30], [15, 59], [16, 0]].map(([h, m]) => ({ time: etSec(h, m), open: 1, high: 2, low: 0.5, close: 1.5 })));
+check('price chart keeps 09:30-16:00 ET only', sess.length === 2 && fmtMarketTime(sess[0].time) === '09:30' && fmtMarketTime(sess[1].time) === '15:59');
 
 process.exit(failures ? 1 : 0);
