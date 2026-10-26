@@ -92,8 +92,10 @@ _Avoid_: GEX view, main chart
 
 **GEX Board**:
 The screen for one ticker over a set of selected expiries: a strike table beside a Gamma Total, a Gamma Split and a price chart. Its menu label is "GEX Analysis".
-- The table has one row per strike, summed over the selected expiries, with the columns Strike, Net GEX, AG, Call OI, Put OI, Call Vol and Put Vol.
-- It lists every strike, scrolls, and opens with the spot row in the middle.
+- The table has one row per strike, summed over the selected expiries. Its columns are Strike, Net GEX, AG, Total OI, Call OI, Put OI, Total Vol, Call Vol, Put Vol and %, where % is the strike's Net GEX as a share of the total AG.
+- It covers strikes within 5% of spot, the same window as the Gamma Split. It runs from the highest strike down, scrolls, and sorts by any column.
+- It highlights the spot row, the rows of the Key Levels and of P1, N1 and AG Strike, and each column's largest value.
+- A line above it gives spot, Total Gamma (Net GEX summed over the selected expiries), its sign as the regime, the number of strikes and the ticker.
 - The price chart carries the Price Lines, computed over the selected expiries.
 
 _Avoid_: GEX Analysis page, heat map
@@ -103,7 +105,7 @@ The GEX Board chart of Net GEX summed per expiry: one bar for each of the ticker
 _Avoid_: total GEX, gamma by strike
 
 **Gamma Split**:
-The GEX Board chart of each strike's call GEX and put GEX, over the selected expiries, drawn on opposite sides of zero.
+The GEX Board chart of each strike's call GEX and put GEX, over the selected expiries and strikes within 5% of spot, drawn on opposite sides of zero.
 _Avoid_: AG, split by expiry
 
 **Key Level**:
