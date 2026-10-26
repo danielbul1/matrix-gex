@@ -5,6 +5,7 @@ replay, live spot polling, regime, journal) answer 404. Starting the app
 removes the old SQLite store those screens wrote to.
 """
 import asyncio
+import re
 import importlib.util
 import sys
 import types
@@ -54,8 +55,8 @@ def _make_app():
     return host.PublicCompanyApp(connector, oauth=False, public_url="http://test")
 
 
-def _get(app, path):
-    scope = {"type": "http", "method": "GET", "path": path, "query_string": b"", "headers": []}
+def _get(app, path, query=b""):
+    scope = {"type": "http", "method": "GET", "path": path, "query_string": query, "headers": []}
     sent = []
 
     async def receive():
@@ -65,9 +66,10 @@ def _get(app, path):
         sent.append(message)
 
     asyncio.run(app(scope, receive, send))
-    status = next(m["status"] for m in sent if m["type"] == "http.response.start")
+    start = next(m for m in sent if m["type"] == "http.response.start")
     body = b"".join(m.get("body", b"") for m in sent if m["type"] == "http.response.body")
-    return status, body
+    _get.headers = dict(start.get("headers", []))
+    return start["status"], body
 
 
 def test_matrix_page_still_served():
@@ -84,6 +86,7 @@ def test_matrix_page_still_served():
     "/api/matrix/active-symbol",
     "/api/matrix/journal",
     "/api/matrix/journal/stats",
+    "/api/matrix/symbol-search",
 ])
 def test_deleted_endpoints_are_gone(path):
     status, _ = _get(_make_app(), path)
@@ -107,3 +110,67 @@ def test_startup_removes_legacy_store(tmp_path, monkeypatch):
     host._remove_legacy_matrix_store()
     assert list(tmp_path.iterdir()) == []
     host._remove_legacy_matrix_store()  # already gone: no error
+
+
+SCREEN_PATHS = [
+    "/matrix/",
+    "/matrix/oi-volume",
+    "/matrix/gex-analysis",
+    "/matrix/key-levels",
+    "/matrix/options-summary",
+    "/matrix/how-to-use-gex",
+    "/matrix/disclaimer",
+]
+
+
+@pytest.mark.parametrize("path", SCREEN_PATHS + ["/matrix/key-levels/"])
+def test_every_screen_path_serves_the_page(path):
+    """Each screen opens directly, including on a browser reload."""
+    status, body = _get(_make_app(), path)
+    assert status == 200
+    assert body == (host.MATRIX_WEB_DIR / "matrix.html").read_bytes()
+
+
+def test_unknown_matrix_path_is_404():
+    status, _ = _get(_make_app(), "/matrix/journal")
+    assert status == 404
+
+
+def test_bare_matrix_redirect_keeps_the_ticker():
+    status, _ = _get(_make_app(), "/matrix", query=b"ticker=SPX")
+    assert status == 307
+    assert _get.headers[b"location"] == b"/matrix/?ticker=SPX"
+
+
+def test_menu_follows_his_order():
+    """Home is the brand link; the menu then lists his screens in his order,
+    with Disclaimer last as its own link."""
+    page = (host.MATRIX_WEB_DIR / "matrix.html").read_text(encoding="utf-8")
+    links = re.findall(r'<a [^>]*href="(/matrix/[^"]*)"[^>]*>([^<]+)</a>', page)
+    assert links == [
+        ("/matrix/", "Matrix"),
+        ("/matrix/oi-volume", "OI Volume"),
+        ("/matrix/gex-analysis", "GEX Analysis"),
+        ("/matrix/key-levels", "Key Levels"),
+        ("/matrix/options-summary", "P/C Ratio"),
+        ("/matrix/how-to-use-gex", "How to use GEX"),
+        ("/matrix/disclaimer", "Disclaimer"),
+    ]
+
+
+def test_assets_load_from_any_screen_path():
+    page = (host.MATRIX_WEB_DIR / "matrix.html").read_text(encoding="utf-8")
+    assert 'href="/matrix/matrix.css' in page
+    assert 'src="/matrix/matrix.js' in page
+
+
+def test_old_shell_is_gone():
+    """The per-screen ticker field replaces Data Health, favorites and the search list,
+    and nothing reloads on a timer."""
+    page = (host.MATRIX_WEB_DIR / "matrix.html").read_text(encoding="utf-8")
+    script = (host.MATRIX_WEB_DIR / "matrix.js").read_text(encoding="utf-8")
+    for old in ("dataHealth", "symbolFavorite", "symbolSearchResults", "staleDataBanner"):
+        assert old not in page
+        assert old not in script
+    assert "setInterval" not in script
+    assert "symbol-search" not in script

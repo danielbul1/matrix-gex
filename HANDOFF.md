@@ -51,8 +51,6 @@ Owner + his father are the only users. Live dashboard: https://api.trytripity.si
   - `GET /api/matrix/cboe-data` — core chains (Cboe OI + LSE volume, LSE REST spot).
   - `GET /api/matrix/candles?symbol=&interval=&range=` — intraday candles.
   - `GET /api/matrix/spx-quote` — Cboe delayed SPX quote.
-  - `GET /api/matrix/symbol-search?q=MSFT` — searches the daily-cached official
-    Cboe option-symbol directory by ticker or company name.
   - `GET /api/matrix/symbol-data?symbol=MSFT` — daily-cached on-demand Cboe
     OI/IV chain (Cboe delayed spot).
 
@@ -94,6 +92,24 @@ Gotchas learned the hard way (2026-07-19):
    b. Always append an entry to the Session Log below (newest on top).
 
 ## Session Log (every agent MUST append — newest first)
+
+### 2026-10-26 — Shell, menu and a path per screen (map #21, task #32)
+- **Frontend:** sidebar in Quant Power's order (the "Matrix" brand link is home = Strike
+  Chart, then OI Volume, GEX Analysis, Key Levels, P/C Ratio, How to use GEX, and
+  Disclaimer as its own link). Each screen has its own path under `/matrix/`, and the
+  ticker screens carry `?ticker=` so a link reopens the same state. Navigation uses
+  `history.pushState`, so Back/Forward work. Each ticker screen has its own ticker field
+  and Search button, and Enter is Search; on the Strike Chart that reloads the data
+  (core tickers from `cboe-data`, any other through `symbol-data`). Screens not built yet
+  show "Coming soon". On phones the menu folds behind a button.
+- **Removed:** the Live Data Health panel (and its 1 s UI timer), the stale-data banner,
+  favorites and the star, the search autocomplete list, the header badge and footer.
+- **Backend:** every screen path (with or without a trailing slash) serves `matrix.html`;
+  `/matrix?ticker=X` redirects to `/matrix/?ticker=X`. Removed
+  `/api/matrix/symbol-search` and its Cboe directory cache (only the deleted autocomplete
+  used it). CSS/JS are now linked by absolute `/matrix/...` paths.
+- **Tests:** route, menu-order and old-shell tests in `tests/test_matrix_routes.py`.
+  Checked in headless Chromium (desktop and 390 px) with recorded data.
 
 ### 2026-10-26 — Delete everything Quant Power does not have (map #21, task #31)
 - **Frontend:** removed the DEX, VEX, CHEX, Market Structure, Exposure Lab, Net Drift &
