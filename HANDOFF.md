@@ -116,6 +116,13 @@ Gotchas learned the hard way (2026-07-19):
   Cboe-only, so no multi-exchange sweeps there). Greeks update about every 79 s (compute
   our own for live GEX). OI on all contracts. That run's lag and coverage numbers were
   wrong (Quote times are empty; coverage skipped spread legs): fixed, rerun with `--symbol`.
+- **Rerun (SPY then SPX, 8 min each, 11:51 ET):** the feed is **15 minutes delayed**
+  (print time vs wall clock, median 900.7 s on both), although the SDK uses
+  `/api-quote-tokens`. Likely the account (unfunded, or market-data agreements not
+  signed); recheck once that is fixed. Tape covers 100% of the day-volume change on both.
+  SPY prints span 19 exchanges; the probe's sweep rule (2+ exchanges, same side, 500 ms)
+  found 2,532 clusters in 8 min, far too loose to be a signal: a real classifier needs
+  whale-options' stricter rules. Greeks update every 75-110 s.
 
 ### 2026-10-26 — Shell, menu and a path per screen (map #21, task #32)
 - **Frontend:** sidebar in Quant Power's order (the "Matrix" brand link is home = Strike
