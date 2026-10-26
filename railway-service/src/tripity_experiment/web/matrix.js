@@ -271,9 +271,15 @@ function renderImpl(R){
 let ACTIVE = new Set(["net_gex","ag"]);
 // Strikes shown: spot +/- 2 expected moves.
 const DISPLAY_SIGMA = 2;
-// The Strike Chart shows, Power Zone is drawn on, and the Matrix level is found among,
-// only strikes within 1% of spot (#24, #39).
+// Power Zone is drawn on, and the Matrix level is found among, only strikes within
+// 1% of spot (#24, #39).
 const POWER_ZONE_WINDOW = 0.01;
+// Strike Window: the strikes the Strike Chart draws around spot. His 2026 screenshots
+// show about 1% for SPX and about 3% for SPY; other tickers follow the nearest of the two.
+const INDEX_SYMBOLS = new Set(['SPX','NDX']);
+function strikeWindow(symbol){
+  return INDEX_SYMBOLS.has(symbol) ? 0.01 : 0.03;
+}
 // The strikes an area layer is drawn on: all of them, or only those near spot.
 function layerPoints(M,data,spot){
   return data.map((s,i)=>({s,i})).filter(({s})=>!M.window || Math.abs(s.strike-spot)/spot<=M.window);
@@ -300,7 +306,7 @@ function chartTargets(chartId){
   };
   return {canvasId:chartId, ...(map[chartId] || map.gexChart)};
 }
-// window: a fixed share of spot (the Strike Chart's ±1%); otherwise spot ± 2 expected moves.
+// window: a fixed share of spot (the Strike Window); otherwise spot ± 2 expected moves.
 function visibleStrikeData(R,window=null){
   let visibleStrikes=[...R.strikes];
   if(window){
@@ -327,9 +333,15 @@ function drawChart(R,chartId='gexChart'){
   const ctx = cv.getContext('2d'); ctx.setTransform(dpr,0,0,dpr,0,0);
   ctx.clearRect(0,0,W,H);
 
-  // Like his strike chart: only strikes within 1% of spot (about 27 SPX strikes, #39).
-  const data=visibleStrikeData(R,POWER_ZONE_WINDOW);
-  if(!data.length) return;
+  // Like his strike chart: only the strikes of the Strike Window.
+  const data=visibleStrikeData(R,strikeWindow(R.symbol));
+  if(!data.length){
+    const legend=byId(targets.legendId);
+    if(legend) legend.textContent='';
+    ctx.fillStyle="#a0a0a0"; ctx.font="bold 15px Segoe UI"; ctx.textAlign="center"; ctx.textBaseline="middle";
+    ctx.fillText(selectedExpirations?.size ? "No strikes near spot" : "Select at least one expiration", W/2, H/2);
+    return;
+  }
 
   const metricsState=chartActiveMetrics();
   const active=metricsState.active;
@@ -377,13 +389,11 @@ function drawChart(R,chartId='gexChart'){
     axisTitle[ax]=layers.map(m=>METRICS[m].label.toUpperCase()).join(' - ');
   });
 
-  // ----- gridlines + tick labels -----
+  // ----- tick labels; no gridlines, like his -----
   ctx.font=(mobile ? "bold 10px Segoe UI" : "bold 13px Segoe UI"); ctx.textBaseline="middle";
   const ticks=6;
   for(let t=0;t<=ticks;t++){
     const f=t/ticks, yy=bottom-f*plotH;
-    ctx.strokeStyle="rgba(255,255,255,.025)"; ctx.lineWidth=1;
-    ctx.beginPath(); ctx.moveTo(padL,yy); ctx.lineTo(W-padR,yy); ctx.stroke();
     if(hasBar){ ctx.fillStyle="#c4c4c4"; ctx.textAlign="right";
       ctx.fillText(fmtAxis(lMin+(lMax-lMin)*f), padL-8, yy); }
     rightAxes.forEach((ax,i)=>{ ctx.fillStyle="#c4c4c4"; ctx.textAlign="left";
@@ -593,15 +603,13 @@ let PRICE = {};
 // Lines more than this from spot stay in the legend only, so one far strike cannot
 // squash a day of candles into a line.
 const PRICE_LINE_DISTANCE = 0.015;
-// His price chart does not read the chosen date, so its lines and Power Zone profile
-// come from the nearest expiry (a guess, #39).
+// The candle chart's Price Lines and Power Zone profile come from the chosen expirations.
 function homePriceLevels(){
-  if(!homeRecord) return null;
+  if(!homeRecord || !selectedExpirations?.size) return null;
   const chain=buildChainRealFromRecord(currentSymbol(),homeRecord);
-  const nearest=chainExpirations(chain)[0];
-  if(!nearest) return null;
-  const R=calcGEX({...chain, quotes:chain.quotes.filter(q=>q.exp===nearest)});
-  return {spot:R.spot, expiry:nearest, lines:priceLines(R.strikes,R.spot),
+  const R=calcGEX({...chain, quotes:chain.quotes.filter(q=>selectedExpirations.has(q.exp))});
+  if(!R.strikes.length) return null;
+  return {spot:R.spot, lines:priceLines(R.strikes,R.spot),
     profile:R.strikes.filter(s=>Math.abs(s.strike-R.spot)/R.spot<=POWER_ZONE_WINDOW && s.powerZone>0)};
 }
 // Power Zone between strikes, sampled every $2.50 like his profile (research Addendum 5).
@@ -839,7 +847,8 @@ let activeView = null;
 const screenTickers = Object.fromEntries(
   Object.keys(SCREENS).filter(view=>SCREENS[view].ticker).map(view=>[view,DEFAULT_SYMBOL])
 );
-let selectedExpiration = null;
+// The Strike Chart's chosen expirations: a Set, or null until a ticker's first load.
+let selectedExpirations = null;
 
 function normalizeSymbol(value){
   return String(value||'').trim().toUpperCase();
@@ -876,30 +885,64 @@ function syncTickerInput(view,value=screenTickers[view]){
 }
 
 // ---------- Expiration (Strike Chart) ----------
-// One date at a time from a dropdown filled per ticker, like his date dropdown.
-// It lists only the six nearest dates (a guess from one sample of his list) and
-// starts on the nearest one (also a guess).
+// Like his Expiration dropdown: several dates at once, shown as removable chips, summed
+// per strike. The list holds the six nearest dates (a guess from one sample of his list).
+// A ticker starts on the dates of the current week through Friday, as both of his
+// screenshots show (14-18 Sep on the Strike Chart, 28 Sep-2 Oct on the GEX board).
 const EXPIRATION_COUNT = 6;
-function currentExpiration(){
-  return byId('expirationSelect')?.value || null;
-}
 function chainExpirations(chain){
   const todayIso = new Date().toISOString().slice(0,10);
   return [...new Set(chain.quotes.map(q=>q.exp).filter(exp=>exp && exp >= todayIso))].sort().slice(0,EXPIRATION_COUNT);
 }
-function pickExpiration(expiries, wanted){
-  return expiries.includes(wanted) ? wanted : (expiries[0] || null);
+function marketTodayIso(){
+  return new Intl.DateTimeFormat('en-CA',{timeZone:'America/New_York',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
 }
+// The expiries of the current trading week through Friday (next week's on a weekend),
+// or the nearest one when the week has none left.
+function weekExpirations(expiries){
+  const [y,m,d] = marketTodayIso().split('-').map(Number);
+  const dow = new Date(Date.UTC(y,m-1,d)).getUTCDay();
+  const toFriday = dow===6 ? 6 : dow===0 ? 5 : 5-dow;
+  const friday = new Date(Date.UTC(y,m-1,d+toFriday)).toISOString().slice(0,10);
+  const week = expiries.filter(exp=>exp<=friday);
+  return week.length ? week : expiries.slice(0,1);
+}
+let homeExpiries = [];
 function populateExpirations(chain){
-  const select = byId('expirationSelect');
-  const expiries = chainExpirations(chain);
-  selectedExpiration = pickExpiration(expiries, selectedExpiration);
-  if(!select) return;
-  select.innerHTML = expiries.length
-    ? expiries.map(exp=>`<option value="${esc(exp)}"${exp===selectedExpiration?' selected':''}>${esc(exp)}</option>`).join('')
-    : '<option value="">No expirations available</option>';
-  select.disabled = !expiries.length;
-  if(selectedExpiration) select.value = selectedExpiration;
+  homeExpiries = chainExpirations(chain);
+  selectedExpirations = selectedExpirations
+    ? new Set([...selectedExpirations].filter(exp=>homeExpiries.includes(exp)))
+    : new Set(weekExpirations(homeExpiries));
+  renderExpirationPicker();
+}
+function renderExpirationPicker(){
+  const chips = byId('expirationChips'), menu = byId('expirationMenu');
+  if(!chips || !menu) return;
+  const chosen = homeExpiries.filter(exp=>selectedExpirations?.has(exp));
+  chips.innerHTML = chosen.length
+    ? chosen.map(exp=>`<span class="ms-chip"><button type="button" class="ms-remove" data-exp-remove="${esc(exp)}" aria-label="Remove ${esc(exp)}">×</button>${esc(exp)}</span>`).join('')
+    : `<span class="ms-placeholder">${homeExpiries.length ? 'Select...' : 'No expirations available'}</span>`;
+  const rest = homeExpiries.filter(exp=>!selectedExpirations?.has(exp));
+  menu.innerHTML = rest.length
+    ? rest.map(exp=>`<li><button type="button" class="ms-option" data-exp-add="${esc(exp)}">${esc(exp)}</button></li>`).join('')
+    : '<li class="ms-none">No more dates</li>';
+  const clear = byId('expirationClear');
+  if(clear) clear.hidden = !chosen.length;
+}
+function setExpirationMenu(open){
+  const menu = byId('expirationMenu'), toggle = byId('expirationToggle');
+  if(!menu) return;
+  menu.hidden = !open;
+  byId('expirationSelect')?.classList.toggle('open', open);
+  toggle?.setAttribute('aria-expanded', String(open));
+}
+// A change of dates redraws the strike chart and the Price Lines from the loaded chain.
+function changeExpirations(update){
+  if(!selectedExpirations) return;
+  update(selectedExpirations);
+  renderExpirationPicker();
+  run();
+  drawPriceCharts(currentSymbol());
 }
 
 // ---------- Navigation ----------
@@ -1013,9 +1056,7 @@ function run(){
   }
   let chain = buildChainRealFromRecord(sym,homeRecord);
   populateExpirations(chain);
-  if(selectedExpiration){
-    chain = {...chain, quotes: chain.quotes.filter(q=>q.exp===selectedExpiration)};
-  }
+  chain = {...chain, quotes: chain.quotes.filter(q=>selectedExpirations.has(q.exp))};
   const R = calcGEX(chain);
   R.expectedMove = calcExpectedMove(chain);
   renderImpl(R);
@@ -1090,7 +1131,7 @@ async function refreshHome(symbol){
     setTickerStatus(HOME_VIEW,result.detail,'error');
     return;
   }
-  if(symbol!==previous) selectedExpiration=null;
+  if(symbol!==previous) selectedExpirations=null;
   homeRecord=REAL[symbol];
   screenTickers[HOME_VIEW]=symbol;
   if(activeView===HOME_VIEW){
@@ -1752,44 +1793,45 @@ async function refreshOiVolume(symbol){
 }
 
 // ---------- GEX Board ("GEX Analysis") ----------
-// His GEX board (map #21, #29, #36): no ticker box, a button per ticker and per expiry
-// with Select all / Clear all, a spot line, a strike table over the selected expiries,
-// and three 420px charts in a 480px column (Gamma Total, Gamma Split, price), each with
-// a full-screen button. All of that is visible in his public callback graph and page
-// scripts. What his table and charts hold is not public: the columns, the 5% window and
-// the highlights are guesses helped by a follower's public copy (gex_dashboard), and the
-// three charts are our guesses.
+// His GEX board (map #21, #29, #36), as his public callback graph and a screenshot from
+// one of his videos show it: a "Select Ticker:" card (SPX, SPY, QQQ), then the "Options
+// Chain Board" with a summary line, one button per expiry (date and its share of the
+// gamma), Select All / Clear All, the strike table, and three charts in a 480px column
+// (Net Gamma, Gamma Split, price), each with a full-screen button. The 5% table window
+// and the 10% chart window are guesses.
 const GB_VIEW = 'gex-analysis';
-const GB_TICKERS = ['SPX','NDX','SPY','QQQ'];
+const GB_TICKERS = ['SPX','SPY','QQQ'];
 screenTickers[GB_VIEW] = GB_TICKERS[0];
-const GB_WINDOW = 0.05;         // table, Gamma Total and Gamma Split: strikes within 5% of spot
+const GB_WINDOW = 0.05;         // the table: strikes within 5% of spot
+const GB_CHART_WINDOW = 0.10;   // Net Gamma and Gamma Split: his draw a much wider range
 // Price Lines further than this from spot stay in the legend but off the price chart,
 // so one far strike cannot squash a day of candles into a line.
 const GB_PRICE_LINE_DISTANCE = 0.015;
 const GB_COLUMNS = [
   {key:'strike',        label:'Strike'},
   {key:'netGex',        label:'Net GEX', signed:true},
-  {key:'ag',            label:'AG'},
+  {key:'ag',            label:'Abs GEX'},
   {key:'notionalDelta', label:'Notional Delta', usd:true},
   {key:'totalOI',       label:'Total OI'},
   {key:'callOI',        label:'Call OI'},
   {key:'putOI',         label:'Put OI'},
   {key:'totalVol',      label:'Total Vol'},
-  {key:'callVol',       label:'Call Vol'},
-  {key:'putVol',        label:'Put Vol'},
+  {key:'callVol',       label:'cVol'},
+  {key:'putVol',        label:'pVol'},
   {key:'pct',           label:'%', signed:true, pct:true},
 ];
-// Columns whose largest value is highlighted.
+// Columns whose largest value is marked, like his: a dot on the cell and the whole row
+// shaded. Net GEX counts by size, so its most negative strike can be the one.
 const GB_MAX_COLUMNS = ['netGex','ag','notionalDelta','totalOI','callOI','putOI','totalVol','callVol','putVol'];
-// Gamma Split: one colour per selected expiry, in date order.
-const GB_EXPIRY_COLORS = ['#22b5ff','#915bf8','#02d432','#e8ca01','#e55f04','#f32d35','#7ec8ff','#f06292','#9ccc65','#4dd0e1'];
+// Text colours per column, as in his screenshot: calls blue, puts red, signed columns by sign.
+const GB_COLUMN_CLASS = {ag:'gb-call', callOI:'gb-call', callVol:'gb-call', putOI:'gb-put', putVol:'gb-put', totalOI:'gb-strong'};
 const GB_CHARTS = {
   Total: {canvas:'gbTotalChart', wrap:'gbTotalWrap'},
   Split: {canvas:'gbSplitChart', wrap:'gbSplitWrap'},
   Price: {canvas:'gbPriceChart', wrap:'gbPriceWrap'},
 };
 // The screen's own copy of its chain, so a Search on another screen leaves it alone.
-const gb = {symbol:null, record:null, candles:null, candlesError:'', expiries:[], selected:new Set(), sort:{key:'strike', dir:'desc'}};
+const gb = {symbol:null, record:null, candles:null, candlesError:'', expiries:[], shares:new Map(), selected:new Set(), sort:{key:'strike', dir:'desc'}};
 let _gbRequest = 0;
 
 // ----- Numbers -----
@@ -1805,14 +1847,13 @@ function gexBoardStrikes(chain){
     const delta = Number.isFinite(q.g.delta) ? q.g.delta
       : calcGreeks(spot, q.K, q.T, q.iv>0 ? q.iv : 0.2, RISK_FREE, q.isCall).delta;
     if(!byStrike.has(q.K)) byStrike.set(q.K,{strike:q.K, callGex:0, putGex:0, callOI:0, putOI:0,
-      callVol:0, putVol:0, notionalDelta:0, byExpiry:{}});
+      callVol:0, putVol:0, notionalDelta:0});
     const s = byStrike.get(q.K);
     const vol = Number(q.vol)||0;
     if(q.isCall){ s.callGex += gex; s.callOI += q.oi; s.callVol += vol; }
     else { s.putGex -= gex; s.putOI += q.oi; s.putVol += vol; }
     // Notional Delta: calls and puts both counted as positive, like AG.
     s.notionalDelta += Math.abs(delta) * q.oi * mult * spot;
-    s.byExpiry[q.exp] = (s.byExpiry[q.exp]||0) + (q.isCall ? gex : -gex);
   }
   const rows = [...byStrike.values()].map(s=>({...s,
     netGex:s.callGex+s.putGex, ag:Math.abs(s.callGex)+Math.abs(s.putGex),
@@ -1832,36 +1873,38 @@ function computeGexBoard(symbol, record=gb.record, selected=gb.selected){
   const spot = chain.spot;
   const all = gexBoardStrikes(chain);
   const rows = all.filter(s=>Math.abs(s.strike-spot)/spot<=GB_WINDOW);
+  const chartRows = all.filter(s=>Math.abs(s.strike-spot)/spot<=GB_CHART_WINDOW);
   // Total Gamma comes from the board's own rows, so it matches the table.
   const totalGex = all.reduce((sum,s)=>sum+s.netGex,0);
   const powerZone = new Map(R.strikes.map(s=>[s.strike, s.powerZone||0]));
-  return {symbol, spot, R, rows, totalGex, expiries:[...selected].sort(), lines:gexBoardPriceLines(rows, powerZone, spot)};
+  return {symbol, spot, R, rows, chartRows, totalGex, expiries:[...selected].sort(), lines:gexBoardPriceLines(rows, powerZone, spot)};
+}
+// Each expiry's share of the gamma (AG) over all listed expiries, in percent: his expiry
+// buttons carry one, summing to 100%, with far-dated expiries near 0% (a guess at the base).
+function gexBoardExpiryShares(chain){
+  const {spot, mult} = chain;
+  const ag = new Map();
+  chain.quotes.forEach(q=>{
+    if(!(q.oi > 0)) return;
+    ag.set(q.exp, (ag.get(q.exp)||0) + Math.abs(q.g.gamma * q.oi * mult * spot * spot * 0.01));
+  });
+  const total = [...ag.values()].reduce((sum,v)=>sum+v,0);
+  return new Map([...ag].map(([exp,v])=>[exp, total ? v/total*100 : 0]));
 }
 function nearestStrike(rows, value){
   if(!Number.isFinite(value) || !rows.length) return null;
   return rows.reduce((best,s)=>Math.abs(s.strike-value)<Math.abs(best.strike-value) ? s : best).strike;
 }
-// Rows drawn as key rows: the Key Levels inside the window, and P1, N1 and AG Strike.
-function gexBoardKeyStrikes(B){
-  const keys = new Set();
-  [B.R.flip, B.R.maxGammaStrike, B.R.callWall, B.R.putWall].forEach(v=>{
-    if(Number.isFinite(v) && Math.abs(v-B.spot)/B.spot<=GB_WINDOW) keys.add(nearestStrike(B.rows, v));
-  });
-  B.lines.filter(l=>['P1','N1','AG Strike'].includes(l.label)).forEach(l=>keys.add(l.price));
-  keys.delete(null);
-  return keys;
-}
-
 // ----- Formatting -----
 function fmtStrike(v){
   return Number.isInteger(v) ? v.toLocaleString('en-US') : v.toLocaleString('en-US',{maximumFractionDigits:2});
 }
+// Whole numbers with separators, like his ("-906,337,011", "$1,871,716,994").
 function fmtBoardCell(col, v){
   if(col.key==='strike') return fmtStrike(v);
   if(col.pct) return `${v>=0?'+':''}${v.toFixed(2)}%`;
-  if(col.usd) return '$'+fmtNum(v);
-  if(col.key==='netGex' || col.key==='ag') return fmtNum(v);
-  return Math.round(v).toLocaleString('en-US');
+  const whole = Math.round(v).toLocaleString('en-US');
+  return col.usd ? (v<0 ? '-$'+whole.slice(1) : '$'+whole) : whole;
 }
 function fmtGammaTotal(v){
   const a = Math.abs(v), sign = v>=0 ? '+' : '-';
@@ -1884,7 +1927,8 @@ function renderGexBoardButtons(){
   if(expiries) expiries.innerHTML = gb.expiries.length
     ? gb.expiries.map(exp=>{
         const on = gb.selected.has(exp);
-        return `<button type="button" class="gb-btn${on?' active':''}" data-gb-expiry="${esc(exp)}" aria-pressed="${on}">${esc(exp)}</button>`;
+        const share = gb.shares.get(exp) || 0;
+        return `<button type="button" class="gb-exp${on?' active':''}" data-gb-expiry="${esc(exp)}" aria-pressed="${on}">${esc(exp)}<small>${share.toFixed(2)}%</small></button>`;
       }).join('')
     : '<span class="gb-status">No expirations</span>';
 }
@@ -1893,13 +1937,11 @@ function renderGexBoardButtons(){
 function renderGexBoardSpot(B){
   const el = byId('gbSpot');
   if(!el) return;
-  const spot = `Spot: <b>${esc(B.spot.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}))}</b>`;
-  if(!B.expiries.length){ el.innerHTML = `${spot} &nbsp;|&nbsp; Select at least one expiration &nbsp;|&nbsp; ${esc(B.symbol)}`; return; }
-  const total = B.totalGex, cls = total>=0 ? 'pos' : 'neg';
-  el.innerHTML = [spot,
-    `Total Gamma: <b class="${cls}">${esc(fmtGammaTotal(total))}</b>`,
-    `Regime: <b class="${cls}">${total>=0 ? 'Positive' : 'Negative'}</b>`,
-    `${B.rows.length} strikes`, esc(B.symbol)].join(' &nbsp;|&nbsp; ');
+  // His line: "Spot: 767.18 | Total Gamma: $-1.39 Bn | Regime: Negative | Ticker: SPY".
+  const spot = `Spot: ${B.spot.toFixed(2)}`, ticker = `Ticker: ${B.symbol}`;
+  el.textContent = B.expiries.length
+    ? [spot, `Total Gamma: ${fmtGammaTotal(B.totalGex)}`, `Regime: ${B.totalGex>=0 ? 'Positive' : 'Negative'}`, ticker].join(' | ')
+    : [spot, 'Select at least one expiration', ticker].join(' | ');
 }
 function sortedBoardRows(rows){
   const {key, dir} = gb.sort, sign = dir==='asc' ? 1 : -1;
@@ -1918,20 +1960,21 @@ function renderGexBoardTable(B, scrollToSpot){
     body.innerHTML = `<tr><td class="gb-empty" colspan="${GB_COLUMNS.length}">${why}</td></tr>`;
     return;
   }
-  const keys = gexBoardKeyStrikes(B);
   const spotStrike = nearestStrike(B.rows, B.spot);
-  const colMax = Object.fromEntries(GB_MAX_COLUMNS.map(k=>[k, Math.max(...B.rows.map(s=>s[k]))]));
+  const size = (key,v)=>key==='netGex' ? Math.abs(v) : v;
+  const colMax = Object.fromEntries(GB_MAX_COLUMNS.map(k=>[k, Math.max(...B.rows.map(s=>size(k,s[k])))]));
+  const isMax = (key,s)=>GB_MAX_COLUMNS.includes(key) && colMax[key]>0 && size(key,s[key])===colMax[key];
   body.innerHTML = sortedBoardRows(B.rows).map(s=>{
-    const isKey = keys.has(s.strike);
-    const rowCls = isKey ? 'gb-key-row' : (s.strike===spotStrike ? 'gb-spot-row' : '');
+    const marked = GB_MAX_COLUMNS.some(k=>isMax(k,s));
     const cells = GB_COLUMNS.map(col=>{
       const v = s[col.key];
       const cls = [];
-      if(col.signed && !isKey) cls.push(v>=0 ? 'pos' : 'neg');
-      if(!isKey && GB_MAX_COLUMNS.includes(col.key) && v===colMax[col.key] && v>0) cls.push('gb-max');
-      return `<td${cls.length?` class="${cls.join(' ')}"`:''}>${esc(fmtBoardCell(col, v))}</td>`;
+      if(col.signed) cls.push(v>=0 ? 'pos' : 'neg');
+      else if(GB_COLUMN_CLASS[col.key]) cls.push(GB_COLUMN_CLASS[col.key]);
+      const dot = isMax(col.key,s) ? '<span class="gb-dot" aria-label="largest"></span>' : '';
+      return `<td${cls.length?` class="${cls.join(' ')}"`:''}>${esc(fmtBoardCell(col, v))}${dot}</td>`;
     }).join('');
-    return `<tr data-strike="${s.strike}"${rowCls?` class="${rowCls}"`:''}>${cells}</tr>`;
+    return `<tr data-strike="${s.strike}"${marked?' class="gb-max-row"':''}>${cells}</tr>`;
   }).join('');
   if(scrollToSpot){
     const wrap = byId('gbTableWrap');
@@ -1961,87 +2004,114 @@ function setGbEmpty(key, text){
   el.textContent = text || '';
   el.classList.toggle('show', !!text);
 }
-// Gamma Total (Net GEX per strike) and Gamma Split (each strike's GEX by expiry), as
-// bars per strike over the board's 5% window.
+// Net Gamma (Net GEX per strike) and Gamma Split (call gamma up, put gamma down), each
+// with an Abs GEX line, like the two charts in his board screenshot: a title with the
+// total "per 1% <ticker> Move", gridlines, a y axis in $ billions and an orange spot line.
+const GB_ABS_COLOR = '#915bf8', GB_CALL_COLOR = '#02d432', GB_PUT_COLOR = '#ff0000', GB_POS_COLOR = '#22b5ff';
+function gexBoardChartTitle(key, B){
+  const total = `${fmtGammaTotal(B.totalGex)} per 1% ${B.symbol} Move`;
+  return key==='Split' ? `Gamma Split - Total: ${total}` : `Net Gamma: ${total}`;
+}
+function fmtBillions(v, step){
+  const digits = step>=0.5e9 ? 1 : step>=0.05e9 ? 2 : 3;
+  return (v/1e9).toFixed(digits);
+}
 function drawGexBoardBars(key, B){
   const c = gbCanvas(key);
   if(!c) return;
   const {cv, ctx, W, H, mobile} = c;
-  const legend = byId(`gb${key}Legend`);
   const split = key==='Split';
-  const colorOf = exp=>GB_EXPIRY_COLORS[B.expiries.indexOf(exp) % GB_EXPIRY_COLORS.length];
+  const title = byId(`gb${key}Title`);
+  if(title) title.textContent = B.expiries.length ? gexBoardChartTitle(key, B) : (split ? 'Gamma Split' : 'Net Gamma');
+  const legend = byId(`gb${key}Legend`);
+  const line = `<span><i class="gb-line" style="border-color:${GB_ABS_COLOR}"></i>Abs GEX</span>`;
+  const sq = (color,label)=>`<span><span class="sq" style="background:${color}"></span>${label}</span>`;
   if(legend) legend.innerHTML = split
-    ? B.expiries.slice(0,6).map(exp=>`<span><span class="sq" style="background:${colorOf(exp)}"></span>${esc(exp.slice(5))}</span>`).join('')
-      + (B.expiries.length>6 ? `<span>+${B.expiries.length-6} more</span>` : '')
-    : '<span><span class="sq" style="background:#22b5ff"></span>Net GEX</span>';
-  const data = B.rows;
-  setGbEmpty(key, data.length ? '' : (B.expiries.length ? 'No strikes within 5% of spot' : 'Select at least one expiration'));
+    ? line + sq(GB_PUT_COLOR,'Put Gamma') + sq(GB_CALL_COLOR,'Call Gamma')
+    : line + sq(GB_POS_COLOR,'Net Gamma');
+  const data = B.chartRows;
+  setGbEmpty(key, data.length ? '' : (B.expiries.length ? 'No strikes within 10% of spot' : 'Select at least one expiration'));
   if(!data.length) return;
 
-  const padL = mobile?44:54, padR = 10, padT = 14, padB = mobile?46:52;
+  const padL = mobile?52:62, padR = 10, padT = 22, padB = mobile?50:56;
   const plotW = W-padL-padR, plotH = H-padT-padB;
+  const top = padT, bottom = padT+plotH;
   const slot = plotW/data.length;
   const xCenter = i=>padL+slot*(i+0.5);
-  // Split stacks positive and negative parts separately, so the scale follows the taller stack.
-  const stacks = data.map(s=>{
-    if(!split) return {up:Math.max(s.netGex,0), down:Math.min(s.netGex,0)};
-    let up=0, down=0;
-    B.expiries.forEach(exp=>{ const v=s.byExpiry[exp]||0; if(v>=0) up+=v; else down+=v; });
-    return {up, down};
-  });
-  const maxAbs = Math.max(...stacks.map(st=>Math.max(st.up, -st.down)), 1)*1.08;
-  const y = v=>padT+(maxAbs-v)/(2*maxAbs)*plotH;
+  const up = s=>split ? s.callGex : Math.max(s.netGex,0);
+  const down = s=>split ? s.putGex : Math.min(s.netGex,0);
+  const maxAbs = Math.max(...data.map(s=>Math.max(up(s), -down(s))), 1)*1.08;
+  const y = v=>top+(maxAbs-v)/(2*maxAbs)*plotH;
   const y0 = y(0);
+  // Abs GEX has its own scale from the bottom of the chart, as in his.
+  const agMax = Math.max(...data.map(s=>s.ag), 1)*1.05;
+  const yAg = v=>bottom-(v/agMax)*plotH;
 
-  ctx.font = mobile ? 'bold 9px Segoe UI' : 'bold 10px Segoe UI';
+  // gridlines, like his board charts
+  ctx.font = mobile ? '9px Segoe UI' : '10px Segoe UI';
   ctx.textBaseline = 'middle'; ctx.textAlign = 'right';
-  for(let t=0;t<=4;t++){
-    const v = -maxAbs+2*maxAbs*t/4, yy = y(v);
-    ctx.strokeStyle = 'rgba(255,255,255,.04)'; ctx.lineWidth = 1;
+  ctx.strokeStyle = 'rgba(255,255,255,.09)'; ctx.lineWidth = 1;
+  const step = maxAbs/2;
+  for(let t=-2;t<=2;t++){
+    const v = step*t, yy = y(v);
     ctx.beginPath(); ctx.moveTo(padL,yy); ctx.lineTo(W-padR,yy); ctx.stroke();
-    ctx.fillStyle = '#c4c4c4'; ctx.fillText(fmtAxis(v), padL-6, yy);
+    ctx.fillStyle = '#c4c4c4'; ctx.fillText(fmtBillions(v, step), padL-6, yy);
   }
-  const bw = Math.max(1, Math.min(slot*0.75, 18));
+  const every = Math.max(1, Math.ceil(14/Math.max(slot,1)));
+  data.forEach((s,i)=>{
+    if(i%every) return;
+    ctx.beginPath(); ctx.moveTo(xCenter(i),top); ctx.lineTo(xCenter(i),bottom); ctx.stroke();
+  });
+
+  // Abs GEX: a filled line with markers behind the bars
+  const pts = data.map((s,i)=>[xCenter(i), yAg(s.ag)]);
+  ctx.beginPath(); ctx.moveTo(pts[0][0],bottom);
+  pts.forEach(([x,yy])=>ctx.lineTo(x,yy));
+  ctx.lineTo(pts[pts.length-1][0],bottom); ctx.closePath();
+  ctx.fillStyle = hexA(GB_ABS_COLOR,.35); ctx.fill();
+  ctx.beginPath(); pts.forEach(([x,yy],i)=>i ? ctx.lineTo(x,yy) : ctx.moveTo(x,yy));
+  ctx.strokeStyle = GB_ABS_COLOR; ctx.lineWidth = 1.4; ctx.stroke();
+  ctx.fillStyle = GB_ABS_COLOR;
+  if(slot>=3) pts.forEach(([x,yy])=>{ ctx.beginPath(); ctx.arc(x,yy,1.6,0,7); ctx.fill(); });
+
+  const bw = Math.max(1, Math.min(slot*0.8, 18));
   data.forEach((s,i)=>{
     const x = xCenter(i)-bw/2;
-    if(!split){
-      const v = s.netGex, yy = y(v);
-      ctx.fillStyle = v>=0 ? '#22b5ff' : '#ff0000';
-      ctx.fillRect(x, Math.min(yy,y0), bw, Math.max(1, Math.abs(yy-y0)));
-      return;
-    }
-    let up = 0, down = 0;
-    B.expiries.forEach(exp=>{
-      const v = s.byExpiry[exp]||0;
-      if(!v) return;
-      const from = v>=0 ? up : down, to = from+v;
-      if(v>=0) up = to; else down = to;
-      ctx.fillStyle = colorOf(exp);
-      ctx.fillRect(x, Math.min(y(from),y(to)), bw, Math.max(1, Math.abs(y(to)-y(from))));
-    });
+    const bar = (v,color)=>{ if(!v) return; const yy=y(v); ctx.fillStyle=color; ctx.fillRect(x, Math.min(yy,y0), bw, Math.max(1, Math.abs(yy-y0))); };
+    if(split){ bar(s.callGex, GB_CALL_COLOR); bar(s.putGex, GB_PUT_COLOR); }
+    else bar(s.netGex, s.netGex>=0 ? GB_POS_COLOR : GB_PUT_COLOR);
   });
-  ctx.strokeStyle = 'rgba(255,255,255,.2)'; ctx.lineWidth = 1;
+  ctx.strokeStyle = 'rgba(255,255,255,.25)'; ctx.lineWidth = 1;
   ctx.beginPath(); ctx.moveTo(padL,y0); ctx.lineTo(W-padR,y0); ctx.stroke();
 
-  // strike labels, thinned so they never overlap
-  const every = Math.max(1, Math.ceil(14/Math.max(slot,1)));
+  // strike labels, thinned so they never overlap, and the axis titles
   ctx.fillStyle = '#c4c4c4';
   data.forEach((s,i)=>{
     if(i%every) return;
-    ctx.save(); ctx.translate(xCenter(i), padT+plotH+6); ctx.rotate(-Math.PI/2);
+    ctx.save(); ctx.translate(xCenter(i), bottom+6); ctx.rotate(-Math.PI/2);
     ctx.textAlign = 'right'; ctx.textBaseline = 'middle'; ctx.fillText(fmtStrike(s.strike),0,0);
     ctx.restore();
   });
-  // spot line
+  ctx.fillStyle = '#d0d0d0'; ctx.font = mobile ? '10px Segoe UI' : '11px Segoe UI';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
+  ctx.fillText('Strike', padL+plotW/2, H-2);
+  ctx.save(); ctx.translate(11, top+plotH/2); ctx.rotate(-Math.PI/2); ctx.textBaseline = 'middle';
+  ctx.fillText('Gamma Exposure ($ billions / 1% move)', 0, 0); ctx.restore();
+
+  // spot line, labelled "Spot: <price>" at its top
   const first = data[0].strike, last = data[data.length-1].strike;
   let px = padL+plotW/2;
   if(B.spot<=first) px = padL; else if(B.spot>=last) px = padL+plotW;
   else for(let i=0;i<data.length-1;i++){
     if(B.spot>=data[i].strike && B.spot<=data[i+1].strike){ px = xCenter(i)+(B.spot-data[i].strike)/(data[i+1].strike-data[i].strike)*slot; break; }
   }
-  ctx.strokeStyle = '#d58b16'; ctx.lineWidth = 1.5;
-  ctx.beginPath(); ctx.moveTo(px,padT); ctx.lineTo(px,padT+plotH); ctx.stroke();
-  cv._gb = {kind:'bars', data, padL, plotW, slot, top:padT, bottom:padT+plotH, split, B, colorOf};
+  ctx.strokeStyle = '#ffa500'; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.moveTo(px,top); ctx.lineTo(px,bottom); ctx.stroke();
+  const label = `Spot: ${B.spot.toFixed(2)}`;
+  ctx.font = mobile ? 'bold 10px Segoe UI' : 'bold 11px Segoe UI'; ctx.fillStyle = '#ffa500'; ctx.textBaseline = 'bottom';
+  ctx.textAlign = px>W-ctx.measureText(label).width-12 ? 'right' : (px<padL+ctx.measureText(label).width/2 ? 'left' : 'center');
+  ctx.fillText(label, px, top-3);
+  cv._gb = {kind:'bars', data, padL, plotW, slot, top, bottom, split, B};
 }
 function drawGexBoardPrice(B){
   const c = gbCanvas('Price');
@@ -2130,9 +2200,9 @@ function showGexBoardTooltip(ev){
       + row('Open',fmtPrice(k.open)) + row('High',fmtPrice(k.high)) + row('Low',fmtPrice(k.low)) + row('Close',fmtPrice(k.close));
   } else {
     const s = list[i];
-    const rows = info.split
-      ? info.B.expiries.map(exp=>{ const v=s.byExpiry[exp]||0; return row(`<span class="sq" style="background:${info.colorOf(exp)}"></span> ${esc(exp)}`, fmtNum(v), v>=0?'pos':'neg'); }).join('')
-      : row('Net GEX', fmtNum(s.netGex), s.netGex>=0?'pos':'neg');
+    const rows = (info.split
+      ? row('Call Gamma', fmtNum(s.callGex), 'pos') + row('Put Gamma', fmtNum(s.putGex), 'neg')
+      : row('Net Gamma', fmtNum(s.netGex), s.netGex>=0?'pos':'neg')) + row('Abs GEX', fmtNum(s.ag));
     html = `<div class="tt-title">${esc(info.B.symbol)} Strike ${esc(fmtStrike(s.strike))}</div>${rows}`;
   }
   tt.innerHTML = html;
@@ -2194,10 +2264,12 @@ async function refreshGexBoard(symbol){
   gb.record = REAL[symbol];
   gb.candles = price.candles;
   gb.candlesError = price.error;
-  gb.expiries = oiVolumeExpiries(buildChainRealFromRecord(symbol, gb.record));
+  const chain = buildChainRealFromRecord(symbol, gb.record);
+  gb.expiries = oiVolumeExpiries(chain);
+  gb.shares = gexBoardExpiryShares({...chain, quotes:chain.quotes.filter(q=>gb.expiries.includes(q.exp))});
   const kept = [...gb.selected].filter(exp=>gb.expiries.includes(exp));
-  // A new ticker starts on its nearest expiry (a guess at his default).
-  gb.selected = new Set(changed || !kept.length ? gb.expiries.slice(0,1) : kept);
+  // A new ticker starts on the current week through Friday, as his screenshot shows.
+  gb.selected = new Set(changed || !kept.length ? weekExpirations(gb.expiries) : kept);
   if(activeView===GB_VIEW) history.replaceState(null,'',screenUrl(GB_VIEW));
   renderGexBoard(true);
   setGbStatus(result.ok ? '' : `Refresh failed. Showing the last data for ${symbol}.`, result.ok ? '' : 'error');
@@ -2274,10 +2346,20 @@ document.querySelectorAll('.ticker-form').forEach(form=>{
     search(form.dataset.screen,form.elements.ticker.value);
   });
 });
-// A new date redraws the strike chart only; the price charts do not read it.
-bind('expirationSelect','change',()=>{
-  selectedExpiration=currentExpiration();
-  run();
+// Expiration picker: chips remove a date, the menu adds one, × clears them all.
+bind('expirationSelect','click',event=>{
+  const remove=event.target.closest?.('[data-exp-remove]');
+  if(remove){ changeExpirations(set=>set.delete(remove.dataset.expRemove)); return; }
+  const add=event.target.closest?.('[data-exp-add]');
+  if(add){ setExpirationMenu(false); changeExpirations(set=>set.add(add.dataset.expAdd)); return; }
+  if(event.target.closest?.('#expirationClear')){ setExpirationMenu(false); changeExpirations(set=>set.clear()); return; }
+  if(event.target.closest?.('.ms-control')) setExpirationMenu(byId('expirationMenu')?.hidden);
+});
+window.addEventListener('click',event=>{
+  if(!event.target.closest?.('#expirationSelect')) setExpirationMenu(false);
+});
+window.addEventListener('keydown',event=>{
+  if(event.key==='Escape') setExpirationMenu(false);
 });
 // parameter buttons - toggle metrics on/off (multi-select overlay)
 document.querySelectorAll('.pbtn').forEach(btn=>{

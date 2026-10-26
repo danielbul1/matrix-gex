@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Matrix</title>
-<link rel="stylesheet" href="/matrix/matrix.css?v=20261026-like-his">
+<link rel="stylesheet" href="/matrix/matrix.css?v=20261026-like-his-2">
 </head>
 <body>
 <header id="sidebar">
@@ -34,9 +34,17 @@
         <button type="submit">Search</button>
         <span class="ticker-status" aria-live="polite"></span>
       </form>
-      <div class="ctrl">
-        <label for="expirationSelect">Expiration</label>
-        <select id="expirationSelect" aria-label="Expiration date"></select>
+      <div class="ctrl exp-ctrl">
+        <span class="ctrl-label" id="expirationLabel">Expiration</span>
+        <!-- Like his Expiration dropdown: several dates, shown as removable chips. -->
+        <div class="multi-select" id="expirationSelect" role="group" aria-labelledby="expirationLabel">
+          <div class="ms-control">
+            <div class="ms-values" id="expirationChips"></div>
+            <button type="button" class="ms-clear" id="expirationClear" aria-label="Clear all expirations" title="Clear all" hidden>×</button>
+            <button type="button" class="ms-toggle" id="expirationToggle" aria-expanded="false" aria-controls="expirationMenu" aria-label="Choose expirations">▾</button>
+          </div>
+          <ul class="ms-menu" id="expirationMenu" hidden></ul>
+        </div>
       </div>
     </div>
 
@@ -46,8 +54,8 @@
       <button class="pbtn active" data-metric="ag"       style="--c:#915bf8">AG</button>
       <button class="pbtn"        data-metric="call_oi"  style="--c:#02d432">Call OI</button>
       <button class="pbtn"        data-metric="put_oi"   style="--c:#f32d35">Put OI</button>
-      <button class="pbtn"        data-metric="call_vol" style="--c:#003cfe">Call Vol</button>
-      <button class="pbtn"        data-metric="put_vol"  style="--c:#e55f04">Put Vol</button>
+      <button class="pbtn"        data-metric="call_vol" style="--c:#003cfe">Call Volume</button>
+      <button class="pbtn"        data-metric="put_vol"  style="--c:#e55f04">Put Volume</button>
       <button class="pbtn"        data-metric="power"    style="--c:#e8ca01;--t:#000">Power Zone</button>
     </div>
 
@@ -147,70 +155,70 @@
   </section>
 
   <section class="app-view" id="view-gex-analysis" data-title="GEX Analysis">
-    <!-- Like his GEX board: no ticker box, a button per ticker and per expiry. -->
-    <div class="screen-bar gb-bar">
-      <div class="ctrl">
-        <label>Ticker</label>
-        <div class="gb-buttons" id="gbTickers" role="group" aria-label="Ticker"></div>
-      </div>
-      <div class="ctrl gb-expiry-ctrl">
-        <label>Expirations
-          <button type="button" class="gb-small-btn" id="gbSelectAll">Select all</button>
-          <button type="button" class="gb-small-btn" id="gbClearAll">Clear all</button>
-        </label>
-        <div class="gb-buttons gb-expiries" id="gbExpiries" role="group" aria-label="Expirations"></div>
-      </div>
+    <!-- Like his GEX board: no ticker box. A "Select Ticker:" card, then the Options
+         Chain Board with its expiry buttons, table and three charts. -->
+    <div class="gb-card gb-ticker-card">
+      <h3 class="gb-label">Select Ticker:</h3>
+      <div class="gb-buttons" id="gbTickers" role="group" aria-label="Ticker"></div>
       <p class="gb-status" id="gbStatus" aria-live="polite"></p>
     </div>
 
-    <div class="gex-main">
-      <div class="card gb-board">
-        <div class="gb-spot" id="gbSpot"></div>
-        <div class="gb-table-wrap" id="gbTableWrap">
-          <table class="gb-table" id="gbTable">
-            <thead><tr id="gbTableHead"></tr></thead>
-            <tbody id="gbTableBody"></tbody>
-          </table>
-        </div>
-      </div>
-      <div class="gb-charts">
-        <div class="card gb-chart" id="gbTotalWrap">
-          <div class="charttop">
-            <span class="symlabel">Gamma Total</span>
-            <span class="chartlegend" id="gbTotalLegend"></span>
+    <div class="gb-card">
+      <div class="gex-main">
+        <div class="gb-board">
+          <h2 class="gb-title">Options Chain Board</h2>
+          <div class="gb-spot" id="gbSpot"></div>
+          <div class="gb-expiries" id="gbExpiries" role="group" aria-label="Expirations"></div>
+          <div class="gb-select-row">
+            <button type="button" class="gb-small-btn" id="gbSelectAll">Select All</button>
+            <button type="button" class="gb-small-btn" id="gbClearAll">Clear All</button>
           </div>
-          <button type="button" class="gb-expand" data-expand="gbTotalWrap" aria-label="Full screen" title="Full screen">⛶</button>
-          <div class="chartwrap">
-            <div class="price-empty" id="gbTotalEmpty"></div>
-            <div class="chart-crosshair-x" id="gbTotalCrosshairX"></div>
-            <div class="chart-tooltip" id="gbTotalTooltip"></div>
-            <canvas id="gbTotalChart" height="380"></canvas>
+          <div class="gb-table-wrap" id="gbTableWrap">
+            <table class="gb-table" id="gbTable">
+              <thead><tr id="gbTableHead"></tr></thead>
+              <tbody id="gbTableBody"></tbody>
+            </table>
           </div>
         </div>
-        <div class="card gb-chart" id="gbSplitWrap">
-          <div class="charttop">
-            <span class="symlabel">Gamma Split</span>
-            <span class="chartlegend" id="gbSplitLegend"></span>
+        <div class="gb-charts">
+          <div class="gb-chart" id="gbTotalWrap">
+            <div class="charttop">
+              <span class="symlabel" id="gbTotalTitle">Net Gamma</span>
+              <span class="chartlegend" id="gbTotalLegend"></span>
+            </div>
+            <button type="button" class="gb-expand" data-expand="gbTotalWrap" aria-label="Full screen" title="Full screen">⛶</button>
+            <div class="chartwrap">
+              <div class="price-empty" id="gbTotalEmpty"></div>
+              <div class="chart-crosshair-x" id="gbTotalCrosshairX"></div>
+              <div class="chart-tooltip" id="gbTotalTooltip"></div>
+              <canvas id="gbTotalChart" height="380"></canvas>
+            </div>
           </div>
-          <button type="button" class="gb-expand" data-expand="gbSplitWrap" aria-label="Full screen" title="Full screen">⛶</button>
-          <div class="chartwrap">
-            <div class="price-empty" id="gbSplitEmpty"></div>
-            <div class="chart-crosshair-x" id="gbSplitCrosshairX"></div>
-            <div class="chart-tooltip" id="gbSplitTooltip"></div>
-            <canvas id="gbSplitChart" height="380"></canvas>
+          <div class="gb-chart" id="gbSplitWrap">
+            <div class="charttop">
+              <span class="symlabel" id="gbSplitTitle">Gamma Split</span>
+              <span class="chartlegend" id="gbSplitLegend"></span>
+            </div>
+            <button type="button" class="gb-expand" data-expand="gbSplitWrap" aria-label="Full screen" title="Full screen">⛶</button>
+            <div class="chartwrap">
+              <div class="price-empty" id="gbSplitEmpty"></div>
+              <div class="chart-crosshair-x" id="gbSplitCrosshairX"></div>
+              <div class="chart-tooltip" id="gbSplitTooltip"></div>
+              <canvas id="gbSplitChart" height="380"></canvas>
+            </div>
           </div>
-        </div>
-        <div class="card gb-chart" id="gbPriceWrap">
-          <div class="charttop">
-            <span class="symlabel">Price</span>
-            <span class="chartlegend" id="gbPriceLegend"></span>
-          </div>
-          <button type="button" class="gb-expand" data-expand="gbPriceWrap" aria-label="Full screen" title="Full screen">⛶</button>
-          <div class="chartwrap">
-            <div class="price-empty" id="gbPriceEmpty"></div>
-            <div class="chart-crosshair-x" id="gbPriceCrosshairX"></div>
-            <div class="chart-tooltip" id="gbPriceTooltip"></div>
-            <canvas id="gbPriceChart" height="380"></canvas>
+          <div class="gb-chart" id="gbPriceWrap">
+            <div class="charttop">
+              <span class="symlabel" id="gbPriceTitle">Price</span>
+              <span class="chartlegend" id="gbPriceLegend"></span>
+            </div>
+            <button type="button" class="gb-expand" data-expand="gbPriceWrap" aria-label="Full screen" title="Full screen">⛶</button>
+            <div class="chartwrap">
+              <div class="price-empty" id="gbPriceEmpty"></div>
+              <div class="chart-crosshair-x" id="gbPriceCrosshairX"></div>
+              <div class="chart-tooltip" id="gbPriceTooltip"></div>
+              <canvas id="gbPriceChart" height="380"></canvas>
+            </div>
           </div>
         </div>
       </div>
@@ -286,15 +294,15 @@
 
       <h2>The screens</h2>
       <h3>Strike Chart (home)</h3>
-      <p>One ticker and one expiration. Type a ticker and press <strong>Search</strong> or Enter, then pick a date. The buttons turn layers on and off: <strong>Net GEX</strong> as bars, and <strong>AG</strong>, OI, volume and <strong>Power Zone</strong> as areas. Beside it are the day's 1-minute candles and a simplified price line. They follow the ticker, not the expiration.</p>
+      <p>One ticker and one or more expirations, added together. Type a ticker and press <strong>Search</strong> or Enter. The expirations of the current week are chosen at first; × removes a date and the menu adds one. The chart shows strikes within about 1% of spot for SPX and NDX, and about 3% for other tickers. The buttons turn layers on and off: <strong>Net GEX</strong> as bars, and <strong>AG</strong>, OI, volume and <strong>Power Zone</strong> as areas. Beside it are the day's 1-minute candles and a simplified price line. The candle chart carries the Price Lines of the chosen expirations.</p>
       <h3>OI Volume</h3>
       <p>Open interest and today's volume per strike for one expiration. <strong>Volume Spread</strong> is call volume minus put volume: blue where calls traded more, red where puts did. The price chart marks the strikes with the most call OI, put OI, call volume and put volume.</p>
       <h3>GEX Analysis</h3>
-      <p>The board for SPX, NDX, SPY or QQQ over several expirations at once. Pick a ticker button, then click expiration buttons, or use <strong>Select all</strong> and <strong>Clear all</strong>. It shows:</p>
+      <p>The board for SPX, SPY or QQQ over several expirations at once. Pick a ticker button, then click expiration buttons, or use <strong>Select All</strong> and <strong>Clear All</strong>. Each expiration button shows its share of the ticker's gamma. The line above them gives spot, Total Gamma and the regime. It shows:</p>
       <ul>
-        <li>A table of every strike within 5% of spot. Click a column header to sort.</li>
-        <li><strong>Gamma Total</strong>: Net GEX per strike.</li>
-        <li><strong>Gamma Split</strong>: the same, broken down by expiration.</li>
+        <li>A table of every strike within 5% of spot. Click a column header to sort. A green dot marks each column's largest value, and its row is shaded.</li>
+        <li><strong>Net Gamma</strong>: Net GEX per strike, with an Abs GEX line.</li>
+        <li><strong>Gamma Split</strong>: call gamma above zero and put gamma below it, with an Abs GEX line.</li>
         <li>A price chart with the Price Lines.</li>
       </ul>
       <p>The ⛶ button opens a chart full screen. ✕ or Esc closes it.</p>
@@ -366,6 +374,6 @@
   </section>
 </main>
 
-<script src="/matrix/matrix.js?v=20261026-like-his"></script>
+<script src="/matrix/matrix.js?v=20261026-like-his-2"></script>
 </body>
 </html>

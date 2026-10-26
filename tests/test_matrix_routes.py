@@ -209,6 +209,26 @@ def test_gex_board_is_built_like_his():
                     'id="gbSpot"', 'id="gbTable"', 'id="gbTotalChart"', 'id="gbSplitChart"', 'id="gbPriceChart"'):
         assert element in section
     assert section.count('class="gb-expand"') == 3
+    assert "Select Ticker:" in section and "Options Chain Board" in section
+
+
+def test_gex_board_like_his_screenshot():
+    """His board: SPX, SPY and QQQ; his column labels; a dot on each column's
+    largest cell with its row shaded; Gamma Split by calls and puts with an Abs GEX
+    line; and expiry buttons that show each date's share of the gamma."""
+    script = (host.MATRIX_WEB_DIR / "matrix.js").read_text(encoding="utf-8")
+    assert "const GB_TICKERS = ['SPX','SPY','QQQ'];" in script
+    labels = re.findall(r"\{key:'\w+',\s+label:'([^']+)'", script[script.index("const GB_COLUMNS"):])[:11]
+    assert labels == ["Strike", "Net GEX", "Abs GEX", "Notional Delta", "Total OI", "Call OI", "Put OI",
+                      "Total Vol", "cVol", "pVol", "%"]
+    assert "gb-max-row" in script and "gb-dot" in script
+    assert "gb-key-row" not in script and "gb-spot-row" not in script
+    assert "key==='netGex' ? Math.abs(v) : v" in script
+    bars = script[script.index("function drawGexBoardBars("):script.index("function drawGexBoardPrice(")]
+    assert "s.callGex, GB_CALL_COLOR" in bars and "s.putGex, GB_PUT_COLOR" in bars
+    assert "byExpiry" not in script.split("// ---------- GEX Board", 1)[1]
+    assert "Gamma Split - Total: " in script and "Net Gamma: " in script
+    assert "function gexBoardExpiryShares(" in script and "share.toFixed(2)" in script
 
 
 @pytest.mark.parametrize("view, title", [("how-to-use-gex", "How to use GEX"), ("disclaimer", "Disclaimer")])
