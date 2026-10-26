@@ -12,7 +12,6 @@ import json
 import os
 import re
 import socket
-import sqlite3
 import time
 from contextlib import AsyncExitStack
 from copy import deepcopy
@@ -25,9 +24,6 @@ from zoneinfo import ZoneInfo
 import httpx
 import uvicorn
 
-from tripity_experiment import matrix_gex
-from tripity_experiment import matrix_outcome
-from tripity_experiment import matrix_regime
 from tripity_experiment.company_api import infer_api_base_url
 from tripity_experiment.har_openapi import har_to_openapi
 from tripity_experiment.company_connector import build_company_connector_draft
@@ -41,24 +37,15 @@ from tripity_experiment.source_analysis import analyze_source_url
 DEFAULT_OPENAPI_URL = "https://petstore3.swagger.io/api/v3/openapi.json"
 DEFAULT_COMPANY_NAME = "Swagger Petstore"
 MATRIX_SPX_QUOTE_URL = "https://cdn-api.cboe.com/api/global/delayed_quotes/quotes/_SPX.json"
-MATRIX_VIX_QUOTE_URL = "https://cdn-api.cboe.com/api/global/delayed_quotes/quotes/_VIX.json"
 MATRIX_OPTIONS_URL = "https://cdn-api.cboe.com/api/global/delayed_quotes/options/{}.json"
-MATRIX_CBOE_SYMBOL_DIRECTORY_URL = (
-    "https://www.cboe.com/us/options/symboldir/equity_index_options/?download=csv"
-)
 MATRIX_YAHOO_CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{}"
 # LSE Data 3.0 (the /vault and x_* calls are gone: 410/404 since 2026-10).
 # Free plan: 60 calls a minute and one export download at a time per key.
 MATRIX_LSE_V3_URL = "https://download.londonstrategicedge.com/v3"
 MATRIX_LSE_CHAIN_URL = f"{MATRIX_LSE_V3_URL}/options/chain"
-MATRIX_LSE_FLOW_URL = f"{MATRIX_LSE_V3_URL}/options/flow"
 MATRIX_LSE_PREVIEW_URL = f"{MATRIX_LSE_V3_URL}/preview"
 MATRIX_LSE_EXPORT_URL = f"{MATRIX_LSE_V3_URL}/export"
 MATRIX_LSE_SYMBOLS = ("SPY", "QQQ")
-# Index underlyings are streamed under their LSE WebSocket names (REST v3 calls
-# them SPX/NDX in the "indices" market). If LSE ever rejects these, set
-# TRIPITY_MATRIX_STREAM_INDICES=0 to fall back to REST-only index spots.
-MATRIX_LSE_INDEX_STREAM_SYMBOLS = {"SPX500/USD": "SPX", "NAS100/USD": "NDX"}
 # display symbol -> (LSE v3 market, LSE v3 symbol) for REST prices and candles.
 MATRIX_LSE_PRICE_SYMBOLS = {
     "SPX": ("indices", "SPX"),
@@ -69,8 +56,7 @@ MATRIX_LSE_PRICE_SYMBOLS = {
 MATRIX_LSE_TIMEFRAMES = {"1m": "1m", "5m": "5m", "15m": "15m", "30m": "30m", "60m": "1h"}
 MATRIX_LSE_RANGE_DAYS = {"1d": 4, "5d": 8, "1mo": 32}
 MATRIX_LSE_CANDLE_MAX_AGE_SECONDS = 4 * 24 * 3600  # spans a weekend plus a holiday
-MATRIX_CANDLE_SYMBOLS = set(MATRIX_LSE_PRICE_SYMBOLS)
-MATRIX_YAHOO_SYMBOLS = {"SPX": "^GSPC", "NDX": "^NDX"}
+MATRIX_YAHOO_SYMBOLS = {"SPX": "^GSPC", "NDX": "^NDX", "VIX": "^VIX"}
 MATRIX_CANDLE_INTERVALS = {"1m", "2m", "5m", "15m", "30m", "60m"}
 MATRIX_CBOE_SYMBOLS = (
     ("_NDX", "NDX"),
@@ -87,37 +73,32 @@ MATRIX_CORS_ORIGINS = {
 MATRIX_OCC = re.compile(r"([A-Z]+)(\d{6})([CP])(\d{8})")
 MATRIX_STRIKE_RANGE = 0.25
 MATRIX_CBOE_DATA_CACHE_SECONDS = 120.0
-MATRIX_SYMBOL_CATALOG_CACHE_SECONDS = 86400.0
 MATRIX_DYNAMIC_CHAIN_CACHE_MAX = 64
 MATRIX_DYNAMIC_CHAIN_FETCHES_PER_MINUTE = 12
 MATRIX_MARKET_DATA_CACHE_SECONDS = 300.0
 MATRIX_CANDLES_CACHE_SECONDS = 50.0
-# REST flow is a bootstrap/backfill source. Live charts read the persistent
-# WebSocket minute store, so refreshing a browser must not poll 5,000 rows.
-MATRIX_FLOW_CACHE_SECONDS = 900.0
-MATRIX_FLOW_INTERVALS = {"1m": 60, "5m": 300, "15m": 900}
-MATRIX_GEX_SNAPSHOT_INTERVAL_SECONDS = 60
-MATRIX_SPOTS_CACHE_CONTROL = b"public, max-age=2"
+MATRIX_CANDLES_CACHE_MAX = 256  # any ticker can be asked for, so keep the cache bounded
 _MATRIX_PACKAGED_WEB_DIR = Path(__file__).with_name("web")
 MATRIX_WEB_DIR = (
     _MATRIX_PACKAGED_WEB_DIR
     if (_MATRIX_PACKAGED_WEB_DIR / "matrix.html").exists()
     else Path.cwd() / "src" / "tripity_experiment" / "web"
 )
+# Every Matrix screen has its own path; all of them serve the same matrix.html,
+# which picks the screen from the path (map #21, "בנייה 2").
+MATRIX_SCREEN_PATHS = frozenset(
+    "/matrix" + ("/" + screen if screen else "")
+    for screen in ("", "oi-volume", "gex-analysis", "key-levels", "options-summary", "how-to-use-gex", "disclaimer")
+)
 _matrix_cboe_data_cache: tuple[float, dict[str, Any]] | None = None
 _matrix_cboe_data_lock = asyncio.Lock()
 _matrix_dynamic_chain_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 _matrix_dynamic_chain_lock = asyncio.Lock()
 _matrix_dynamic_chain_fetches: list[float] = []
-_matrix_symbol_catalog_cache: tuple[float, list[dict[str, str]]] | None = None
-_matrix_symbol_catalog_lock = asyncio.Lock()
 _matrix_market_data_cache: tuple[float, dict[str, Any]] | None = None
 _matrix_market_data_lock = asyncio.Lock()
 _matrix_candles_cache: dict[tuple[str, str, str], tuple[float, dict[str, Any]]] = {}
 _matrix_candles_lock = asyncio.Lock()
-_matrix_flow_cache: dict[tuple[str, str, tuple[str, ...]], tuple[float, dict[str, Any]]] = {}
-_matrix_flow_lock = asyncio.Lock()
-_matrix_flow_collector: MatrixFlowCollector | None = None
 _matrix_lse_spots_cache: tuple[float, dict[str, dict[str, Any]]] | None = None
 _matrix_lse_spots_lock = asyncio.Lock()
 _matrix_lse_export_lock = asyncio.Lock()
@@ -333,29 +314,6 @@ async def _fetch_matrix_spx_quote() -> dict[str, Any]:
     return await _fetch_matrix_cboe_quote(MATRIX_SPX_QUOTE_URL, "SPX", "_SPX")
 
 
-# VIX has no LSE websocket stream, so its spot rides the CBOE delayed quote
-# (same fallback pattern as the SPX quote), cached briefly for the poller.
-MATRIX_CBOE_SPOT_URLS = {"VIX": MATRIX_VIX_QUOTE_URL}
-_matrix_cboe_spot_cache: dict[str, tuple[float, dict[str, Any]]] = {}
-
-
-async def _fetch_matrix_cboe_spot_cached(symbol: str) -> dict[str, Any] | None:
-    url = MATRIX_CBOE_SPOT_URLS.get(symbol)
-    if not url:
-        return None
-    now = time.time()
-    cached = _matrix_cboe_spot_cache.get(symbol)
-    if cached and now - cached[0] < MATRIX_CANDLES_CACHE_SECONDS:
-        return cached[1]
-    try:
-        quote = await _fetch_matrix_cboe_quote(url, symbol, f"_{symbol}")
-    except Exception:  # noqa: BLE001
-        return cached[1] if cached else None
-    entry = {"spot": quote["spot"], "asof": quote.get("asof"), "source": "cboe_delayed_quote"}
-    _matrix_cboe_spot_cache[symbol] = (time.time(), entry)
-    return entry
-
-
 def _matrix_lse_candles_payload(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     candles: list[dict[str, Any]] = []
     for row in rows:
@@ -387,9 +345,9 @@ async def _fetch_matrix_candles_uncached(
     interval: str = "1m",
     range_: str = "1d",
 ) -> dict[str, Any]:
-    symbol = symbol.upper()
-    if symbol not in MATRIX_CANDLE_SYMBOLS:
-        raise ValueError("Unsupported candle symbol")
+    # Key Levels draws price for any ticker it can search, so any valid
+    # symbol is allowed; tickers LSE does not carry come from Yahoo.
+    symbol = _matrix_dynamic_symbol(symbol)
     if interval not in MATRIX_CANDLE_INTERVALS:
         raise ValueError("Unsupported candle interval")
     api_key = _matrix_lse_api_key()
@@ -501,6 +459,8 @@ async def _fetch_matrix_candles(
         if cached is not None and now - cached[0] < MATRIX_CANDLES_CACHE_SECONDS:
             return cached[1]
         data = await _fetch_matrix_candles_uncached(symbol=symbol, interval=interval, range_=range_)
+        if len(_matrix_candles_cache) >= MATRIX_CANDLES_CACHE_MAX:
+            _matrix_candles_cache.clear()
         _matrix_candles_cache[key] = (time.time(), data)
         return data
 
@@ -532,6 +492,9 @@ def _compact_matrix_options_payload(
     if not isinstance(options, list):
         raise ValueError(f"CBOE options response did not include options for {display_symbol}")
     compact_options: list[dict[str, Any]] = []
+    # P/C Ratio screen: call/put OI and volume over every live expiry and every
+    # strike, counted before the strike-range and zero-OI filters below.
+    totals = {"call_oi": 0, "put_oi": 0, "call_vol": 0, "put_vol": 0}
     for option in options:
         if not isinstance(option, dict):
             continue
@@ -541,6 +504,9 @@ def _compact_matrix_options_payload(
         root, expiration, call_put, strike = parsed
         if expiration < today:
             continue
+        side = "call" if call_put == "C" else "put"
+        totals[f"{side}_oi"] += max(0, int(option.get("open_interest") or 0))
+        totals[f"{side}_vol"] += max(0, int(option.get("volume") or 0))
         if spot and abs(strike - spot) / spot > MATRIX_STRIKE_RANGE:
             continue
         open_interest = option.get("open_interest") or 0
@@ -563,6 +529,7 @@ def _compact_matrix_options_payload(
         "asof": data.get("last_trade_time") or today.isoformat(),
         "mult": 100,
         "opts": compact_options,
+        "totals": totals,
     }
 
 
@@ -636,80 +603,6 @@ class MatrixDynamicRateLimitError(RuntimeError):
     pass
 
 
-async def _fetch_matrix_symbol_catalog() -> list[dict[str, str]]:
-    global _matrix_symbol_catalog_cache
-    now = time.time()
-    if (
-        _matrix_symbol_catalog_cache is not None
-        and now - _matrix_symbol_catalog_cache[0] < MATRIX_SYMBOL_CATALOG_CACHE_SECONDS
-    ):
-        return _matrix_symbol_catalog_cache[1]
-    async with _matrix_symbol_catalog_lock:
-        now = time.time()
-        if (
-            _matrix_symbol_catalog_cache is not None
-            and now - _matrix_symbol_catalog_cache[0] < MATRIX_SYMBOL_CATALOG_CACHE_SECONDS
-        ):
-            return _matrix_symbol_catalog_cache[1]
-        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
-            response = await client.get(
-                MATRIX_CBOE_SYMBOL_DIRECTORY_URL,
-                headers={"User-Agent": "Tripity Matrix symbol search (+https://trytripity.site)"},
-            )
-            response.raise_for_status()
-        rows: list[dict[str, str]] = []
-        for row in csv.DictReader(io.StringIO(response.text.lstrip("\ufeff"))):
-            symbol = str(row.get(" Stock Symbol") or row.get("Stock Symbol") or "").upper().strip()
-            name = str(row.get("Company Name") or "").strip()
-            if not symbol or not name:
-                continue
-            try:
-                symbol = _matrix_dynamic_symbol(symbol)
-            except ValueError:
-                continue
-            rows.append({"symbol": symbol, "name": name})
-        if not rows:
-            raise ValueError("CBOE symbol directory returned no symbols")
-        _matrix_symbol_catalog_cache = (time.time(), rows)
-        return rows
-
-
-async def _search_matrix_symbols(query: str, limit: int = 12) -> list[dict[str, str]]:
-    text = query.strip()[:80]
-    if not text:
-        return []
-    upper = text.upper()
-    try:
-        catalog = await _fetch_matrix_symbol_catalog()
-    except (httpx.HTTPError, ValueError):
-        catalog = []
-    ranked: list[tuple[int, str, str, dict[str, str]]] = []
-    for item in catalog:
-        symbol = item["symbol"]
-        name = item["name"]
-        name_upper = name.upper()
-        if symbol == upper:
-            score = 0
-        elif symbol.startswith(upper):
-            score = 1
-        elif upper in symbol:
-            score = 2
-        elif name_upper.startswith(upper):
-            score = 3
-        elif upper in name_upper:
-            score = 4
-        else:
-            continue
-        ranked.append((score, symbol, name_upper, item))
-    ranked.sort(key=lambda item: (item[0], len(item[1]), item[1], item[2]))
-    results = [item[3] for item in ranked[: max(1, min(limit, 20))]]
-    if re.fullmatch(r"[A-Z][A-Z0-9.-]{0,5}", upper) and not any(
-        item["symbol"] == upper for item in results
-    ):
-        results.insert(0, {"symbol": upper, "name": "Load exact symbol"})
-    return results[: max(1, min(limit, 20))]
-
-
 async def _fetch_matrix_dynamic_chain(symbol: str) -> dict[str, Any]:
     symbol = _matrix_dynamic_symbol(symbol)
     now = time.time()
@@ -760,6 +653,21 @@ async def _fetch_matrix_dynamic_chain(symbol: str) -> dict[str, Any]:
         return record
 
 
+def _remove_legacy_matrix_store() -> None:
+    """Delete the old Matrix SQLite store (option flow, GEX replay snapshots,
+    journal). Those screens are gone (ADR 0001), so the file and its data go
+    with them. Safe to drop this function once production has restarted."""
+    configured = os.getenv("TRIPITY_MATRIX_FLOW_DB", "").strip()
+    data_dir = Path("/data")
+    path = Path(configured) if configured else (data_dir if data_dir.exists() else Path.cwd()) / "matrix_flow.sqlite3"
+    for suffix in ("", "-wal", "-shm"):
+        candidate = path.with_name(path.name + suffix)
+        try:
+            candidate.unlink(missing_ok=True)
+        except OSError as exc:
+            print(f"matrix: could not remove legacy store {candidate}: {exc}")
+
+
 def _matrix_lse_api_key() -> str:
     return (
         os.getenv("TRIPITY_MATRIX_LSE_API_KEY")
@@ -781,900 +689,6 @@ def _matrix_lse_rows(payload: Any) -> list[dict[str, Any]]:
             if isinstance(rows, list):
                 return [row for row in rows if isinstance(row, dict)]
     return []
-
-
-def _matrix_flow_number(row: dict[str, Any], *keys: str) -> float | None:
-    for key in keys:
-        value = row.get(key)
-        if value in (None, ""):
-            continue
-        try:
-            number = float(value)
-        except (TypeError, ValueError):
-            continue
-        if number == number and abs(number) != float("inf"):
-            return number
-    return None
-
-
-def _matrix_flow_epoch_ms(value: Any) -> int | None:
-    if value in (None, ""):
-        return None
-    if isinstance(value, (int, float)):
-        number = float(value)
-        if number < 10_000_000_000:
-            number *= 1000
-        return int(number)
-    text = str(value).strip().replace(" ", "T")
-    if text.endswith("Z"):
-        text = text[:-1] + "+00:00"
-    try:
-        parsed = datetime.datetime.fromisoformat(text)
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=datetime.timezone.utc)
-    return int(parsed.timestamp() * 1000)
-
-
-def _matrix_flow_contract(row: dict[str, Any]) -> tuple[str, str] | None:
-    ticker = str(row.get("ticker") or row.get("symbol") or "").removeprefix("O:")
-    parsed = _parse_matrix_occ(ticker)
-    if parsed is not None:
-        _, expiration, call_put, _ = parsed
-        return expiration.isoformat(), call_put
-    expiration = row.get("expiration") or row.get("expiry") or row.get("expiration_date")
-    contract_type = str(
-        row.get("contract_type") or row.get("option_type") or row.get("right") or row.get("type") or ""
-    ).lower()
-    call_put = "C" if contract_type in {"c", "call"} else "P" if contract_type in {"p", "put"} else ""
-    if not expiration or not call_put:
-        return None
-    return str(expiration)[:10], call_put
-
-
-def _matrix_flow_direction(row: dict[str, Any], price: float | None, bid: float | None, ask: float | None) -> int:
-    raw_side = str(
-        row.get("trade_side_code") or row.get("trade_side") or row.get("side") or row.get("aggressor") or ""
-    ).strip().upper().replace("-", "_").replace(" ", "_")
-    if raw_side in {"A", "AA", "ASK", "BUY", "BOUGHT", "ABOVE_ASK", "AT_ASK"}:
-        return 1
-    if raw_side in {"B", "BB", "BID", "SELL", "SOLD", "BELOW_BID", "AT_BID"}:
-        return -1
-    if price is None or bid is None or ask is None or ask < bid:
-        return 0
-    midpoint = (bid + ask) / 2
-    tolerance = max(0.0001, (ask - bid) * 0.01)
-    if price > midpoint + tolerance:
-        return 1
-    if price < midpoint - tolerance:
-        return -1
-    return 0
-
-
-def _matrix_lse_flow_payload(
-    rows: list[dict[str, Any]],
-    symbol: str,
-    *,
-    interval_seconds: int = 60,
-    expirations: set[str] | None = None,
-    partial: bool = False,
-) -> dict[str, Any]:
-    buckets: dict[int, dict[str, Any]] = {}
-    latest_asof = 0
-    total_trades = classified_trades = 0
-    total_premium = classified_premium = 0.0
-    interval_ms = interval_seconds * 1000
-    for row in rows:
-        contract = _matrix_flow_contract(row)
-        if contract is None:
-            continue
-        expiration, call_put = contract
-        if expirations and expiration not in expirations:
-            continue
-        timestamp = _matrix_flow_epoch_ms(
-            row.get("ts") or row.get("timestamp") or row.get("trade_time") or row.get("last_trade_at")
-        )
-        if timestamp is None:
-            continue
-        price = _matrix_flow_number(row, "price", "last_price", "option_price")
-        size = _matrix_flow_number(row, "size", "volume", "contracts") or 0.0
-        premium = _matrix_flow_number(row, "premium", "notional", "trade_premium")
-        if premium is None and price is not None:
-            premium = price * size * 100
-        premium = max(0.0, premium or 0.0)
-        if premium <= 0 and size <= 0:
-            continue
-        bid = _matrix_flow_number(row, "bid", "bid_price")
-        ask = _matrix_flow_number(row, "ask", "ask_price")
-        direction = _matrix_flow_direction(row, price, bid, ask)
-        spot = _matrix_flow_number(row, "underlying_price", "stock_price", "spot")
-        bucket_time = timestamp // interval_ms * interval_ms
-        bucket = buckets.setdefault(bucket_time, {
-            "time": bucket_time,
-            "callPremium": 0.0, "putPremium": 0.0,
-            "callVolume": 0.0, "putVolume": 0.0,
-            "netCallPremium": 0.0, "netPutPremium": 0.0,
-            "netCallVolume": 0.0, "netPutVolume": 0.0,
-            "classifiedPremium": 0.0, "unknownPremium": 0.0,
-            "midCallPremium": 0.0, "midPutPremium": 0.0,
-            "spot": None, "trades": 0,
-        })
-        prefix = "call" if call_put == "C" else "put"
-        bucket[f"{prefix}Premium"] += premium
-        bucket[f"{prefix}Volume"] += size
-        bucket["trades"] += 1
-        if direction:
-            bucket[f"net{prefix.title()}Premium"] += direction * premium
-            bucket[f"net{prefix.title()}Volume"] += direction * size
-            bucket["classifiedPremium"] += premium
-            classified_trades += 1
-            classified_premium += premium
-        else:
-            bucket["unknownPremium"] += premium
-            bucket[f"mid{prefix.title()}Premium"] += premium
-        if spot is not None and spot > 0:
-            bucket["spot"] = spot
-        total_trades += 1
-        total_premium += premium
-        latest_asof = max(latest_asof, timestamp)
-    points = [buckets[key] for key in sorted(buckets)]
-    last_spot = None
-    for point in points:
-        if point["spot"] is not None:
-            last_spot = point["spot"]
-        elif last_spot is not None:
-            point["spot"] = last_spot
-        for key, value in list(point.items()):
-            if isinstance(value, float):
-                point[key] = round(value, 4)
-    coverage = classified_premium / total_premium if total_premium else 0.0
-    return {
-        "ok": True,
-        "symbol": symbol,
-        "source": "lse_options_flow",
-        "asof": datetime.datetime.fromtimestamp(latest_asof / 1000, datetime.timezone.utc).isoformat() if latest_asof else None,
-        "interval_seconds": interval_seconds,
-        "points": points,
-        "trades": total_trades,
-        "classified_trades": classified_trades,
-        "classification_coverage": round(coverage, 4),
-        "premium": round(total_premium, 2),
-        "partial": partial,
-        "drift_method": "quote_rule_estimated" if classified_trades else "mid_market_unclassified",
-    }
-
-
-def _matrix_flow_db_path() -> Path:
-    configured = os.getenv("TRIPITY_MATRIX_FLOW_DB", "").strip()
-    if configured:
-        return Path(configured)
-    data_dir = Path("/data")
-    return (data_dir if data_dir.exists() else Path.cwd()) / "matrix_flow.sqlite3"
-
-
-def _matrix_retained_session_dates(reference: datetime.date | None = None) -> tuple[str, str, str]:
-    session = reference or datetime.datetime.now(ZoneInfo("America/New_York")).date()
-    while session.weekday() >= 5:
-        session -= datetime.timedelta(days=1)
-    dates: list[str] = []
-    while len(dates) < 3:
-        if session.weekday() < 5:
-            dates.append(session.isoformat())
-        session -= datetime.timedelta(days=1)
-    return tuple(dates)  # today/latest session plus exactly two prior sessions
-
-
-def _matrix_gex_history_sessions(reference: datetime.date | None = None) -> tuple[str, str, str]:
-    """The three most recent COMPLETED trading sessions.
-
-    On weekdays today's session is excluded (it may still be capturing);
-    on weekends the most recent weekday already counts as completed.
-    """
-    now_et = datetime.datetime.now(ZoneInfo("America/New_York"))
-    session = reference or now_et.date()
-    # Skip the in-progress session only when today is itself a trading day.
-    skip_current = session == now_et.date() and session.weekday() < 5
-    while session.weekday() >= 5:
-        session -= datetime.timedelta(days=1)
-    if skip_current:
-        session -= datetime.timedelta(days=1)
-    dates: list[str] = []
-    while len(dates) < 3:
-        if session.weekday() < 5:
-            dates.append(session.isoformat())
-        session -= datetime.timedelta(days=1)
-    return tuple(dates)
-
-
-def _matrix_gex_retained_dates(reference: datetime.date | None = None) -> tuple[str, ...]:
-    """Retention window for GEX snapshots: today plus the 3 completed sessions."""
-    current = _matrix_session_date().isoformat() if reference is None else reference.isoformat()
-    return (current, *_matrix_gex_history_sessions(reference))
-
-
-def _matrix_flow_db_init() -> None:
-    path = _matrix_flow_db_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(path, timeout=20) as connection:
-        connection.execute("PRAGMA journal_mode=WAL")
-        connection.execute("""
-            CREATE TABLE IF NOT EXISTS matrix_option_flow_minute (
-                symbol TEXT NOT NULL,
-                expiration TEXT NOT NULL,
-                session_date TEXT NOT NULL,
-                minute_ms INTEGER NOT NULL,
-                call_premium REAL NOT NULL DEFAULT 0,
-                put_premium REAL NOT NULL DEFAULT 0,
-                call_volume REAL NOT NULL DEFAULT 0,
-                put_volume REAL NOT NULL DEFAULT 0,
-                net_call_premium REAL NOT NULL DEFAULT 0,
-                net_put_premium REAL NOT NULL DEFAULT 0,
-                net_call_volume REAL NOT NULL DEFAULT 0,
-                net_put_volume REAL NOT NULL DEFAULT 0,
-                classified_premium REAL NOT NULL DEFAULT 0,
-                unknown_premium REAL NOT NULL DEFAULT 0,
-                mid_call_premium REAL NOT NULL DEFAULT 0,
-                mid_put_premium REAL NOT NULL DEFAULT 0,
-                trades INTEGER NOT NULL DEFAULT 0,
-                classified_trades INTEGER NOT NULL DEFAULT 0,
-                updated_at_ms INTEGER NOT NULL,
-                PRIMARY KEY (symbol, expiration, minute_ms)
-            )
-        """)
-        existing_columns = {row[1] for row in connection.execute("PRAGMA table_info(matrix_option_flow_minute)")}
-        for column in ("mid_call_premium", "mid_put_premium"):
-            if column not in existing_columns:
-                connection.execute(
-                    f"ALTER TABLE matrix_option_flow_minute ADD COLUMN {column} REAL NOT NULL DEFAULT 0"
-                )
-        connection.execute(
-            "CREATE INDEX IF NOT EXISTS idx_matrix_flow_session ON matrix_option_flow_minute(symbol, session_date, minute_ms)"
-        )
-        connection.execute("""
-            CREATE TABLE IF NOT EXISTS matrix_gex_snapshot (
-                symbol TEXT NOT NULL,
-                session_date TEXT NOT NULL,
-                minute_ms INTEGER NOT NULL,
-                spot REAL NOT NULL,
-                total_gex REAL NOT NULL DEFAULT 0,
-                total_dex REAL NOT NULL DEFAULT 0,
-                total_vex REAL NOT NULL DEFAULT 0,
-                total_chex REAL NOT NULL DEFAULT 0,
-                flip REAL,
-                call_wall REAL,
-                put_wall REAL,
-                max_gamma_strike REAL,
-                regime TEXT,
-                atm_iv REAL,
-                term_slope REAL,
-                gex_scale REAL NOT NULL DEFAULT 0,
-                vex_scale REAL NOT NULL DEFAULT 0,
-                chex_scale REAL NOT NULL DEFAULT 0,
-                updated_at_ms INTEGER NOT NULL,
-                PRIMARY KEY (symbol, minute_ms)
-            )
-        """)
-        gex_columns = {row[1] for row in connection.execute("PRAGMA table_info(matrix_gex_snapshot)")}
-        for column in ("total_vex", "total_chex", "gex_scale", "vex_scale", "chex_scale"):
-            if column not in gex_columns:
-                connection.execute(
-                    f"ALTER TABLE matrix_gex_snapshot ADD COLUMN {column} REAL NOT NULL DEFAULT 0"
-                )
-        for column in ("atm_iv", "term_slope"):
-            if column not in gex_columns:
-                connection.execute(
-                    f"ALTER TABLE matrix_gex_snapshot ADD COLUMN {column} REAL"
-                )
-        connection.execute(
-            "CREATE INDEX IF NOT EXISTS idx_matrix_gex_session ON matrix_gex_snapshot(symbol, session_date, minute_ms)"
-        )
-        # Regime journal: one pre-open call per (session_date, symbol), with
-        # the engine's verdict frozen at save time and the realized outcome /
-        # grades filled in after the close. Long-lived: NOT covered by the
-        # retention deletes below.
-        connection.execute("""
-            CREATE TABLE IF NOT EXISTS matrix_journal_entries (
-                session_date TEXT NOT NULL,
-                symbol TEXT NOT NULL,
-                created_ms INTEGER NOT NULL,
-                user_label TEXT NOT NULL,
-                user_levels TEXT,
-                user_notes TEXT,
-                engine_label TEXT,
-                engine_agreement INTEGER,
-                engine_reasoning TEXT,
-                call_wall REAL,
-                put_wall REAL,
-                outcome TEXT,
-                grade INTEGER,
-                engine_grade INTEGER,
-                graded_ms INTEGER,
-                PRIMARY KEY (session_date, symbol)
-            )
-        """)
-        journal_columns = {row[1] for row in connection.execute("PRAGMA table_info(matrix_journal_entries)")}
-        for column in ("engine_reasoning", "user_levels", "user_notes"):
-            if column not in journal_columns:
-                connection.execute(
-                    f"ALTER TABLE matrix_journal_entries ADD COLUMN {column} TEXT"
-                )
-        for column in ("engine_agreement", "grade", "engine_grade", "graded_ms", "created_ms"):
-            if column not in journal_columns:
-                connection.execute(
-                    f"ALTER TABLE matrix_journal_entries ADD COLUMN {column} INTEGER"
-                )
-        for column in ("call_wall", "put_wall"):
-            if column not in journal_columns:
-                connection.execute(
-                    f"ALTER TABLE matrix_journal_entries ADD COLUMN {column} REAL"
-                )
-        retained = _matrix_retained_session_dates()
-        connection.execute(
-            "DELETE FROM matrix_option_flow_minute WHERE session_date NOT IN (?, ?, ?)",
-            retained,
-        )
-        gex_retained = _matrix_gex_retained_dates()
-        connection.execute(
-            f"DELETE FROM matrix_gex_snapshot WHERE session_date NOT IN ({','.join('?' for _ in gex_retained)})",
-            gex_retained,
-        )
-        connection.commit()
-
-
-def _matrix_flow_db_flush(rows: list[tuple[Any, ...]]) -> None:
-    if not rows:
-        return
-    _matrix_flow_db_init()
-    with sqlite3.connect(_matrix_flow_db_path(), timeout=20) as connection:
-        connection.executemany("""
-            INSERT INTO matrix_option_flow_minute (
-                symbol, expiration, session_date, minute_ms,
-                call_premium, put_premium, call_volume, put_volume,
-                net_call_premium, net_put_premium, net_call_volume, net_put_volume,
-                classified_premium, unknown_premium, mid_call_premium, mid_put_premium,
-                trades, classified_trades, updated_at_ms
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(symbol, expiration, minute_ms) DO UPDATE SET
-                call_premium=call_premium+excluded.call_premium,
-                put_premium=put_premium+excluded.put_premium,
-                call_volume=call_volume+excluded.call_volume,
-                put_volume=put_volume+excluded.put_volume,
-                net_call_premium=net_call_premium+excluded.net_call_premium,
-                net_put_premium=net_put_premium+excluded.net_put_premium,
-                net_call_volume=net_call_volume+excluded.net_call_volume,
-                net_put_volume=net_put_volume+excluded.net_put_volume,
-                classified_premium=classified_premium+excluded.classified_premium,
-                unknown_premium=unknown_premium+excluded.unknown_premium,
-                mid_call_premium=mid_call_premium+excluded.mid_call_premium,
-                mid_put_premium=mid_put_premium+excluded.mid_put_premium,
-                trades=trades+excluded.trades,
-                classified_trades=classified_trades+excluded.classified_trades,
-                updated_at_ms=MAX(updated_at_ms, excluded.updated_at_ms)
-        """, rows)
-        connection.commit()
-
-
-def _matrix_flow_db_payload(
-    symbol: str,
-    interval_seconds: int,
-    session_date: str,
-    expirations: tuple[str, ...],
-) -> dict[str, Any] | None:
-    path = _matrix_flow_db_path()
-    if not path.exists():
-        return None
-    interval_ms = interval_seconds * 1000
-    filters = "symbol=? AND session_date=?"
-    params: list[Any] = [interval_ms, interval_ms, symbol, session_date]
-    if expirations:
-        filters += f" AND expiration IN ({','.join('?' for _ in expirations)})"
-        params.extend(expirations)
-    query = f"""
-        SELECT (minute_ms / ?) * ? AS bucket_ms,
-               SUM(call_premium), SUM(put_premium), SUM(call_volume), SUM(put_volume),
-               SUM(net_call_premium), SUM(net_put_premium), SUM(net_call_volume), SUM(net_put_volume),
-               SUM(classified_premium), SUM(unknown_premium),
-               SUM(mid_call_premium), SUM(mid_put_premium), SUM(trades), SUM(classified_trades),
-               MAX(updated_at_ms)
-        FROM matrix_option_flow_minute WHERE {filters}
-        GROUP BY bucket_ms ORDER BY bucket_ms
-    """
-    with sqlite3.connect(path, timeout=20) as connection:
-        rows = connection.execute(query, params).fetchall()
-    if not rows:
-        return None
-    points = []
-    for row in rows:
-        points.append({
-            "time": row[0], "callPremium": row[1], "putPremium": row[2],
-            "callVolume": row[3], "putVolume": row[4],
-            "netCallPremium": row[5], "netPutPremium": row[6],
-            "netCallVolume": row[7], "netPutVolume": row[8],
-            "classifiedPremium": row[9], "unknownPremium": row[10],
-            "midCallPremium": row[11], "midPutPremium": row[12],
-            "trades": row[13], "spot": None,
-        })
-    total_premium = sum(float(point["callPremium"] or 0) + float(point["putPremium"] or 0) for point in points)
-    classified_premium = sum(float(point["classifiedPremium"] or 0) for point in points)
-    session_start = datetime.datetime.fromisoformat(f"{session_date}T09:30:00").replace(
-        tzinfo=ZoneInfo("America/New_York")
-    )
-    from_open = int(rows[0][0]) <= int(session_start.timestamp() * 1000) + 60_000
-    return {
-        "ok": True, "symbol": symbol, "source": "lse_websocket_collector",
-        "asof": datetime.datetime.fromtimestamp(rows[-1][15] / 1000, datetime.timezone.utc).isoformat(),
-        "interval_seconds": interval_seconds, "points": points,
-        "trades": sum(int(point["trades"] or 0) for point in points),
-        "classified_trades": sum(int(row[14] or 0) for row in rows),
-        "classification_coverage": round(classified_premium / total_premium, 4) if total_premium else 0,
-        "premium": round(total_premium, 2), "partial": False,
-        "from_open": from_open,
-        "drift_method": "lee_ready_quote_tick_estimated" if classified_premium else "mid_market_unclassified",
-    }
-
-
-def _merge_matrix_flow_payloads(rest: dict[str, Any], collected: dict[str, Any] | None) -> dict[str, Any]:
-    merged = deepcopy(rest)
-    collector = _matrix_flow_collector
-    merged["collector"] = collector.status() if collector is not None else {"state": "disabled"}
-    if collected is None:
-        return merged
-    by_time = {int(point["time"]): point for point in merged.get("points") or []}
-    # Collector rows own minutes after the server started. This avoids double
-    # counting the same prints from REST bootstrap and the live stream.
-    by_time.update({int(point["time"]): point for point in collected.get("points") or []})
-    points = [by_time[key] for key in sorted(by_time)]
-    total_premium = sum(float(point.get("callPremium") or 0) + float(point.get("putPremium") or 0) for point in points)
-    classified_premium = sum(float(point.get("classifiedPremium") or 0) for point in points)
-    merged.update({
-        "source": "lse_rest+websocket_collector", "points": points,
-        "trades": sum(int(point.get("trades") or 0) for point in points),
-        "premium": round(total_premium, 2),
-        "partial": bool(rest.get("partial")) and not bool(collected.get("from_open")),
-        "classification_coverage": round(classified_premium / total_premium, 4) if total_premium else 0,
-        "drift_method": "lee_ready_quote_tick_estimated" if classified_premium else "mid_market_unclassified",
-        "collector_session": collected.get("asof"),
-        "collector_from_open": bool(collected.get("from_open")),
-    })
-    return merged
-
-
-def _matrix_session_date(offset: int = 0) -> datetime.date:
-    now_et = datetime.datetime.now(ZoneInfo("America/New_York"))
-    session = now_et.date()
-    while session.weekday() >= 5:
-        session -= datetime.timedelta(days=1)
-    for _ in range(max(0, offset)):
-        session -= datetime.timedelta(days=1)
-        while session.weekday() >= 5:
-            session -= datetime.timedelta(days=1)
-    return session
-
-
-async def _fetch_matrix_flow_history(
-    symbol: str,
-    interval: str,
-    expirations: tuple[str, ...],
-    session: int | str,
-) -> dict[str, Any]:
-    symbol = symbol.upper().strip()
-    if symbol not in MATRIX_LSE_SYMBOLS:
-        raise ValueError("Net Drift & Flow is available for SPY and QQQ")
-    if interval not in MATRIX_FLOW_INTERVALS:
-        raise ValueError("Flow interval must be 1m, 5m, or 15m")
-    if isinstance(session, int):
-        if session not in {1, 2}:
-            raise ValueError("Historical flow supports one or two sessions back")
-        session_date = _matrix_session_date(session).isoformat()
-    else:
-        try:
-            session_date = datetime.date.fromisoformat(session).isoformat()
-        except MatrixDynamicRateLimitError as exc:
-            await self._json(
-                send,
-                {"ok": False, "detail": str(exc)},
-                status=429,
-                headers=[
-                    *self._matrix_cors_headers(scope),
-                    (b"retry-after", b"60"),
-                ],
-            )
-        except ValueError as exc:
-            raise ValueError("Flow session_date must use YYYY-MM-DD") from exc
-        if session_date not in _matrix_retained_session_dates():
-            raise ValueError("Flow session_date is outside the three retained trading sessions")
-    collected = await asyncio.to_thread(
-        _matrix_flow_db_payload,
-        symbol,
-        MATRIX_FLOW_INTERVALS[interval],
-        session_date,
-        tuple(sorted(expirations)),
-    )
-    if collected is not None:
-        collected["collector"] = _matrix_flow_collector.status() if _matrix_flow_collector else {"state": "disabled"}
-        collected["session_date"] = session_date
-        collected["history_available"] = True
-        return collected
-    session_close = datetime.datetime.fromisoformat(f"{session_date}T16:00:00").replace(
-        tzinfo=ZoneInfo("America/New_York")
-    )
-    return {
-        "ok": True, "symbol": symbol, "source": "lse_websocket_collector_history",
-        "asof": session_close.astimezone(datetime.timezone.utc).isoformat(),
-        "session_date": session_date, "interval_seconds": MATRIX_FLOW_INTERVALS[interval],
-        "points": [], "trades": 0, "classified_trades": 0,
-        "classification_coverage": 0, "premium": 0, "partial": False,
-        "history_available": False, "drift_method": "lee_ready_quote_tick_estimated",
-        "collector": _matrix_flow_collector.status() if _matrix_flow_collector else {"state": "disabled"},
-    }
-
-
-class MatrixFlowCollector:
-    def __init__(self, api_key: str) -> None:
-        self.api_key = api_key
-        self.pending: dict[tuple[str, str, str, int], dict[str, float]] = {}
-        self.state = "starting"
-        self.detail = ""
-        self.connected_at: str | None = None
-        self.last_tick: str | None = None
-        self.ticks = 0
-        self.underlying_ticks = 0
-        self.duplicates = 0
-        self.reconnects = 0
-        self.connection_gaps: list[dict[str, Any]] = []
-        self.latest_spot: dict[str, float] = {}
-        self.latest_spot_asof: dict[str, str] = {}
-        self.client: Any | None = None
-        self.dynamic_symbol: str | None = None
-        self._recent_signatures: dict[tuple[Any, ...], float] = {}
-        self._last_contract_volume: dict[str, float] = {}
-        self._volume_comparisons = 0
-        self._volume_nondecreasing = 0
-        self._ever_authenticated = False
-        self._disconnected_at: datetime.datetime | None = None
-        self._last_flush = time.monotonic()
-        self._last_contract_price: dict[str, float] = {}
-        self._last_contract_direction: dict[str, int] = {}
-
-    def status(self) -> dict[str, Any]:
-        now = datetime.datetime.now(datetime.timezone.utc)
-        now_et = now.astimezone(ZoneInfo("America/New_York"))
-        market_minute = now_et.hour * 60 + now_et.minute
-        market_open = now_et.weekday() < 5 and 570 <= market_minute <= 960
-        last_tick_ms = _matrix_flow_epoch_ms(self.last_tick)
-        last_tick_age = max(0, (now.timestamp() * 1000 - last_tick_ms) / 1000) if last_tick_ms else None
-        volume_ratio = self._volume_nondecreasing / self._volume_comparisons if self._volume_comparisons else None
-        volume_semantics = "insufficient_samples"
-        if self._volume_comparisons >= 100:
-            volume_semantics = "suspected_cumulative" if (volume_ratio or 0) >= 0.97 else "trade_size_likely"
-        if not market_open:
-            quality = "market_closed"
-        elif self.state != "connected":
-            quality = "disconnected"
-        elif market_minute >= 572 and self.ticks == 0:
-            quality = "no_option_ticks"
-        elif last_tick_age is not None and last_tick_age > 120:
-            quality = "stale"
-        elif volume_semantics == "suspected_cumulative":
-            quality = "volume_warning"
-        else:
-            quality = "healthy"
-        return {
-            "state": self.state, "detail": self.detail, "connected_at": self.connected_at,
-            "last_tick": self.last_tick, "last_tick_age_seconds": round(last_tick_age, 1) if last_tick_age is not None else None,
-            "ticks": self.ticks, "underlying_ticks": self.underlying_ticks,
-            "duplicates": self.duplicates, "reconnects": self.reconnects,
-            "gaps": self.connection_gaps[-8:], "latest_spot": self.latest_spot,
-            "quality": quality, "market_open": market_open,
-            "volume_semantics": volume_semantics,
-            "volume_nondecreasing_ratio": round(volume_ratio, 4) if volume_ratio is not None else None,
-            "volume_samples": self._volume_comparisons,
-            "dynamic_symbol": self.dynamic_symbol,
-        }
-
-    def set_active_symbol(self, symbol: str) -> None:
-        symbol = _matrix_dynamic_symbol(symbol)
-        previous = self.dynamic_symbol
-        if previous == symbol:
-            return
-        self.dynamic_symbol = symbol
-        if previous:
-            self.latest_spot.pop(previous, None)
-            self.latest_spot_asof.pop(previous, None)
-        client = self.client
-        if client is not None:
-            if previous:
-                client.unsubscribe([previous])
-            client.subscribe([symbol])
-
-    def clear_active_symbol(self) -> None:
-        previous = self.dynamic_symbol
-        if not previous:
-            return
-        self.dynamic_symbol = None
-        self.latest_spot.pop(previous, None)
-        self.latest_spot_asof.pop(previous, None)
-        if self.client is not None:
-            self.client.unsubscribe([previous])
-
-    def _on_authenticated(self) -> None:
-        now = datetime.datetime.now(datetime.timezone.utc)
-        if self._ever_authenticated:
-            self.reconnects += 1
-        if self._disconnected_at is not None:
-            self.connection_gaps.append({
-                "from": self._disconnected_at.isoformat(),
-                "to": now.isoformat(),
-                "seconds": round((now - self._disconnected_at).total_seconds(), 2),
-            })
-            self._disconnected_at = None
-        self._ever_authenticated = True
-        self.state = "connected"
-        self.detail = "SPY and QQQ subscribed · quote + tick classification active"
-        self.connected_at = now.isoformat()
-
-    def _on_error(self, message: Any) -> None:
-        self.state = "error"
-        self.detail = str(message)[:240]
-        self._disconnected_at = self._disconnected_at or datetime.datetime.now(datetime.timezone.utc)
-
-    def observe(self, tick: Any) -> None:
-        symbol = str(getattr(tick, "underlying", "") or "").upper()
-        right = str(getattr(tick, "right", "") or "").lower()
-        tick_symbol = str(getattr(tick, "symbol", "") or "").upper()
-        # Underlying price tick: map streamed symbol (SPY, QQQ, or an index
-        # catalog name like SPX500/USD) to the dashboard symbol.
-        is_dynamic = self.dynamic_symbol is not None and tick_symbol == self.dynamic_symbol
-        display_symbol = tick_symbol if tick_symbol in MATRIX_LSE_SYMBOLS or is_dynamic else MATRIX_LSE_INDEX_STREAM_SYMBOLS.get(tick_symbol)
-        if not symbol and display_symbol:
-            try:
-                spot = float(getattr(tick, "price", 0) or 0)
-            except (TypeError, ValueError):
-                spot = 0
-            if spot > 0:
-                self.latest_spot[display_symbol] = spot
-                timestamp = _matrix_flow_epoch_ms(getattr(tick, "timestamp", None))
-                self.latest_spot_asof[display_symbol] = (
-                    datetime.datetime.fromtimestamp(timestamp / 1000, datetime.timezone.utc).isoformat()
-                    if timestamp is not None
-                    else datetime.datetime.now(datetime.timezone.utc).isoformat()
-                )
-                self.underlying_ticks += 1
-            return
-        if symbol not in MATRIX_LSE_SYMBOLS or right not in {"call", "put"}:
-            return
-        timestamp = _matrix_flow_epoch_ms(getattr(tick, "timestamp", None))
-        expiry = getattr(tick, "expiry", None)
-        if timestamp is None or expiry is None:
-            return
-        instant = datetime.datetime.fromtimestamp(timestamp / 1000, ZoneInfo("America/New_York"))
-        market_minute = instant.hour * 60 + instant.minute
-        if instant.weekday() >= 5 or market_minute < 570 or market_minute > 960:
-            return
-        try:
-            price = float(getattr(tick, "price", 0) or 0)
-            size = max(0.0, float(getattr(tick, "volume", 0) or 0))
-        except (TypeError, ValueError):
-            return
-        if price <= 0 or size <= 0:
-            return
-        signature = (
-            tick_symbol, timestamp, round(price, 8), round(size, 4),
-            getattr(tick, "bid", None), getattr(tick, "ask", None),
-        )
-        if signature in self._recent_signatures:
-            self.duplicates += 1
-            return
-        self._recent_signatures[signature] = time.monotonic()
-        if len(self._recent_signatures) > 20_000:
-            cutoff = time.monotonic() - 900
-            self._recent_signatures = {key: seen for key, seen in self._recent_signatures.items() if seen >= cutoff}
-        premium = price * size * 100
-        bid = getattr(tick, "bid", None)
-        ask = getattr(tick, "ask", None)
-        direction = _matrix_flow_direction(
-            {}, price,
-            float(bid) if bid is not None else None,
-            float(ask) if ask is not None else None,
-        )
-        contract_key = str(getattr(tick, "symbol", "") or "") or (
-            f"{symbol}|{expiry.isoformat()}|{right}|{getattr(tick, 'strike', '')}"
-        )
-        previous_volume = self._last_contract_volume.get(contract_key)
-        if previous_volume is not None:
-            self._volume_comparisons += 1
-            if size >= previous_volume:
-                self._volume_nondecreasing += 1
-        self._last_contract_volume[contract_key] = size
-        if not direction:
-            previous_price = self._last_contract_price.get(contract_key)
-            tolerance = max(0.0001, price * 0.00001)
-            if previous_price is not None and price > previous_price + tolerance:
-                direction = 1
-            elif previous_price is not None and price < previous_price - tolerance:
-                direction = -1
-            elif previous_price is not None:
-                direction = self._last_contract_direction.get(contract_key, 0)
-        self._last_contract_price[contract_key] = price
-        if direction:
-            self._last_contract_direction[contract_key] = direction
-        call_put = "C" if right == "call" else "P"
-        key = (symbol, expiry.isoformat(), instant.date().isoformat(), timestamp // 60000 * 60000)
-        row = self.pending.setdefault(key, {
-            "call_premium": 0, "put_premium": 0, "call_volume": 0, "put_volume": 0,
-            "net_call_premium": 0, "net_put_premium": 0,
-            "net_call_volume": 0, "net_put_volume": 0,
-            "classified_premium": 0, "unknown_premium": 0,
-            "mid_call_premium": 0, "mid_put_premium": 0,
-            "trades": 0, "classified_trades": 0, "updated_at_ms": 0,
-        })
-        prefix = "call" if call_put == "C" else "put"
-        row[f"{prefix}_premium"] += premium
-        row[f"{prefix}_volume"] += size
-        row["trades"] += 1
-        if direction:
-            row[f"net_{prefix}_premium"] += direction * premium
-            row[f"net_{prefix}_volume"] += direction * size
-            row["classified_premium"] += premium
-            row["classified_trades"] += 1
-        else:
-            row["unknown_premium"] += premium
-            row[f"mid_{prefix}_premium"] += premium
-        row["updated_at_ms"] = max(row["updated_at_ms"], timestamp)
-        self.last_tick = datetime.datetime.fromtimestamp(timestamp / 1000, datetime.timezone.utc).isoformat()
-        self.ticks += 1
-
-    async def flush(self) -> None:
-        if not self.pending:
-            return
-        pending, self.pending = self.pending, {}
-        fields = (
-            "call_premium", "put_premium", "call_volume", "put_volume",
-            "net_call_premium", "net_put_premium", "net_call_volume", "net_put_volume",
-            "classified_premium", "unknown_premium", "mid_call_premium", "mid_put_premium",
-            "trades", "classified_trades", "updated_at_ms",
-        )
-        rows = [(*key, *(values[field] for field in fields)) for key, values in pending.items()]
-        await asyncio.to_thread(_matrix_flow_db_flush, rows)
-        self._last_flush = time.monotonic()
-
-    async def run(self) -> None:
-        from lse import LSE
-        await asyncio.to_thread(_matrix_flow_db_init)
-        base_stream_symbols = list(MATRIX_LSE_SYMBOLS)
-        if os.getenv("TRIPITY_MATRIX_STREAM_INDICES", "1").strip().lower() not in {"0", "false", "off", "no"}:
-            base_stream_symbols += list(MATRIX_LSE_INDEX_STREAM_SYMBOLS)
-        while True:
-            stream_symbols = [*base_stream_symbols]
-            if self.dynamic_symbol and self.dynamic_symbol not in stream_symbols:
-                stream_symbols.append(self.dynamic_symbol)
-            client = LSE(api_key=self.api_key)
-            self.client = client
-            client.subscribe_options(list(MATRIX_LSE_SYMBOLS))
-            client.on("authenticated", self._on_authenticated)
-            client.on("error", self._on_error)
-            self.state = "connecting"
-            try:
-                async for tick in client.stream_async(stream_symbols, reconnect=False):
-                    self.observe(tick)
-                    if time.monotonic() - self._last_flush >= 2:
-                        await self.flush()
-            except asyncio.CancelledError:
-                await client.disconnect_async()
-                await self.flush()
-                raise
-            except Exception as exc:  # noqa: BLE001
-                self.state = "error"
-                self.detail = str(exc)[:240]
-                self._disconnected_at = self._disconnected_at or datetime.datetime.now(datetime.timezone.utc)
-            finally:
-                if self.client is client:
-                    self.client = None
-            await self.flush()
-            if self.state == "connected":
-                self.state = "reconnecting"
-                self.detail = "WebSocket ended; reconnect scheduled"
-                self._disconnected_at = self._disconnected_at or datetime.datetime.now(datetime.timezone.utc)
-            await asyncio.sleep(3)
-
-
-async def _fetch_matrix_flow(
-    symbol: str,
-    interval: str,
-    expirations: tuple[str, ...] = (),
-) -> dict[str, Any]:
-    symbol = symbol.upper().strip()
-    if symbol not in MATRIX_LSE_SYMBOLS:
-        raise ValueError("Net Drift & Flow is available for SPY and QQQ")
-    if interval not in MATRIX_FLOW_INTERVALS:
-        raise ValueError("Flow interval must be 1m, 5m, or 15m")
-    api_key = _matrix_lse_api_key()
-    if not api_key:
-        raise ValueError("LSE API key is not configured")
-    cache_key = (symbol, interval, tuple(sorted(expirations)))
-    sorted_expirations = tuple(sorted(expirations))
-
-    # Once the persistent collector owns the session from the opening minute,
-    # SQLite is the complete live source. This keeps browser refreshes entirely
-    # on Tripity and reserves LSE REST for bootstrap/backfill only.
-    current_session = _matrix_session_date().isoformat()
-    collected_now = await asyncio.to_thread(
-        _matrix_flow_db_payload,
-        symbol,
-        MATRIX_FLOW_INTERVALS[interval],
-        current_session,
-        sorted_expirations,
-    )
-    collector_status = _matrix_flow_collector.status() if _matrix_flow_collector else {"state": "disabled"}
-    if collected_now is not None and collected_now.get("from_open") and collector_status.get("state") == "connected":
-        collected_now["collector"] = collector_status
-        collected_now["upstream_mode"] = "websocket_db"
-        collected_now["rest_refresh_seconds"] = MATRIX_FLOW_CACHE_SECONDS
-        return collected_now
-
-    async def include_collector(payload: dict[str, Any]) -> dict[str, Any]:
-        asof_ms = _matrix_flow_epoch_ms(payload.get("asof"))
-        anchor = datetime.datetime.fromtimestamp(
-            (asof_ms or int(time.time() * 1000)) / 1000,
-            ZoneInfo("America/New_York"),
-        )
-        collected = await asyncio.to_thread(
-            _matrix_flow_db_payload,
-            symbol,
-            MATRIX_FLOW_INTERVALS[interval],
-            anchor.date().isoformat(),
-            sorted_expirations,
-        )
-        merged = _merge_matrix_flow_payloads(payload, collected)
-        merged["upstream_mode"] = "rest_bootstrap+websocket_db"
-        merged["rest_refresh_seconds"] = MATRIX_FLOW_CACHE_SECONDS
-        return merged
-
-    now = time.time()
-    cached = _matrix_flow_cache.get(cache_key)
-    if cached is not None and now - cached[0] < MATRIX_FLOW_CACHE_SECONDS:
-        return await include_collector(cached[1])
-    async with _matrix_flow_lock:
-        now = time.time()
-        cached = _matrix_flow_cache.get(cache_key)
-        if cached is not None and now - cached[0] < MATRIX_FLOW_CACHE_SECONDS:
-            return await include_collector(cached[1])
-        et_now = datetime.datetime.now(ZoneInfo("America/New_York"))
-        session_start = et_now.replace(hour=9, minute=30, second=0, microsecond=0)
-        if et_now.weekday() >= 5:
-            session_start -= datetime.timedelta(days=1)
-        while session_start.weekday() >= 5:
-            session_start -= datetime.timedelta(days=1)
-        params = {
-            "underlying": symbol,
-            # v3 takes "YYYY-MM-DD HH:MM:SS" UTC; "to" defaults to now.
-            "from": session_start.astimezone(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
-            "order": "desc",
-            "limit": "5000",
-        }
-        rows: list[dict[str, Any]] = []
-        # Before today's open the window would start in the future, which v3
-        # refuses (400 date-order); there is no flow to fetch yet.
-        if session_start <= et_now:
-            timeout = httpx.Timeout(30.0, connect=10.0)
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                response = await client.get(
-                    MATRIX_LSE_FLOW_URL,
-                    params=params,
-                    headers=_matrix_lse_headers(api_key),
-                )
-                response.raise_for_status()
-                rows = _matrix_lse_rows(response.json())
-        payload = _matrix_lse_flow_payload(
-            rows,
-            symbol,
-            interval_seconds=MATRIX_FLOW_INTERVALS[interval],
-            expirations=set(expirations) or None,
-            partial=len(rows) >= 5000,
-        )
-        _matrix_flow_cache[cache_key] = (time.time(), payload)
-        return await include_collector(payload)
 
 
 def _matrix_lse_contract_key(row: dict[str, Any]) -> tuple[str, str, float] | None:
@@ -1890,630 +904,6 @@ async def _fetch_matrix_market_data() -> dict[str, Any]:
     return data
 
 
-# -----------------------------------------------------------------------------
-# Matrix GEX snapshots (live levels + per-minute history)
-# Greeks/exposure math lives in the canonical engine (matrix_gex.py); this
-# module only shapes snapshots for storage. Keep payload fields stable.
-# -----------------------------------------------------------------------------
-def _compute_matrix_gex_snapshot(
-    symbol: str,
-    record: dict[str, Any],
-    spot: float,
-    valuation_ms: int,
-) -> dict[str, Any]:
-    """Aggregate per-strike GEX/DEX/VEX/CHEX and derive flip/walls/regime.
-
-    Mirrors the "full" mode of the analytics engine in matrix.js:
-    GEX = gamma * OI * mult * spot^2 * 0.01 (calls +, puts -). VEX/CHEX
-    totals follow the engine conventions (calls +, puts -; CHEX per
-    trading day with the put-side single negation).
-    """
-    mult = float(record.get("mult") or 100)
-    options = record.get("opts") or []
-    strikes = matrix_gex.aggregate_strikes(options, spot, mult, valuation_ms, include_vc=True)
-
-    total_call_gex = sum(row["call_gex"] for row in strikes)
-    total_put_gex = sum(row["put_gex"] for row in strikes)
-    total_gex = total_call_gex + total_put_gex
-    total_dex = sum(row["net_dex"] for row in strikes)
-    total_vex = sum(row["net_vex"] for row in strikes)
-    total_chex = sum(row["net_chex"] for row in strikes)
-
-    lo, hi = spot * 0.8, spot * 1.2
-    levels = [lo + (hi - lo) * i / 59 for i in range(60)]
-    flip = matrix_gex.zero_gamma_flip(
-        levels,
-        matrix_gex.gamma_profile(options, levels, mult, valuation_ms, min_oi=10),
-    )
-
-    call_wall = put_wall = max_gamma_strike = None
-    cw_g, pw_g, max_abs = float("-inf"), float("inf"), 0.0
-    for row in strikes:
-        K, net = row["strike"], row["net_gex"]
-        if net > cw_g:
-            cw_g, call_wall = net, K
-        if net < pw_g:
-            pw_g, put_wall = net, K
-        if abs(net) > max_abs:
-            max_abs, max_gamma_strike = abs(net), K
-
-    strong_mag = abs(total_call_gex) + abs(total_put_gex)
-    if total_gex > strong_mag * 0.04:
-        regime = "positive_gamma"
-    elif total_gex < -strong_mag * 0.04:
-        regime = "negative_gamma"
-    else:
-        regime = "neutral"
-
-    # ATM IV term structure (front/back + slope) — persisted with each
-    # snapshot so history replay can reactivate the engine's VEX leg.
-    term = matrix_regime.atm_iv_term_structure(options, spot, valuation_ms)
-
-    return {
-        "spot": spot,
-        "total_gex": total_gex,
-        "total_dex": total_dex,
-        "total_vex": total_vex,
-        "total_chex": total_chex,
-        # Additive: per-side absolute sums, used by the regime engine as each
-        # force's noise deadzone; persisted to the snapshot table so replay
-        # applies the same deadzones as the live engine.
-        "gex_scale": strong_mag,
-        "vex_scale": sum(abs(row["call_vex"]) + abs(row["put_vex"]) for row in strikes),
-        "chex_scale": sum(abs(row["call_chex"]) + abs(row["put_chex"]) for row in strikes),
-        # Additive: ATM vol context (None when the chain has no usable IV).
-        "atm_iv": term["front_iv"],
-        "term_slope": term["slope"],
-        "flip": flip,
-        "call_wall": call_wall,
-        "put_wall": put_wall,
-        "max_gamma_strike": max_gamma_strike,
-        "regime": regime,
-    }
-
-
-def _matrix_gex_db_insert(rows: list[tuple[Any, ...]]) -> None:
-    if not rows:
-        return
-    _matrix_flow_db_init()
-    with sqlite3.connect(_matrix_flow_db_path(), timeout=20) as connection:
-        connection.executemany("""
-            INSERT INTO matrix_gex_snapshot (
-                symbol, session_date, minute_ms, spot, total_gex, total_dex,
-                total_vex, total_chex,
-                flip, call_wall, put_wall, max_gamma_strike, regime,
-                atm_iv, term_slope, gex_scale, vex_scale, chex_scale, updated_at_ms
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(symbol, minute_ms) DO UPDATE SET
-                spot=excluded.spot,
-                total_gex=excluded.total_gex,
-                total_dex=excluded.total_dex,
-                total_vex=excluded.total_vex,
-                total_chex=excluded.total_chex,
-                flip=excluded.flip,
-                call_wall=excluded.call_wall,
-                put_wall=excluded.put_wall,
-                max_gamma_strike=excluded.max_gamma_strike,
-                regime=excluded.regime,
-                atm_iv=excluded.atm_iv,
-                term_slope=excluded.term_slope,
-                gex_scale=excluded.gex_scale,
-                vex_scale=excluded.vex_scale,
-                chex_scale=excluded.chex_scale,
-                updated_at_ms=excluded.updated_at_ms
-        """, rows)
-        connection.commit()
-
-
-def _matrix_gex_db_payload(symbol: str, session_date: str) -> dict[str, Any] | None:
-    path = _matrix_flow_db_path()
-    if not path.exists():
-        return None
-    # Tolerate legacy DBs missing the newer columns: select what exists and
-    # fill the rest as None (the neutral replay fallback).
-    all_columns = (
-        "minute_ms", "spot", "total_gex", "total_dex", "total_vex", "total_chex",
-        "flip", "call_wall", "put_wall", "max_gamma_strike", "regime",
-        "atm_iv", "term_slope", "gex_scale", "vex_scale", "chex_scale",
-        "updated_at_ms",
-    )
-    with sqlite3.connect(path, timeout=20) as connection:
-        available = {row[1] for row in connection.execute("PRAGMA table_info(matrix_gex_snapshot)")}
-        columns = [c for c in all_columns if c in available]
-        rows = connection.execute(
-            f"""
-            SELECT {', '.join(columns)}
-            FROM matrix_gex_snapshot
-            WHERE symbol = ? AND session_date = ?
-            ORDER BY minute_ms
-            """,
-            (symbol, session_date),
-        ).fetchall()
-    if not rows:
-        return None
-    points = []
-    for row in rows:
-        record = {name: row[i] for i, name in enumerate(columns)}
-        points.append({
-            "time": record.get("minute_ms"),
-            "spot": record.get("spot"),
-            "totalGex": record.get("total_gex"),
-            "totalDex": record.get("total_dex"),
-            "totalVex": record.get("total_vex"),
-            "totalChex": record.get("total_chex"),
-            "flip": record.get("flip"),
-            "callWall": record.get("call_wall"),
-            "putWall": record.get("put_wall"),
-            "maxGammaStrike": record.get("max_gamma_strike"),
-            "regime": record.get("regime"),
-            # Phase-5 additions (additive; None on legacy rows).
-            "atmIv": record.get("atm_iv"),
-            "termSlope": record.get("term_slope"),
-            "gexScale": record.get("gex_scale"),
-            "vexScale": record.get("vex_scale"),
-            "chexScale": record.get("chex_scale"),
-        })
-    return {
-        "ok": True,
-        "symbol": symbol,
-        "source": "matrix_gex_snapshot_store",
-        "asof": datetime.datetime.fromtimestamp(rows[-1][columns.index("updated_at_ms")] / 1000, datetime.timezone.utc).isoformat(),
-        "interval_seconds": MATRIX_GEX_SNAPSHOT_INTERVAL_SECONDS,
-        "session_date": session_date,
-        "points": points,
-        "history_available": True,
-    }
-
-
-async def _fetch_matrix_gex_history(
-    symbol: str,
-    session: int | str,
-) -> dict[str, Any]:
-    symbol = symbol.upper().strip()
-    if symbol not in MATRIX_LSE_PRICE_SYMBOLS:
-        raise ValueError("GEX history is available for NDX, SPX, SPY, and QQQ")
-    sessions = _matrix_gex_history_sessions()
-    if isinstance(session, int):
-        if session not in {1, 2, 3}:
-            raise ValueError("GEX history supports one to three sessions back")
-        session_date = sessions[session - 1]
-    else:
-        try:
-            session_date = datetime.date.fromisoformat(session).isoformat()
-        except ValueError as exc:
-            raise ValueError("GEX session_date must use YYYY-MM-DD") from exc
-        if session_date not in sessions:
-            raise ValueError("GEX session_date is outside the three retained prior sessions")
-    collected = await asyncio.to_thread(_matrix_gex_db_payload, symbol, session_date)
-    if collected is not None:
-        collected["available_sessions"] = list(sessions)
-        return collected
-    session_close = datetime.datetime.fromisoformat(f"{session_date}T16:00:00").replace(
-        tzinfo=ZoneInfo("America/New_York")
-    )
-    return {
-        "ok": True,
-        "symbol": symbol,
-        "source": "matrix_gex_snapshot_store",
-        "asof": session_close.astimezone(datetime.timezone.utc).isoformat(),
-        "interval_seconds": MATRIX_GEX_SNAPSHOT_INTERVAL_SECONDS,
-        "session_date": session_date,
-        "points": [],
-        "history_available": False,
-        "available_sessions": list(sessions),
-    }
-
-
-def _matrix_market_open_now() -> bool:
-    now_et = datetime.datetime.now(ZoneInfo("America/New_York"))
-    if now_et.weekday() >= 5:
-        return False
-    minute = now_et.hour * 60 + now_et.minute
-    return 570 <= minute <= 960
-
-
-async def _matrix_gex_snapshot_loop() -> None:
-    """Capture per-minute GEX snapshots during ET market hours.
-
-    Uses the already-cached market data (zero extra upstream API calls); spot
-    is overridden with the WebSocket collector's latest tick when available.
-    """
-    await asyncio.to_thread(_matrix_flow_db_init)
-    while True:
-        now = time.time()
-        await asyncio.sleep(MATRIX_GEX_SNAPSHOT_INTERVAL_SECONDS - (now % MATRIX_GEX_SNAPSHOT_INTERVAL_SECONDS))
-        if not _matrix_market_open_now():
-            continue
-        try:
-            data = await _fetch_matrix_market_data()
-        except Exception as exc:  # noqa: BLE001
-            print(f"matrix gex snapshot: market data unavailable: {exc}")
-            continue
-        collector = _matrix_flow_collector
-        live_spots = dict(collector.latest_spot) if collector is not None else {}
-        updated_ms = int(time.time() * 1000)
-        minute_ms = updated_ms // 60000 * 60000
-        session_date = _matrix_session_date().isoformat()
-        rows: list[tuple[Any, ...]] = []
-        for symbol, record in data.items():
-            if not isinstance(record, dict):
-                continue
-            spot = live_spots.get(symbol) or record.get("spot")
-            if not spot:
-                continue
-            try:
-                snap = _compute_matrix_gex_snapshot(symbol, record, float(spot), updated_ms)
-            except Exception as exc:  # noqa: BLE001
-                print(f"matrix gex snapshot: compute failed for {symbol}: {exc}")
-                continue
-            rows.append((
-                symbol, session_date, minute_ms, float(spot),
-                snap["total_gex"], snap["total_dex"],
-                snap["total_vex"], snap["total_chex"],
-                snap["flip"], snap["call_wall"], snap["put_wall"],
-                snap["max_gamma_strike"], snap["regime"],
-                snap["atm_iv"], snap["term_slope"],
-                snap["gex_scale"], snap["vex_scale"], snap["chex_scale"],
-                updated_ms,
-            ))
-        try:
-            await asyncio.to_thread(_matrix_gex_db_insert, rows)
-        except Exception as exc:  # noqa: BLE001
-            print(f"matrix gex snapshot: db write failed: {exc}")
-
-
-# -----------------------------------------------------------------------------
-# Regime journal (morning checklist + auto-grading)
-# A trader writes a regime call before the open; the system freezes the
-# engine's verdict at save time, then grades both calls after the close using
-# the SAME outcome rules as tools/backtest_regime.py (matrix_outcome). One
-# entry per (session_date, symbol); entries lock once graded.
-# -----------------------------------------------------------------------------
-# Calls lock shortly after the close (16:05 ET): afterwards "today's call"
-# targets the next trading session, and the finished session can be graded.
-MATRIX_JOURNAL_CLOSE_MINUTE = 16 * 60 + 5
-# Accuracy on fewer scored days than this is noise, not signal (mirrors the
-# backtester's SMALL_SAMPLE_DAYS).
-MATRIX_JOURNAL_SMALL_SAMPLE_DAYS = 30
-
-_MATRIX_JOURNAL_COLUMNS = (
-    "session_date", "symbol", "created_ms", "user_label", "user_levels",
-    "user_notes", "engine_label", "engine_agreement", "engine_reasoning",
-    "call_wall", "put_wall", "outcome", "grade", "engine_grade", "graded_ms",
-)
-
-
-def _matrix_journal_session_date(now_et: datetime.datetime | None = None) -> datetime.date:
-    """The trading session a new call is FOR: today until the close, then the
-    next weekday (weekends roll forward to Monday)."""
-    now_et = now_et or datetime.datetime.now(ZoneInfo("America/New_York"))
-    day = now_et.date()
-    if day.weekday() < 5 and now_et.hour * 60 + now_et.minute >= MATRIX_JOURNAL_CLOSE_MINUTE:
-        day += datetime.timedelta(days=1)
-    while day.weekday() >= 5:
-        day += datetime.timedelta(days=1)
-    return day
-
-
-def _matrix_journal_gradeable(session_date: str, now_et: datetime.datetime | None = None) -> bool:
-    """A session's outcome is computable once its close has passed."""
-    now_et = now_et or datetime.datetime.now(ZoneInfo("America/New_York"))
-    day = datetime.date.fromisoformat(session_date)
-    if day < now_et.date():
-        return True
-    return day == now_et.date() and now_et.hour * 60 + now_et.minute >= MATRIX_JOURNAL_CLOSE_MINUTE
-
-
-def _matrix_journal_row_to_entry(row: tuple[Any, ...]) -> dict[str, Any]:
-    record = dict(zip(_MATRIX_JOURNAL_COLUMNS, row))
-    reasoning = record.get("engine_reasoning")
-    try:
-        reasoning = json.loads(reasoning) if reasoning else []
-    except ValueError:
-        reasoning = [str(reasoning)]
-    return {
-        "date": record["session_date"],
-        "symbol": record["symbol"],
-        "created_ms": record["created_ms"],
-        "user_label": record["user_label"],
-        "user_levels": record.get("user_levels") or "",
-        "user_notes": record.get("user_notes") or "",
-        "engine_label": record.get("engine_label"),
-        "engine_agreement": record.get("engine_agreement"),
-        "engine_reasoning": reasoning,
-        "call_wall": record.get("call_wall"),
-        "put_wall": record.get("put_wall"),
-        "outcome": record.get("outcome"),
-        "grade": record.get("grade"),
-        "engine_grade": record.get("engine_grade"),
-        "graded_ms": record.get("graded_ms"),
-        "locked": record.get("graded_ms") is not None,
-    }
-
-
-def _matrix_journal_db_get(session_date: str, symbol: str) -> dict[str, Any] | None:
-    _matrix_flow_db_init()
-    with sqlite3.connect(_matrix_flow_db_path(), timeout=20) as connection:
-        row = connection.execute(
-            f"SELECT {', '.join(_MATRIX_JOURNAL_COLUMNS)} FROM matrix_journal_entries"
-            " WHERE session_date = ? AND symbol = ?",
-            (session_date, symbol),
-        ).fetchone()
-    return _matrix_journal_row_to_entry(row) if row else None
-
-
-def _matrix_journal_db_upsert(entry: dict[str, Any]) -> dict[str, Any]:
-    """Save/replace the (date, symbol) call. Never touches outcome/grade
-    fields — callers must check the lock first; grades are write-once."""
-    _matrix_flow_db_init()
-    values = (
-        entry["date"], entry["symbol"], int(entry["created_ms"]), entry["user_label"],
-        entry.get("user_levels") or "", entry.get("user_notes") or "",
-        entry.get("engine_label"), entry.get("engine_agreement"),
-        json.dumps(entry.get("engine_reasoning") or []),
-        entry.get("call_wall"), entry.get("put_wall"),
-    )
-    with sqlite3.connect(_matrix_flow_db_path(), timeout=20) as connection:
-        connection.execute("""
-            INSERT INTO matrix_journal_entries (
-                session_date, symbol, created_ms, user_label, user_levels,
-                user_notes, engine_label, engine_agreement, engine_reasoning,
-                call_wall, put_wall
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(session_date, symbol) DO UPDATE SET
-                created_ms=excluded.created_ms,
-                user_label=excluded.user_label,
-                user_levels=excluded.user_levels,
-                user_notes=excluded.user_notes,
-                engine_label=excluded.engine_label,
-                engine_agreement=excluded.engine_agreement,
-                engine_reasoning=excluded.engine_reasoning,
-                call_wall=excluded.call_wall,
-                put_wall=excluded.put_wall
-        """, values)
-        connection.commit()
-    return _matrix_journal_db_get(entry["date"], entry["symbol"])
-
-
-def _matrix_journal_today() -> datetime.date:
-    """Today's date in ET: the reference the journal listing counts back from."""
-    return datetime.datetime.now(ZoneInfo("America/New_York")).date()
-
-
-def _matrix_journal_db_list(days: int = 60, symbol: str | None = None) -> list[dict[str, Any]]:
-    _matrix_flow_db_init()
-    since = (_matrix_journal_today() - datetime.timedelta(days=max(1, int(days)))).isoformat()
-    query = (
-        f"SELECT {', '.join(_MATRIX_JOURNAL_COLUMNS)} FROM matrix_journal_entries"
-        " WHERE session_date >= ?"
-    )
-    params: list[Any] = [since]
-    if symbol:
-        query += " AND symbol = ?"
-        params.append(symbol)
-    query += " ORDER BY session_date DESC, symbol"
-    with sqlite3.connect(_matrix_flow_db_path(), timeout=20) as connection:
-        rows = connection.execute(query, params).fetchall()
-    return [_matrix_journal_row_to_entry(row) for row in rows]
-
-
-def _matrix_journal_db_pending(now_et: datetime.datetime | None = None) -> list[dict[str, Any]]:
-    """Ungraded entries whose session has completed (auto-grade candidates)."""
-    _matrix_flow_db_init()
-    with sqlite3.connect(_matrix_flow_db_path(), timeout=20) as connection:
-        rows = connection.execute(
-            f"SELECT {', '.join(_MATRIX_JOURNAL_COLUMNS)} FROM matrix_journal_entries"
-            " WHERE graded_ms IS NULL ORDER BY session_date"
-        ).fetchall()
-    return [
-        entry
-        for entry in (_matrix_journal_row_to_entry(row) for row in rows)
-        if _matrix_journal_gradeable(entry["date"], now_et)
-    ]
-
-
-def _matrix_journal_db_mark_graded(
-    session_date: str,
-    symbol: str,
-    outcome: str,
-    grade: int | None,
-    engine_grade: int | None,
-    graded_ms: int,
-) -> dict[str, Any] | None:
-    """Write-once grading: no-op when the entry is already graded."""
-    _matrix_flow_db_init()
-    with sqlite3.connect(_matrix_flow_db_path(), timeout=20) as connection:
-        cursor = connection.execute("""
-            UPDATE matrix_journal_entries
-            SET outcome = ?, grade = ?, engine_grade = ?, graded_ms = ?
-            WHERE session_date = ? AND symbol = ? AND graded_ms IS NULL
-        """, (outcome, grade, engine_grade, graded_ms, session_date, symbol))
-        connection.commit()
-    if cursor.rowcount < 1:
-        return None
-    return _matrix_journal_db_get(session_date, symbol)
-
-
-def _matrix_journal_candles_ohlc(candles: list[dict[str, Any]], session_date: str) -> tuple[float, float, float, float] | None:
-    """Full-session (open, high, low, close) for one ET date from intraday bars."""
-    for day in matrix_regime.daily_ohlc(candles):
-        if day["date"] == session_date:
-            return (day["open"], day["high"], day["low"], day["close"])
-    return None
-
-
-def _matrix_journal_grade_entry(
-    entry: dict[str, Any],
-    ohlc: tuple[float, float, float, float] | None,
-    graded_ms: int | None = None,
-) -> dict[str, Any] | None:
-    """Grade one entry from the session's (open, high, low, close).
-
-    Uses the shared matrix_outcome rules (identical to the backtester): the
-    user's label AND the engine's frozen label are each mapped through the
-    same prediction table, enabling "you vs the engine" stats. MIXED makes no
-    prediction: its grade stores NULL and is excluded from hit-rate
-    denominators. Returns None when the day cannot be classified.
-    """
-    if not ohlc:
-        return None
-    outcome, drift, _wall = matrix_outcome.classify_outcome(
-        *ohlc, walls=(entry.get("call_wall"), entry.get("put_wall")))
-    user_hit = matrix_outcome.predicts(entry.get("user_label"), outcome, drift)
-    engine_label = entry.get("engine_label")
-    engine_hit = matrix_outcome.predicts(engine_label, outcome, drift) if engine_label else None
-    return {
-        "outcome": outcome,
-        "drift": drift,
-        "grade": None if user_hit is None else int(user_hit),
-        "engine_grade": None if engine_hit is None else int(engine_hit),
-        "graded_ms": graded_ms if graded_ms is not None else int(time.time() * 1000),
-    }
-
-
-async def _matrix_journal_day_ohlc(symbol: str, session_date: str) -> tuple[float, float, float, float] | None:
-    """Full-session OHLC for grading: the candles feed first, then the
-    snapshot DB's own spot series (the same fallback the backtester uses)."""
-    if symbol in MATRIX_CANDLE_SYMBOLS:
-        try:
-            payload = await _fetch_matrix_candles(symbol=symbol, interval="60m", range_="1mo")
-            ohlc = _matrix_journal_candles_ohlc(payload.get("candles") or [], session_date)
-            if ohlc is not None:
-                return ohlc
-        except Exception:  # noqa: BLE001 — fall through to the spot series
-            pass
-    path = _matrix_flow_db_path()
-    if path.exists():
-        with sqlite3.connect(path, timeout=20) as connection:
-            spots = [row[0] for row in connection.execute(
-                "SELECT spot FROM matrix_gex_snapshot"
-                " WHERE symbol = ? AND session_date = ? ORDER BY minute_ms",
-                (symbol, session_date),
-            )]
-        spots = [float(spot) for spot in spots if spot]
-        if spots:
-            return (spots[0], max(spots), min(spots), spots[-1])
-    return None
-
-
-async def _matrix_journal_auto_grade(
-    provider: Any = None,
-    now_et: datetime.datetime | None = None,
-) -> list[dict[str, Any]]:
-    """Grade every completed-session entry still awaiting an outcome.
-
-    provider(symbol, session_date) -> (open, high, low, close) | None;
-    defaults to the candles feed + snapshot spot series. Returns the newly
-    graded entries.
-    """
-    provider = provider or _matrix_journal_day_ohlc
-    graded: list[dict[str, Any]] = []
-    for entry in _matrix_journal_db_pending(now_et):
-        try:
-            ohlc = await provider(entry["symbol"], entry["date"])
-        except Exception:  # noqa: BLE001 — leave it for a later pass
-            continue
-        fields = _matrix_journal_grade_entry(entry, ohlc)
-        if fields is None:
-            continue
-        updated = _matrix_journal_db_mark_graded(
-            entry["date"], entry["symbol"], fields["outcome"],
-            fields["grade"], fields["engine_grade"], fields["graded_ms"])
-        if updated is not None:
-            graded.append(updated)
-    return graded
-
-
-def _matrix_journal_stats(entries: list[dict[str, Any]]) -> dict[str, Any]:
-    """Hit rates: user overall, engine overall, and the agree/disagree split
-    that answers "should I trust myself or the machine?".
-
-    Only graded entries with a non-NULL grade are scored (MIXED makes no
-    prediction and is excluded from every denominator, like the backtester).
-    """
-    def tally(rows: list[dict[str, Any]], key: str) -> dict[str, Any]:
-        scored = [row for row in rows if row.get(key) is not None]
-        hits = sum(int(row[key]) for row in scored)
-        return {"scored": len(scored), "hits": hits,
-                "hit_rate": (hits / len(scored)) if scored else None}
-
-    graded = [entry for entry in entries if entry.get("graded_ms") is not None]
-    user_scored = [entry for entry in graded if entry.get("grade") is not None]
-    agreeing = [entry for entry in user_scored
-                if entry.get("engine_label") and entry["user_label"] == entry["engine_label"]]
-    disagreeing = [entry for entry in user_scored
-                   if entry.get("engine_label") and entry["user_label"] != entry["engine_label"]]
-    by_label: dict[str, dict[str, Any]] = {}
-    for who, grade_key, label_key in (
-        ("user", "grade", "user_label"),
-        ("engine", "engine_grade", "engine_label"),
-    ):
-        by_label[who] = {
-            label: tally([e for e in graded if e.get(label_key) == label], grade_key)
-            for label in matrix_regime.LABELS
-        }
-    user = tally(graded, "grade")
-    small_sample = user["scored"] < MATRIX_JOURNAL_SMALL_SAMPLE_DAYS
-    return {
-        "ok": True,
-        "entries": len(entries),
-        "graded": len(graded),
-        "user": user,
-        "engine": tally(graded, "engine_grade"),
-        "user_when_agreeing": tally(agreeing, "grade"),
-        "user_when_disagreeing": tally(disagreeing, "grade"),
-        "by_label": by_label,
-        "small_sample_threshold": MATRIX_JOURNAL_SMALL_SAMPLE_DAYS,
-        "small_sample": small_sample,
-        "caution": (
-            f"Fewer than {MATRIX_JOURNAL_SMALL_SAMPLE_DAYS} scored days — "
-            "small-sample noise dominates; do not draw conclusions yet."
-        ) if small_sample else None,
-    }
-
-
-async def _compute_matrix_regime(symbol: str) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Engine verdict plus the GEX snapshot it was computed from.
-
-    Shared by /api/matrix/regime and the journal save path (which freezes
-    this verdict alongside the user's call). Uses the already-cached chain
-    plus the existing candles feed aggregated to daily bars — no extra
-    upstream calls beyond what those caches already make. Raises on
-    unavailable data; callers decide how to degrade.
-    """
-    data = await _fetch_matrix_market_data()
-    record = data.get(symbol)
-    if not isinstance(record, dict):
-        raise ValueError(f"Unsupported regime symbol {symbol!r}")
-    collector = _matrix_flow_collector
-    spot = None
-    if collector is not None:
-        spot = collector.latest_spot.get(symbol)
-    if not spot and symbol == "VIX":
-        vix = await _fetch_matrix_cboe_spot_cached("VIX")
-        spot = vix["spot"] if vix else None
-    if not spot:
-        spot = record.get("spot")
-    if not spot:
-        raise ValueError(f"No spot available for {symbol}")
-    updated_ms = int(time.time() * 1000)
-    snap = _compute_matrix_gex_snapshot(symbol, record, float(spot), updated_ms)
-    candles: list[dict[str, Any]] = []
-    if symbol in MATRIX_CANDLE_SYMBOLS:
-        try:
-            payload = await _fetch_matrix_candles(symbol=symbol, interval="60m", range_="1mo")
-            candles = matrix_regime.daily_ohlc(payload.get("candles") or [])
-        except Exception:  # noqa: BLE001 — VRP leg degrades to "unavailable"
-            candles = []
-    verdict = matrix_regime.compute_regime({
-        **snap,
-        "options": record.get("opts") or [],
-        "candles": candles,
-        "valuation_ms": updated_ms,
-    })
-    return verdict, snap
-
-
 class PublicCompanyApp:
     """ASGI wrapper with a create page/API and dynamic /mcp/{slug} routing."""
 
@@ -2543,8 +933,6 @@ class PublicCompanyApp:
         self.upstream_transport = upstream_transport
         self._lifespans: dict[str, Any] = {}
         self._stack: AsyncExitStack | None = None
-        self._matrix_flow_task: asyncio.Task[Any] | None = None
-        self._matrix_gex_task: asyncio.Task[Any] | None = None
         self._started = False
 
     async def __call__(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
@@ -2566,21 +954,25 @@ class PublicCompanyApp:
             await self._response(send, 200, CREATE_PAGE.encode("utf-8"), b"text/html; charset=utf-8")
             return
         if method == "GET" and path == "/matrix":
+            query = scope.get("query_string", b"")
             await self._response(
                 send,
                 307,
                 b"",
                 b"text/plain; charset=utf-8",
-                headers=[(b"location", b"/matrix/")],
+                headers=[(b"location", b"/matrix/" + (b"?" + query if query else b""))],
             )
             return
         matrix_static = {
-            "/matrix/": ("matrix.html", b"text/html; charset=utf-8"),
             "/matrix/matrix.css": ("matrix.css", b"text/css; charset=utf-8"),
             "/matrix/matrix.js": ("matrix.js", b"text/javascript; charset=utf-8"),
         }
-        if method == "GET" and path in matrix_static:
-            filename, content_type = matrix_static[path]
+        if path.rstrip("/") in MATRIX_SCREEN_PATHS:
+            matrix_file = ("matrix.html", b"text/html; charset=utf-8")
+        else:
+            matrix_file = matrix_static.get(path)
+        if method == "GET" and matrix_file:
+            filename, content_type = matrix_file
             await self._response(
                 send,
                 200,
@@ -2630,19 +1022,6 @@ class PublicCompanyApp:
             if method == "GET":
                 await self._matrix_cboe_data(scope, send)
                 return
-        if path == "/api/matrix/symbol-search":
-            if method == "OPTIONS":
-                await self._response(
-                    send,
-                    204,
-                    b"",
-                    b"text/plain; charset=utf-8",
-                    headers=self._matrix_cors_headers(scope),
-                )
-                return
-            if method == "GET":
-                await self._matrix_symbol_search(scope, send)
-                return
         if path == "/api/matrix/symbol-data":
             if method == "OPTIONS":
                 await self._response(
@@ -2656,19 +1035,6 @@ class PublicCompanyApp:
             if method == "GET":
                 await self._matrix_symbol_data(scope, send)
                 return
-        if path == "/api/matrix/active-symbol":
-            if method == "OPTIONS":
-                await self._response(
-                    send,
-                    204,
-                    b"",
-                    b"text/plain; charset=utf-8",
-                    headers=self._matrix_cors_headers(scope),
-                )
-                return
-            if method == "GET":
-                await self._matrix_active_symbol(scope, send)
-                return
         if path == "/api/matrix/candles":
             if method == "OPTIONS":
                 await self._response(
@@ -2681,100 +1047,6 @@ class PublicCompanyApp:
                 return
             if method == "GET":
                 await self._matrix_candles(scope, send)
-                return
-        if path == "/api/matrix/flow":
-            if method == "OPTIONS":
-                await self._response(
-                    send,
-                    204,
-                    b"",
-                    b"text/plain; charset=utf-8",
-                    headers=self._matrix_cors_headers(scope),
-                )
-                return
-            if method == "GET":
-                await self._matrix_flow(scope, send)
-                return
-        if path == "/api/matrix/spots":
-            if method == "OPTIONS":
-                await self._response(
-                    send,
-                    204,
-                    b"",
-                    b"text/plain; charset=utf-8",
-                    headers=self._matrix_cors_headers(scope),
-                )
-                return
-            if method == "GET":
-                await self._matrix_spots(scope, send)
-                return
-        if path == "/api/matrix/gex-history":
-            if method == "OPTIONS":
-                await self._response(
-                    send,
-                    204,
-                    b"",
-                    b"text/plain; charset=utf-8",
-                    headers=self._matrix_cors_headers(scope),
-                )
-                return
-            if method == "GET":
-                await self._matrix_gex_history(scope, send)
-                return
-        if path == "/api/matrix/regime":
-            if method == "OPTIONS":
-                await self._response(
-                    send,
-                    204,
-                    b"",
-                    b"text/plain; charset=utf-8",
-                    headers=self._matrix_cors_headers(scope),
-                )
-                return
-            if method == "GET":
-                await self._matrix_regime(scope, send)
-                return
-        if path == "/api/matrix/journal":
-            if method == "OPTIONS":
-                await self._response(
-                    send,
-                    204,
-                    b"",
-                    b"text/plain; charset=utf-8",
-                    headers=self._matrix_cors_headers(scope),
-                )
-                return
-            if method == "POST":
-                await self._matrix_journal_save(scope, receive, send)
-                return
-            if method == "GET":
-                await self._matrix_journal_list(scope, send)
-                return
-        if path == "/api/matrix/journal/grade":
-            if method == "OPTIONS":
-                await self._response(
-                    send,
-                    204,
-                    b"",
-                    b"text/plain; charset=utf-8",
-                    headers=self._matrix_cors_headers(scope),
-                )
-                return
-            if method == "POST":
-                await self._matrix_journal_grade(scope, receive, send)
-                return
-        if path == "/api/matrix/journal/stats":
-            if method == "OPTIONS":
-                await self._response(
-                    send,
-                    204,
-                    b"",
-                    b"text/plain; charset=utf-8",
-                    headers=self._matrix_cors_headers(scope),
-                )
-                return
-            if method == "GET":
-                await self._matrix_journal_stats_endpoint(scope, send)
                 return
 
         target = self._target_connector(path)
@@ -2806,44 +1078,16 @@ class PublicCompanyApp:
                     self._stack = AsyncExitStack()
                     for connector in list(self.connectors.values()):
                         await self._start_connector_lifespan(connector)
-                    await self._start_matrix_flow_collector()
-                    await self._start_matrix_gex_snapshotter()
+                    await asyncio.to_thread(_remove_legacy_matrix_store)
                     self._started = True
                     await send({"type": "lifespan.startup.complete"})
                 except BaseException as exc:  # noqa: BLE001
                     await send({"type": "lifespan.startup.failed", "message": str(exc)})
             elif message["type"] == "lifespan.shutdown":
-                if self._matrix_flow_task is not None:
-                    self._matrix_flow_task.cancel()
-                    await asyncio.gather(self._matrix_flow_task, return_exceptions=True)
-                if self._matrix_gex_task is not None:
-                    self._matrix_gex_task.cancel()
-                    await asyncio.gather(self._matrix_gex_task, return_exceptions=True)
                 if self._stack is not None:
                     await self._stack.aclose()
                 await send({"type": "lifespan.shutdown.complete"})
                 return
-
-    async def _start_matrix_flow_collector(self) -> None:
-        global _matrix_flow_collector
-        api_key = _matrix_lse_api_key()
-        enabled = os.getenv("TRIPITY_MATRIX_FLOW_COLLECTOR", "1").strip().lower() not in {"0", "false", "off", "no"}
-        if not api_key or not enabled or self._matrix_flow_task is not None:
-            return
-        _matrix_flow_collector = MatrixFlowCollector(api_key)
-        self._matrix_flow_task = asyncio.create_task(
-            _matrix_flow_collector.run(),
-            name="matrix-lse-options-flow-collector",
-        )
-
-    async def _start_matrix_gex_snapshotter(self) -> None:
-        enabled = os.getenv("TRIPITY_MATRIX_GEX_SNAPSHOTS", "1").strip().lower() not in {"0", "false", "off", "no"}
-        if not enabled or self._matrix_gex_task is not None:
-            return
-        self._matrix_gex_task = asyncio.create_task(
-            _matrix_gex_snapshot_loop(),
-            name="matrix-gex-snapshotter",
-        )
 
     async def _start_connector_lifespan(self, connector: PublicConnector) -> None:
         if self._stack is None or connector.slug in self._lifespans:
@@ -3000,35 +1244,11 @@ class PublicCompanyApp:
                 headers=self._matrix_cors_headers(scope),
             )
 
-    async def _matrix_symbol_search(self, scope: dict[str, Any], send: Any) -> None:
-        try:
-            query = parse_qs(scope.get("query_string", b"").decode("latin1"))
-            text = (query.get("q") or [""])[0]
-            items = await _search_matrix_symbols(text)
-            await self._json(
-                send,
-                {"ok": True, "query": text, "items": items},
-                headers=[
-                    *self._matrix_cors_headers(scope),
-                    (b"cache-control", b"public, max-age=300"),
-                ],
-            )
-        except Exception as exc:  # noqa: BLE001
-            await self._json(
-                send,
-                {"ok": False, "detail": str(exc)},
-                status=502,
-                headers=self._matrix_cors_headers(scope),
-            )
-
     async def _matrix_symbol_data(self, scope: dict[str, Any], send: Any) -> None:
         try:
             query = parse_qs(scope.get("query_string", b"").decode("latin1"))
             symbol = _matrix_dynamic_symbol((query.get("symbol") or [""])[0])
             record = await _fetch_matrix_dynamic_chain(symbol)
-            collector = _matrix_flow_collector
-            if collector is not None:
-                collector.set_active_symbol(symbol)
             await self._json(
                 send,
                 {
@@ -3036,9 +1256,7 @@ class PublicCompanyApp:
                     "symbol": symbol,
                     "record": record,
                     "cache_scope": "et_calendar_day",
-                    "spot_source": "lse_websocket" if collector is not None else "cboe_delayed",
-                    "history_available": False,
-                    "flow_available": False,
+                    "spot_source": "cboe_delayed",
                 },
                 headers=[
                     *self._matrix_cors_headers(scope),
@@ -3059,25 +1277,6 @@ class PublicCompanyApp:
                 status=502,
                 headers=self._matrix_cors_headers(scope),
             )
-
-    async def _matrix_active_symbol(self, scope: dict[str, Any], send: Any) -> None:
-        query = parse_qs(scope.get("query_string", b"").decode("latin1"))
-        symbol = (query.get("symbol") or [""])[0].upper().strip()
-        collector = _matrix_flow_collector
-        if collector is not None and symbol in MATRIX_LSE_PRICE_SYMBOLS:
-            collector.clear_active_symbol()
-        await self._json(
-            send,
-            {
-                "ok": True,
-                "symbol": symbol or None,
-                "dynamic_symbol": collector.dynamic_symbol if collector is not None else None,
-            },
-            headers=[
-                *self._matrix_cors_headers(scope),
-                (b"cache-control", b"no-store"),
-            ],
-        )
 
     async def _matrix_candles(self, scope: dict[str, Any], send: Any) -> None:
         try:
@@ -3095,356 +1294,12 @@ class PublicCompanyApp:
                     (b"cache-control", b"public, max-age=15"),
                 ],
             )
-        except Exception as exc:  # noqa: BLE001
-            await self._json(
-                send,
-                {"ok": False, "detail": str(exc)},
-                status=502,
-                headers=self._matrix_cors_headers(scope),
-            )
-
-    async def _matrix_flow(self, scope: dict[str, Any], send: Any) -> None:
-        try:
-            query = parse_qs(scope.get("query_string", b"").decode("latin1"))
-            expiration_values = query.get("expiration") or []
-            expirations = tuple(
-                item.strip()
-                for value in expiration_values
-                for item in value.split(",")
-                if item.strip()
-            )
-            symbol = (query.get("symbol") or ["SPY"])[0]
-            interval = (query.get("interval") or ["1m"])[0]
-            session_offset = int((query.get("session_offset") or ["0"])[0])
-            requested_session = (query.get("session_date") or [""])[0].strip()
-            latest_session = _matrix_session_date().isoformat()
-            if requested_session and requested_session != latest_session:
-                data = await _fetch_matrix_flow_history(symbol, interval, expirations, requested_session)
-            elif session_offset:
-                data = await _fetch_matrix_flow_history(symbol, interval, expirations, session_offset)
-            else:
-                data = await _fetch_matrix_flow(symbol=symbol, interval=interval, expirations=expirations)
-            data["session_date"] = requested_session or _matrix_session_date(session_offset).isoformat()
-            data["available_sessions"] = list(_matrix_retained_session_dates())
-            await self._json(
-                send,
-                data,
-                headers=[
-                    *self._matrix_cors_headers(scope),
-                    (b"cache-control", b"public, max-age=10"),
-                ],
-            )
-        except Exception as exc:  # noqa: BLE001
-            await self._json(
-                send,
-                {"ok": False, "detail": str(exc)},
-                status=502,
-                headers=self._matrix_cors_headers(scope),
-            )
-
-    async def _matrix_spots(self, scope: dict[str, Any], send: Any) -> None:
-        """Latest spot per symbol: WebSocket ticks when available, else the
-        50s-cached LSE 1-minute REST spot. No additional upstream calls."""
-        try:
-            symbols: dict[str, Any] = {}
-            collector = _matrix_flow_collector
-            if collector is not None:
-                for symbol, spot in collector.latest_spot.items():
-                    symbols[symbol] = {
-                        "spot": float(spot),
-                        "asof": collector.latest_spot_asof.get(symbol) or collector.last_tick,
-                        "source": "lse_websocket",
-                    }
-            missing = [symbol for symbol in MATRIX_LSE_PRICE_SYMBOLS if symbol not in symbols]
-            if missing:
-                try:
-                    rest_spots = await _fetch_matrix_lse_spots()
-                except Exception:  # noqa: BLE001
-                    rest_spots = {}
-                for symbol in missing:
-                    entry = rest_spots.get(symbol)
-                    if entry:
-                        symbols[symbol] = {
-                            "spot": entry["spot"],
-                            "asof": entry.get("asof"),
-                            "source": "lse_rest_1m",
-                        }
-            # VIX has no LSE stream; use the cached CBOE delayed quote instead.
-            if "VIX" not in symbols:
-                vix_spot = await _fetch_matrix_cboe_spot_cached("VIX")
-                if vix_spot:
-                    symbols["VIX"] = vix_spot
-            await self._json(
-                send,
-                {
-                    "ok": True,
-                    "asof": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-                    "symbols": symbols,
-                },
-                headers=[
-                    *self._matrix_cors_headers(scope),
-                    (b"cache-control", MATRIX_SPOTS_CACHE_CONTROL),
-                ],
-            )
-        except Exception as exc:  # noqa: BLE001
-            await self._json(
-                send,
-                {"ok": False, "detail": str(exc)},
-                status=502,
-                headers=self._matrix_cors_headers(scope),
-            )
-
-    async def _matrix_gex_history(self, scope: dict[str, Any], send: Any) -> None:
-        try:
-            query = parse_qs(scope.get("query_string", b"").decode("latin1"))
-            symbol = (query.get("symbol") or ["SPY"])[0]
-            session_offset = int((query.get("session_offset") or ["0"])[0])
-            requested_session = (query.get("session_date") or [""])[0].strip()
-            if requested_session:
-                data = await _fetch_matrix_gex_history(symbol, requested_session)
-            elif session_offset:
-                data = await _fetch_matrix_gex_history(symbol, session_offset)
-            else:
-                # Default to the most recent completed session.
-                data = await _fetch_matrix_gex_history(symbol, 1)
-            await self._json(
-                send,
-                data,
-                headers=[
-                    *self._matrix_cors_headers(scope),
-                    (b"cache-control", b"public, max-age=30"),
-                ],
-            )
-        except Exception as exc:  # noqa: BLE001
-            await self._json(
-                send,
-                {"ok": False, "detail": str(exc)},
-                status=502,
-                headers=self._matrix_cors_headers(scope),
-            )
-
-    async def _matrix_regime(self, scope: dict[str, Any], send: Any) -> None:
-        """Deterministic regime verdict (matrix_regime.compute_regime) for one
-        core symbol — see _compute_matrix_regime for the data path."""
-        try:
-            query = parse_qs(scope.get("query_string", b"").decode("latin1"))
-            symbol = (query.get("symbol") or ["SPY"])[0].upper()
-            verdict, _snap = await _compute_matrix_regime(symbol)
-            verdict.update({
-                "ok": True,
-                "symbol": symbol,
-                "asof": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-            })
-            await self._json(
-                send,
-                verdict,
-                headers=[
-                    *self._matrix_cors_headers(scope),
-                    (b"cache-control", b"public, max-age=30"),
-                ],
-            )
-        except Exception as exc:  # noqa: BLE001
-            await self._json(
-                send,
-                {"ok": False, "detail": str(exc)},
-                status=502,
-                headers=self._matrix_cors_headers(scope),
-            )
-
-    async def _matrix_journal_save(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
-        """Save/replace today's pre-open call, freezing the engine's current
-        verdict (label/agreement/reasoning + walls) alongside it so the
-        user-vs-engine comparison is fixed at decision time. Entries lock
-        once graded; until then a re-save replaces the call."""
-        try:
-            body = await self._read_body(receive)
-            payload = json.loads(body.decode("utf-8") or "{}")
-            symbol = str(payload.get("symbol") or "").upper().strip()
-            if symbol not in MATRIX_LSE_PRICE_SYMBOLS:
-                raise ValueError(f"Unsupported journal symbol {symbol!r}")
-            user_label = str(payload.get("user_label") or payload.get("label") or "").upper().strip()
-            if user_label not in matrix_regime.LABELS:
-                raise ValueError(f"user_label must be one of {', '.join(matrix_regime.LABELS)}")
-            session_date = _matrix_journal_session_date().isoformat()
-            existing = await asyncio.to_thread(_matrix_journal_db_get, session_date, symbol)
-            if existing and existing.get("locked"):
-                await self._json(
-                    send,
-                    {"ok": False, "detail": "journal entry is locked (already graded)", "entry": existing},
-                    status=409,
-                    headers=self._matrix_cors_headers(scope),
-                )
-                return
-            engine: dict[str, Any] = {}
-            try:
-                verdict, snap = await _compute_matrix_regime(symbol)
-                engine = {
-                    "engine_label": verdict.get("label"),
-                    "engine_agreement": verdict.get("agreement"),
-                    "engine_reasoning": verdict.get("reasoning") or [],
-                    "call_wall": snap.get("call_wall"),
-                    "put_wall": snap.get("put_wall"),
-                }
-            except Exception:  # noqa: BLE001 — the user's call still saves
-                engine = {}
-            entry = {
-                "date": session_date,
-                "symbol": symbol,
-                "created_ms": int(time.time() * 1000),
-                "user_label": user_label,
-                "user_levels": str(payload.get("user_levels") or payload.get("levels") or "").strip(),
-                "user_notes": str(payload.get("user_notes") or payload.get("notes") or "").strip(),
-                "engine_label": engine.get("engine_label"),
-                "engine_agreement": engine.get("engine_agreement"),
-                "engine_reasoning": engine.get("engine_reasoning") or [],
-                "call_wall": engine.get("call_wall"),
-                "put_wall": engine.get("put_wall"),
-            }
-            saved = await asyncio.to_thread(_matrix_journal_db_upsert, entry)
-            await self._json(
-                send,
-                {"ok": True, "entry": saved, "engine_frozen": bool(engine)},
-                status=201,
-                headers=self._matrix_cors_headers(scope),
-            )
         except ValueError as exc:
             await self._json(
                 send,
                 {"ok": False, "detail": str(exc)},
                 status=400,
                 headers=self._matrix_cors_headers(scope),
-            )
-        except Exception as exc:  # noqa: BLE001
-            await self._json(
-                send,
-                {"ok": False, "detail": str(exc)},
-                status=502,
-                headers=self._matrix_cors_headers(scope),
-            )
-
-    async def _matrix_journal_list(self, scope: dict[str, Any], send: Any) -> None:
-        """Recent entries with grades. Past ungraded days are auto-graded on
-        the way out (best effort — listing never fails because grading did)."""
-        try:
-            query = parse_qs(scope.get("query_string", b"").decode("latin1"))
-            days = int((query.get("days") or ["60"])[0])
-            symbol = (query.get("symbol") or [""])[0].upper().strip() or None
-            try:
-                graded = await _matrix_journal_auto_grade()
-            except Exception:  # noqa: BLE001
-                graded = []
-            entries = await asyncio.to_thread(_matrix_journal_db_list, days, symbol)
-            await self._json(
-                send,
-                {
-                    "ok": True,
-                    "days": days,
-                    "session_date": _matrix_journal_session_date().isoformat(),
-                    "labels": list(matrix_regime.LABELS),
-                    "entries": entries,
-                    "newly_graded": len(graded),
-                },
-                headers=[
-                    *self._matrix_cors_headers(scope),
-                    (b"cache-control", b"no-store"),
-                ],
-            )
-        except Exception as exc:  # noqa: BLE001
-            await self._json(
-                send,
-                {"ok": False, "detail": str(exc)},
-                status=502,
-                headers=self._matrix_cors_headers(scope),
-            )
-
-    async def _matrix_journal_grade(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
-        """Grade an entry (or all entries for a date) against the session's
-        realized outcome, using the shared matrix_outcome rules."""
-        try:
-            body = await self._read_body(receive)
-            payload = json.loads(body.decode("utf-8") or "{}")
-            session_date = str(payload.get("date") or "").strip()
-            try:
-                datetime.date.fromisoformat(session_date)
-            except ValueError:
-                raise ValueError("date must use YYYY-MM-DD") from None
-            symbol = str(payload.get("symbol") or "").upper().strip() or None
-            if not _matrix_journal_gradeable(session_date):
-                raise ValueError(f"session {session_date} is not complete yet")
-            pending = [
-                entry for entry in await asyncio.to_thread(_matrix_journal_db_pending)
-                if entry["date"] == session_date and (symbol is None or entry["symbol"] == symbol)
-            ]
-            if not pending:
-                existing = await asyncio.to_thread(_matrix_journal_db_get, session_date, symbol) if symbol else None
-                if existing and existing.get("locked"):
-                    await self._json(
-                        send,
-                        {"ok": True, "graded": [], "entry": existing, "detail": "already graded"},
-                        headers=self._matrix_cors_headers(scope),
-                    )
-                else:
-                    await self._json(
-                        send,
-                        {"ok": False, "detail": "no journal entry to grade for that date/symbol"},
-                        status=404,
-                        headers=self._matrix_cors_headers(scope),
-                    )
-                return
-            graded: list[dict[str, Any]] = []
-            for entry in pending:
-                ohlc = await _matrix_journal_day_ohlc(entry["symbol"], entry["date"])
-                fields = _matrix_journal_grade_entry(entry, ohlc)
-                if fields is None:
-                    continue
-                updated = await asyncio.to_thread(
-                    _matrix_journal_db_mark_graded,
-                    entry["date"], entry["symbol"], fields["outcome"],
-                    fields["grade"], fields["engine_grade"], fields["graded_ms"])
-                if updated is not None:
-                    graded.append(updated)
-            await self._json(
-                send,
-                {"ok": True, "graded": graded, "graded_count": len(graded)},
-                headers=self._matrix_cors_headers(scope),
-            )
-        except ValueError as exc:
-            await self._json(
-                send,
-                {"ok": False, "detail": str(exc)},
-                status=400,
-                headers=self._matrix_cors_headers(scope),
-            )
-        except Exception as exc:  # noqa: BLE001
-            await self._json(
-                send,
-                {"ok": False, "detail": str(exc)},
-                status=502,
-                headers=self._matrix_cors_headers(scope),
-            )
-
-    async def _matrix_journal_stats_endpoint(self, scope: dict[str, Any], send: Any) -> None:
-        """Hit rates: user overall, engine overall, user-when-agreeing vs
-        user-when-disagreeing, plus a per-label breakdown and a small-sample
-        caution. Past ungraded days are auto-graded first (best effort)."""
-        try:
-            query = parse_qs(scope.get("query_string", b"").decode("latin1"))
-            days = int((query.get("days") or ["60"])[0])
-            symbol = (query.get("symbol") or [""])[0].upper().strip() or None
-            try:
-                await _matrix_journal_auto_grade()
-            except Exception:  # noqa: BLE001
-                pass
-            entries = await asyncio.to_thread(_matrix_journal_db_list, days, symbol)
-            stats = _matrix_journal_stats(entries)
-            stats.update({"days": days, "symbol": symbol})
-            await self._json(
-                send,
-                stats,
-                headers=[
-                    *self._matrix_cors_headers(scope),
-                    (b"cache-control", b"no-store"),
-                ],
             )
         except Exception as exc:  # noqa: BLE001
             await self._json(

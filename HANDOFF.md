@@ -5,8 +5,9 @@
 
 ## What this project is
 
-A market-analytics stack for 5 US symbols — **NDX, SPX, SPY, QQQ, VIX** — showing live prices,
-options gamma/delta/vanna/charm exposure (GEX/DEX/VEX/CHEX), options flow, and dealer positioning.
+A market-analytics stack for 5 US symbols — **NDX, SPX, SPY, QQQ, VIX**. The dashboard copies
+Quant Power's screens and nothing else (ADR `docs/adr/0001-matrix-mirrors-quant-power-screens.md`,
+map issue #21); data reloads only on Refresh, never on a timer.
 Owner + his father are the only users. Live dashboard: https://api.trytripity.site/matrix/
 
 ## Repository layout
@@ -29,8 +30,8 @@ Owner + his father are the only users. Live dashboard: https://api.trytripity.si
 - **Cboe delayed snapshot** (`cdn-api.cboe.com`, free, no key): the option chains with
   open interest, IV and greeks. GEX needs the OI, so chains always come from here.
 - **London Strategic Edge Data 3.0** (`https://download.londonstrategicedge.com/v3`,
-  `X-API-Key` header): REST prices (`/v3/preview`), candles (`/v3/export`, CSV),
-  options flow (`/v3/options/flow`) and the chain's live volume (`/v3/options/chain`).
+  `X-API-Key` header): REST prices (`/v3/preview`), candles (`/v3/export`, CSV)
+  and the chain's live volume (`/v3/options/chain`).
   The old `/vault/*` and `x_*` calls answer 410/404 since October 2026.
   - FREE plan: **60 calls/minute**, **one export download at a time**, 12.5 GiB/week of
     exports; `GET /v3/usage` shows the key's limits.
@@ -38,33 +39,20 @@ Owner + his father are the only users. Live dashboard: https://api.trytripity.si
     session old), so the host keeps Cboe's greeks and only overlays volume/last price.
   - Intraday index candles (SPX/NDX) have gaps on LSE; the host falls back to Yahoo when
     the newest LSE candle is over 4 days old.
-- **LSE WebSocket** (`wss://data-ws.londonstrategicedge.com`, unchanged): 16 simultaneous
-  stream symbols; we use 4 base underlyings (SPY, QQQ, SPX500/USD, NAS100/USD) plus at
-  most 1 active on-demand stock.
 - API keys live ONLY in env vars (`LSE_API_KEY` / `TRIPITY_MATRIX_LSE_API_KEY`). Never commit them.
 
 ## Live architecture (Railway)
 
 - Service `backend` in Railway project **Tripity**, URL https://api.trytripity.site
-- **WebSocket collector** (in-process asyncio task) streams SPY/QQQ prints + all 4 underlyings;
-  latest spots in `_matrix_flow_collector.latest_spot`.
-- **GEX snapshots**: every 1 minute during 9:30–16:00 ET, per symbol — spot, total GEX/DEX,
-  zero-gamma flip, call/put walls, regime — stored in SQLite on the `/data` volume
-  (`matrix_gex_snapshot` table). Retention: today + 3 prior sessions.
+- No background tasks: data is fetched when the browser asks. The old flow collector,
+  per-minute GEX snapshots and their SQLite store (`/data/matrix_flow.sqlite3`) were removed
+  on 2026-10-26; startup deletes that file if it is still there.
 - Endpoints:
-  - `GET /api/matrix/candles|cboe-data|flow` (original)
-  - `GET /api/matrix/symbol-search?q=MSFT` — searches the daily-cached official
-    Cboe option-symbol directory by ticker or company name.
+  - `GET /api/matrix/cboe-data` — core chains (Cboe OI + LSE volume, LSE REST spot).
+  - `GET /api/matrix/candles?symbol=&interval=&range=` — intraday candles.
+  - `GET /api/matrix/spx-quote` — Cboe delayed SPX quote.
   - `GET /api/matrix/symbol-data?symbol=MSFT` — daily-cached on-demand Cboe
-    OI/IV chain; subscribes the active stock to the existing LSE WebSocket.
-  - `GET /api/matrix/active-symbol?symbol=SPY` — clears the one dynamic stream
-    subscription when the UI returns to a core symbol.
-  - `GET /api/matrix/spots` — live spot per symbol (websocket or 50s-cached REST;
-  VIX has no LSE stream, so it comes from the cached CBOE delayed quote)
-  - `GET /api/matrix/gex-history?symbol=SPY&session_offset=1..3` — 1-min GEX history,
-    3 prior completed sessions (excludes today).
-- Frontend polls `/api/matrix/spots` every 1s and recomputes the in-browser GEX engine
-  (matrix.js) so levels move live; replay UI mirrors Net Drift & Flow.
+    OI/IV chain (Cboe delayed spot).
 
 ## How to deploy (any machine)
 
@@ -79,7 +67,7 @@ railway login                     # browser auth, once per machine
 cd railway-service
 railway link --project Tripity --environment production --service backend
 railway up                        # build + deploy; verify afterwards:
-curl https://api.trytripity.site/api/matrix/spots
+curl -s https://api.trytripity.site/api/matrix/cboe-data | head -c 200
 ```
 
 Gotchas learned the hard way (2026-07-19):
@@ -87,17 +75,11 @@ Gotchas learned the hard way (2026-07-19):
 - `railway.toml` startCommand must be `pip install . && python -m tripity_experiment.public_company_host`
   (runtime container ≠ build container; console scripts aren't on PATH).
 
-## Safety switches (env vars, no deploy needed)
-
-- `TRIPITY_MATRIX_STREAM_INDICES=0` → websocket back to SPY/QQQ only
-- `TRIPITY_MATRIX_GEX_SNAPSHOTS=0` → disable the snapshotter task
-- `TRIPITY_MATRIX_FLOW_COLLECTOR=0` → disable flow collector
-
 ## Health check routine
 
-1. `curl https://api.trytripity.site/api/matrix/spots` → `ok:true`, fresh `asof`
-2. `curl "https://api.trytripity.site/api/matrix/gex-history?symbol=SPY&session_offset=1"` → `ok:true`
-3. `railway logs -n 100` → no snapshot/websocket errors
+1. `curl https://api.trytripity.site/api/matrix/cboe-data` → JSON with `SPX`, `NDX`, `SPY`, `QQQ`
+2. Open https://api.trytripity.site/matrix/ → the GEX chart draws
+3. `railway logs -n 100` → no errors
 
 ## Rules for agents working on this repo
 
@@ -128,6 +110,39 @@ Gotchas learned the hard way (2026-07-19):
   the probe with references to them; read its result with `railway logs`. `backend` is
   untouched. Delete `tasty-probe` once the feed decision is made.
 - `--check` tests login, chain and stream at any hour; the full run needs market hours.
+
+### 2026-10-26 — Shell, menu and a path per screen (map #21, task #32)
+- **Frontend:** sidebar in Quant Power's order (the "Matrix" brand link is home = Strike
+  Chart, then OI Volume, GEX Analysis, Key Levels, P/C Ratio, How to use GEX, and
+  Disclaimer as its own link). Each screen has its own path under `/matrix/`, and the
+  ticker screens carry `?ticker=` so a link reopens the same state. Navigation uses
+  `history.pushState`, so Back/Forward work. Each ticker screen has its own ticker field
+  and Search button, and Enter is Search; on the Strike Chart that reloads the data
+  (core tickers from `cboe-data`, any other through `symbol-data`). Screens not built yet
+  show "Coming soon". On phones the menu folds behind a button.
+- **Removed:** the Live Data Health panel (and its 1 s UI timer), the stale-data banner,
+  favorites and the star, the search autocomplete list, the header badge and footer.
+- **Backend:** every screen path (with or without a trailing slash) serves `matrix.html`;
+  `/matrix?ticker=X` redirects to `/matrix/?ticker=X`. Removed
+  `/api/matrix/symbol-search` and its Cboe directory cache (only the deleted autocomplete
+  used it). CSS/JS are now linked by absolute `/matrix/...` paths.
+- **Tests:** route, menu-order and old-shell tests in `tests/test_matrix_routes.py`.
+  Checked in headless Chromium (desktop and 390 px) with recorded data.
+
+### 2026-10-26 — Delete everything Quant Power does not have (map #21, task #31)
+- **Frontend:** removed the DEX, VEX, CHEX, Market Structure, Exposure Lab, Net Drift &
+  Flow, Matrix GEX, Shock Engine, Max Pain, Review and Journal screens; the AVG Power
+  Zone, Weighted, sigma-range and DEX/VEX/CHEX chart controls; auto-refresh, the 1 s spot
+  poller, GEX Replay, the regime banner; and the Market, Mode, Data Source and Spot
+  Override controls with the synthetic demo chain. The GEX chart keeps the old defaults
+  (whole chain, spot ± 2 expected moves). A failed Refresh no longer retries on a timer.
+- **Backend:** removed `/api/matrix/flow|spots|gex-history|regime|active-symbol|journal*`,
+  the LSE WebSocket collector, the GEX snapshotter and the SQLite store; startup deletes
+  `matrix_flow.sqlite3`. The research modules (`matrix_gex`, `matrix_regime`,
+  `matrix_outcome`) stay for the tools/backtests. Env vars `TRIPITY_MATRIX_FLOW_COLLECTOR`,
+  `TRIPITY_MATRIX_GEX_SNAPSHOTS`, `TRIPITY_MATRIX_STREAM_INDICES` no longer do anything.
+- **Tests:** dropped the journal and GEX-history tests and the host regime test; added
+  `tests/test_matrix_routes.py`. Checked the page in headless Chromium with stub data.
 
 ### 2026-10-26 — LSE Data 3.0 migration
 - **Outage:** LSE retired its old REST API. `x_options_snapshot`/`x_candles_15m` answer
