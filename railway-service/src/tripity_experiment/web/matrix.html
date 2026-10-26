@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Matrix</title>
-<link rel="stylesheet" href="/matrix/matrix.css?v=20261026-oiv">
+<link rel="stylesheet" href="/matrix/matrix.css?v=20261026-oiv-pc">
 </head>
 <body>
 <header id="sidebar">
@@ -147,7 +147,28 @@
   </section>
 
   <section class="app-view" id="view-options-summary" data-title="P/C Ratio">
-    <div class="coming-soon"><h2>P/C Ratio</h2><p>Coming soon.</p></div>
+    <div class="card pc-card">
+      <h2 class="pc-title">P/C Ratio</h2>
+      <p class="pc-note">Put / call across all expirations, by open interest and by volume.</p>
+      <div class="pc-table-wrap">
+        <table class="pc-table" id="pcTable">
+          <thead>
+            <tr>
+              <th scope="col">Ticker</th>
+              <th scope="col">Spot</th>
+              <th scope="col">P/C OI</th>
+              <th scope="col">P/C Vol</th>
+              <th scope="col">Call OI</th>
+              <th scope="col">Put OI</th>
+              <th scope="col">Call Vol</th>
+              <th scope="col">Put Vol</th>
+            </tr>
+          </thead>
+          <tbody id="pcTableBody"></tbody>
+        </table>
+      </div>
+      <p class="pc-status" id="pcStatus" aria-live="polite"></p>
+    </div>
   </section>
 
   <section class="app-view" id="view-how-to-use-gex" data-title="How to use GEX">
@@ -159,6 +180,6 @@
   </section>
 </main>
 
-<script src="/matrix/matrix.js?v=20261026-oiv"></script>
+<script src="/matrix/matrix.js?v=20261026-oiv-pc"></script>
 </body>
 </html>

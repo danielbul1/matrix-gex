@@ -490,6 +490,9 @@ def _compact_matrix_options_payload(
     if not isinstance(options, list):
         raise ValueError(f"CBOE options response did not include options for {display_symbol}")
     compact_options: list[dict[str, Any]] = []
+    # P/C Ratio screen: call/put OI and volume over every live expiry and every
+    # strike, counted before the strike-range and zero-OI filters below.
+    totals = {"call_oi": 0, "put_oi": 0, "call_vol": 0, "put_vol": 0}
     for option in options:
         if not isinstance(option, dict):
             continue
@@ -499,6 +502,9 @@ def _compact_matrix_options_payload(
         root, expiration, call_put, strike = parsed
         if expiration < today:
             continue
+        side = "call" if call_put == "C" else "put"
+        totals[f"{side}_oi"] += max(0, int(option.get("open_interest") or 0))
+        totals[f"{side}_vol"] += max(0, int(option.get("volume") or 0))
         if spot and abs(strike - spot) / spot > MATRIX_STRIKE_RANGE:
             continue
         open_interest = option.get("open_interest") or 0
@@ -521,6 +527,7 @@ def _compact_matrix_options_payload(
         "asof": data.get("last_trade_time") or today.isoformat(),
         "mult": 100,
         "opts": compact_options,
+        "totals": totals,
     }
 
 
