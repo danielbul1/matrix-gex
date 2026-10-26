@@ -111,6 +111,21 @@ Gotchas learned the hard way (2026-07-19):
 
 ## Session Log (every agent MUST append — newest first)
 
+### 2026-10-26 — Tastytrade feed probe (not wired into the host)
+- **Why:** researched George (georgefi.trade), Quant Data and open-source GEX/flow
+  projects. What we lack is a real-time option trade tape; Tastytrade's API (free with
+  a funded account) streams it over DXLink. Its TimeAndSale event is not officially
+  supported, so `tools/tasty_probe.py` checks it before anything is built on it.
+- **Probe:** streams SPX 0DTE (±30 strikes) for N minutes and reports: quote lag
+  (real-time or delayed), tape coverage vs Trade day volume, bid/ask present on
+  prints, feed aggressor side vs side from quote, sweep-like clusters, Greeks cadence,
+  open interest. Needs `TASTY_CLIENT_SECRET` + `TASTY_REFRESH_TOKEN` (read scope);
+  `pip install "tastytrade>=13,<14"` (not in requirements.txt yet).
+- **Terms to respect:** personal use only, no display to third parties, no bulk
+  "data collection" (ToS §8) — stream near-the-money strikes, not whole chains.
+- **Not done:** not run yet (needs the owner's credentials during market hours);
+  nothing on Railway changed.
+
 ### 2026-10-26 — LSE Data 3.0 migration
 - **Outage:** LSE retired its old REST API. `x_options_snapshot`/`x_candles_15m` answer
   401/404 and `/vault/*` 410, so the Actions pipeline had committed nothing since
