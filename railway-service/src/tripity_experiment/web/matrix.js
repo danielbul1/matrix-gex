@@ -1678,13 +1678,14 @@ const gb = {symbol:null, record:null, candles:null, candlesError:'', expiries:[]
 let _gbRequest = 0;
 
 // ----- Numbers -----
-// Per-strike rows for a chain already cut to the selected expiries. The OI floor is the
-// GEX engine's (calcGEX), so the rows add up to its totals and levels.
+// Per-strike rows for a chain already cut to the selected expiries. Only contracts with
+// no open interest are dropped: the follower's board matched a reference board's strike
+// list exactly that way (Addendum 5). The Strike Chart's calcGEX keeps its own floor.
 function gexBoardStrikes(chain){
   const {spot, mult} = chain;
   const byStrike = new Map();
   for(const q of chain.quotes){
-    if(!(q.oi >= 10)) continue;
+    if(!(q.oi > 0)) continue;
     const gex = q.g.gamma * q.oi * mult * spot * spot * 0.01;
     const delta = Number.isFinite(q.g.delta) ? q.g.delta
       : calcGreeks(spot, q.K, q.T, q.iv>0 ? q.iv : 0.2, RISK_FREE, q.isCall).delta;
@@ -1725,9 +1726,12 @@ function computeGexBoard(symbol, record=gb.record, selected=gb.selected){
   const chain = {...full, quotes:full.quotes.filter(q=>selected.has(q.exp))};
   const R = calcGEX(chain);
   const spot = chain.spot;
-  const rows = gexBoardStrikes(chain).filter(s=>Math.abs(s.strike-spot)/spot<=GB_WINDOW);
+  const all = gexBoardStrikes(chain);
+  const rows = all.filter(s=>Math.abs(s.strike-spot)/spot<=GB_WINDOW);
+  // Total Gamma comes from the board's own rows, so it matches the table.
+  const totalGex = all.reduce((sum,s)=>sum+s.netGex,0);
   const powerZone = new Map(R.strikes.map(s=>[s.strike, s.powerZone||0]));
-  return {symbol, spot, R, rows, expiries:[...selected].sort(), lines:gexBoardPriceLines(rows, powerZone, spot)};
+  return {symbol, spot, R, rows, totalGex, expiries:[...selected].sort(), lines:gexBoardPriceLines(rows, powerZone, spot)};
 }
 function nearestStrike(rows, value){
   if(!Number.isFinite(value) || !rows.length) return null;
@@ -1787,7 +1791,7 @@ function renderGexBoardSpot(B){
   if(!el) return;
   const spot = `Spot: <b>${esc(B.spot.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}))}</b>`;
   if(!B.expiries.length){ el.innerHTML = `${spot} &nbsp;|&nbsp; Select at least one expiration &nbsp;|&nbsp; ${esc(B.symbol)}`; return; }
-  const total = B.R.totalGex, cls = total>=0 ? 'pos' : 'neg';
+  const total = B.totalGex, cls = total>=0 ? 'pos' : 'neg';
   el.innerHTML = [spot,
     `Total Gamma: <b class="${cls}">${esc(fmtGammaTotal(total))}</b>`,
     `Regime: <b class="${cls}">${total>=0 ? 'Positive' : 'Negative'}</b>`,

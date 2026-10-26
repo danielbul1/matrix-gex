@@ -247,7 +247,12 @@ check('Notional Delta counts calls and puts as positive', s2.notionalDelta > 0
   && Math.abs(s2.notionalDelta - (0.5 * s2.callOI + 0.5 * s2.putOI) * 100 * 6000) < 1e-3, `${s2.notionalDelta}`);
 const totalAg = gexBoardStrikes({ ...buildChainReal('SPX'), quotes: buildChainReal('SPX').quotes.filter(q => gb.selected.has(q.exp)) }).reduce((a, s) => a + s.ag, 0);
 check('% is Net GEX over the total AG', Math.abs(s2.pct - s2.netGex / totalAg * 100) < 1e-9);
-check('Total Gamma is the Net GEX of the selected expiries', Math.abs(B2.R.totalGex - 2 * B1.R.totalGex) < Math.abs(B1.R.totalGex) * 1e-9 + 1e-6);
+check('Total Gamma is the Net GEX of the selected expiries', Math.abs(B2.totalGex - 2 * B1.totalGex) < Math.abs(B1.totalGex) * 1e-9 + 1e-6);
+const lowOi = gexBoardStrikes({ spot: 100, mult: 100, quotes: [
+  { K: 100, isCall: true, oi: 3, vol: 1, exp: 'x', T: 0.01, iv: 0.2, g: { gamma: 0.05, delta: 0.5 } },
+  { K: 105, isCall: true, oi: 0, vol: 9, exp: 'x', T: 0.01, iv: 0.2, g: { gamma: 0.05, delta: 0.3 } },
+] });
+check('the board keeps any strike with open interest and drops only OI = 0', lowOi.length === 1 && lowOi[0].strike === 100);
 check('price lines are the six Price Lines (or fewer)', B2.lines.every(l => ['P1', 'N1', 'Call Vol', 'Put Vol', 'Matrix', 'AG Strike'].includes(l.label)));
 check('Matrix sits within 1% of spot', B2.lines.filter(l => l.label === 'Matrix').every(l => Math.abs(l.price - 6000) / 6000 <= 0.01));
 gb.sort = { key: 'strike', dir: 'desc' };
