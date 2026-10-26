@@ -56,8 +56,10 @@ MATRIX_LSE_PRICE_SYMBOLS = {
 MATRIX_LSE_TIMEFRAMES = {"1m": "1m", "5m": "5m", "15m": "15m", "30m": "30m", "60m": "1h"}
 MATRIX_LSE_RANGE_DAYS = {"1d": 4, "5d": 8, "1mo": 32}
 MATRIX_LSE_CANDLE_MAX_AGE_SECONDS = 4 * 24 * 3600  # spans a weekend plus a holiday
-MATRIX_CANDLE_SYMBOLS = set(MATRIX_LSE_PRICE_SYMBOLS)
-MATRIX_YAHOO_SYMBOLS = {"SPX": "^GSPC", "NDX": "^NDX"}
+# Any ticker the Strike Chart can search gets price candles: the core ones try
+# LSE first, everything else (and any LSE miss) goes to Yahoo.
+MATRIX_YAHOO_SYMBOLS = {"SPX": "^GSPC", "NDX": "^NDX", "VIX": "^VIX"}
+MATRIX_CANDLES_CACHE_MAX = 128
 MATRIX_CANDLE_INTERVALS = {"1m", "2m", "5m", "15m", "30m", "60m"}
 MATRIX_CBOE_SYMBOLS = (
     ("_NDX", "NDX"),
@@ -345,9 +347,7 @@ async def _fetch_matrix_candles_uncached(
     interval: str = "1m",
     range_: str = "1d",
 ) -> dict[str, Any]:
-    symbol = symbol.upper()
-    if symbol not in MATRIX_CANDLE_SYMBOLS:
-        raise ValueError("Unsupported candle symbol")
+    symbol = _matrix_dynamic_symbol(symbol)
     if interval not in MATRIX_CANDLE_INTERVALS:
         raise ValueError("Unsupported candle interval")
     api_key = _matrix_lse_api_key()
@@ -448,7 +448,7 @@ async def _fetch_matrix_candles(
     interval: str = "1m",
     range_: str = "1d",
 ) -> dict[str, Any]:
-    key = (symbol.upper(), interval, range_)
+    key = (_matrix_dynamic_symbol(symbol), interval, range_)
     now = time.time()
     cached = _matrix_candles_cache.get(key)
     if cached is not None and now - cached[0] < MATRIX_CANDLES_CACHE_SECONDS:
@@ -460,6 +460,8 @@ async def _fetch_matrix_candles(
             return cached[1]
         data = await _fetch_matrix_candles_uncached(symbol=symbol, interval=interval, range_=range_)
         _matrix_candles_cache[key] = (time.time(), data)
+        while len(_matrix_candles_cache) > MATRIX_CANDLES_CACHE_MAX:
+            _matrix_candles_cache.pop(next(iter(_matrix_candles_cache)))
         return data
 
 
@@ -1284,6 +1286,13 @@ class PublicCompanyApp:
                     *self._matrix_cors_headers(scope),
                     (b"cache-control", b"public, max-age=15"),
                 ],
+            )
+        except ValueError as exc:
+            await self._json(
+                send,
+                {"ok": False, "detail": str(exc)},
+                status=400,
+                headers=self._matrix_cors_headers(scope),
             )
         except Exception as exc:  # noqa: BLE001
             await self._json(

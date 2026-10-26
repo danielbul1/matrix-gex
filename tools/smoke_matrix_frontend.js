@@ -1,6 +1,7 @@
-/* Smoke test: load matrix.js with DOM stubs (offline), then verify
-   VIX AM-settlement, real VIX chain aggregation (netVex/netCharm),
-   OI-weighted strikes, and quick-select predicates. */
+/* Smoke test: load matrix.js with DOM stubs (offline), then check the Strike
+   Chart: AM settlement, a real SPX chain through the GEX engine, the
+   one-date expiration dropdown, the latest-session price candles and the
+   draw paths. Run from the repo root: node tools/smoke_matrix_frontend.js */
 const fs = require('fs');
 const vm = require('vm');
 
@@ -11,10 +12,11 @@ const absorb = new Proxy(function () {}, {
 });
 function makeEl(id) {
   return {
-    id, innerHTML: '', textContent: '', value: '2', disabled: false,
-    style: {}, dataset: {},
+    id, innerHTML: '', textContent: '', value: '', disabled: false,
+    style: {}, dataset: {}, elements: {},
     classList: { add() {}, remove() {}, toggle() {}, contains: () => false },
-    addEventListener() {}, appendChild() {},
+    addEventListener() {}, appendChild() {}, setAttribute() {}, removeAttribute() {},
+    querySelector: () => null,
     getContext: () => absorb, clientWidth: 900, clientHeight: 600,
     getBoundingClientRect: () => ({ left: 0, top: 0, width: 900, height: 600 }),
   };
@@ -23,13 +25,15 @@ const els = new Map();
 global.document = {
   hidden: true,
   getElementById: id => { if (!els.has(id)) els.set(id, makeEl(id)); return els.get(id); },
+  querySelector: () => null,
   querySelectorAll: () => [],
   createElement: () => makeEl('created'),
 };
 global.window = {
-  addEventListener() {}, innerWidth: 1280, innerHeight: 800,
-  devicePixelRatio: 1, location: { search: '' },
+  addEventListener() {}, scrollTo() {}, innerWidth: 1280, innerHeight: 800,
+  devicePixelRatio: 1, location: { pathname: '/matrix/', search: '' },
 };
+global.history = { pushState() {}, replaceState() {} };
 global.localStorage = { getItem: () => null, setItem() {} };
 global.fetch = () => Promise.reject(new Error('offline smoke test'));
 
@@ -47,93 +51,56 @@ const now = Date.UTC(2026, 6, 20, 12, 0, 0);
 const tVix = preciseYearsToExpiry('2026-07-22', 'VIX', now);
 const tVixw = preciseYearsToExpiry('2026-07-22', 'VIXW', now);
 const tSpy = preciseYearsToExpiry('2026-07-22', 'SPY', now);
-check('VIX is AM-settled (shorter T than PM-settled)', tVix < tSpy, `vix=${(tVix * 365.25 * 24).toFixed(1)}h spy=${(tSpy * 365.25 * 24).toFixed(1)}h`);
+check('VIX is AM-settled (shorter T than PM-settled)', tVix < tSpy);
 check('VIXW matches VIX AM settlement', tVix === tVixw);
 
-// --- 2. Real VIX chain through the engine ---
-const vix = JSON.parse(fs.readFileSync(process.env.TEMP + '/vix.json', 'utf8'));
-const OCC = /([A-Z]+)(\d{6})([CP])(\d{8})/;
-const today = new Date();
-const opts = [];
-for (const o of vix.data.options) {
-  const m = OCC.exec(o.option || '');
-  if (!m) continue;
-  const exp = `20${m[2].slice(0, 2)}-${m[2].slice(2, 4)}-${m[2].slice(4, 6)}`;
-  const dte = Math.max(0, Math.round((Date.parse(exp + 'T00:00:00Z') - Date.now()) / 86400000));
-  const spot = vix.data.current_price;
-  const strike = parseInt(m[4], 10) / 1000;
-  if (Math.abs(strike - spot) / spot > 0.25) continue;
-  if (!(o.open_interest > 0)) continue;
-  opts.push({ k: strike, t: m[3], root: m[1], exp, dte, iv: o.iv || 0, oi: o.open_interest | 0, vol: o.volume | 0, g: o.gamma || 0, d: o.delta || 0 });
-}
-const rec = { spot: vix.data.current_price, asof: new Date().toISOString(), mult: 100, opts, source: 'smoke' };
-const chain = buildChainRealFromRecord('VIX', rec, null);
-const R = calcGEX(chain, 'full');
-check('VIX chain parsed', opts.length > 100, `${opts.length} options kept (within +/-25% of spot)`);
-check('VIX strikes aggregated', R.strikes.length > 10, `${R.strikes.length} strikes`);
-const hasVex = R.strikes.some(s => Math.abs(s.netVex) > 0);
-const hasCharm = R.strikes.some(s => Math.abs(s.netCharm) > 0);
-check('netVex populated per strike', hasVex);
-check('netCharm populated per strike', hasCharm);
-const roots = new Set(opts.map(o => o.root));
-check('VIX+VIXW roots present', roots.has('VIX'), [...roots].join(','));
+// --- 2. Real SPX chain (repo snapshot) through the engine ---
+const snapshot = JSON.parse(fs.readFileSync('cboe_data.json', 'utf8'));
+const chain = buildChainRealFromRecord('SPX', snapshot.SPX);
+const R = calcGEX(chain);
+R.expectedMove = calcExpectedMove(chain);
+check('SPX chain parsed', chain.quotes.length > 1000, `${chain.quotes.length} quotes`);
+check('SPX strikes aggregated', R.strikes.length > 10, `${R.strikes.length} strikes`);
+check('Power Zone set per strike', R.strikes.every(s => Number.isFinite(s.powerZone)));
 
-// --- 3. OI-weighted strikes ---
-const w = oiWeightedStrikes(R);
-check('weighted strikes finite', Number.isFinite(w.call) && Number.isFinite(w.put) && Number.isFinite(w.total),
-  `call=${w.call?.toFixed(1)} put=${w.put?.toFixed(1)} total=${w.total?.toFixed(1)} spot=${R.spot}`);
-const ks = R.strikes.map(s => s.strike);
-check('weighted strikes within strike range',
-  w.call >= Math.min(...ks) && w.call <= Math.max(...ks) && w.total >= Math.min(...ks) && w.total <= Math.max(...ks));
+// --- 3. One expiration at a time, nearest by default ---
+check('nearest date is the default', pickExpiration(['2026-10-27', '2026-10-28'], null) === '2026-10-27');
+check('a listed date is kept', pickExpiration(['2026-10-27', '2026-10-28'], '2026-10-28') === '2026-10-28');
+check('an unlisted date falls back to the nearest', pickExpiration(['2026-10-27'], '2026-07-17') === '2026-10-27');
+check('no dates gives none', pickExpiration([], '2026-10-27') === null);
+const futureExp = chainExpirations({ quotes: [{ exp: '2099-01-02' }, { exp: '2000-01-01' }, { exp: '2099-01-01' }, { exp: '2099-01-01' }] });
+check('dropdown lists future dates once, sorted', JSON.stringify(futureExp) === '["2099-01-01","2099-01-02"]');
 
-// --- 4. Quick-select predicates ---
-check('0DTE predicate', expiryQuickPredicate('0dte')(0) === true && expiryQuickPredicate('0dte')(1) === false);
-check('Week predicate', expiryQuickPredicate('week')(7) === true && expiryQuickPredicate('week')(8) === false);
-check('All predicate', expiryQuickPredicate('all')(45) === true);
+// --- 4. Price charts keep the latest regular session ---
+const et = (day, hh, mm) => zonedDateTimeToUtc(2026, 10, day, hh, mm, 'America/New_York') / 1000;
+const bar = t => ({ time: t, open: 1, high: 2, low: 0.5, close: 1.5 });
+const session = latestSessionCandles([
+  bar(et(23, 15, 59)), bar(et(26, 9, 0)), bar(et(26, 9, 30)), bar(et(26, 15, 59)), bar(et(26, 16, 0)),
+  { time: et(26, 10, 0), open: null, high: 1, low: 1, close: 1 },
+]);
+check('only the last day, 09:30-16:00 ET', session.length === 2 && session[0].time === et(26, 9, 30) && session[1].time === et(26, 15, 59),
+  `${session.length} candles`);
+check('time label is New York time', fmtMarketTime(et(26, 9, 30)) === '09:30');
 
-// --- 5. METRICS wiring ---
-check('net_vex/net_charm bar metrics exist', METRICS.net_vex.kind === 'bar' && METRICS.net_charm.kind === 'bar');
-check('weighted is overlay kind', METRICS.weighted.kind === 'overlay');
-check('BAR_METRIC_BY_CHART maps vex/chex', BAR_METRIC_BY_CHART.vexChart === 'net_vex' && BAR_METRIC_BY_CHART.chexChart === 'net_charm');
-check('chartTargets vex/chex ids', chartTargets('vexChart').tooltipId === 'vexTooltip' && chartTargets('chexChart').legendId === 'chexChartLegend');
-check('Weighted overlay keeps only Total W', WEIGHTED_LINES.length === 1 && WEIGHTED_LINES[0].key === 'total');
+// --- 5. Strike Chart buttons ---
+check('seven parameter buttons', JSON.stringify(Object.keys(METRICS)) ===
+  '["net_gex","ag","call_oi","put_oi","call_vol","put_vol","power"]');
 
-// --- 5b. DEX|GEX|VEX|CHEX switcher on the main gexChart ---
-check('gexChart bar metric defaults to net_gex', chartBarMetricKey('gexChart') === 'net_gex' && GEX_CHART_BAR_METRIC === 'net_gex');
-check('fixed charts unchanged', chartBarMetricKey('dexChart') === 'net_dex' && chartBarMetricKey('matrixGexChart') === null);
-let switchOk = true;
-try {
-  for (const key of ['net_dex', 'net_vex', 'net_charm', 'net_gex']) {
-    GEX_CHART_BAR_METRIC = key;
-    const st = chartActiveMetrics('gexChart');
-    if (!st.hasBar || st.active[0] !== key) throw new Error(`bad active state for ${key}`);
-    if (st.active.some(m => BAR_METRIC_KEYS.includes(m) && m !== key)) throw new Error(`foreign bar metric leaked for ${key}`);
-    drawChart(R, 'gexChart');
-  }
-} catch (e) { switchOk = false; console.log('switcher error:', e.message); }
-check('switcher swaps gexChart bars (all 4 metrics, no-throw)', switchOk);
-GEX_CHART_BAR_METRIC = 'net_gex';
-const gexOff = (ACTIVE.delete('net_gex'), chartActiveMetrics('gexChart'));
-check('Net GEX pbtn still hides bars when GEX selected', gexOff.hasBar === false && !gexOff.active.includes('net_gex'));
-ACTIVE.add('net_gex');
-
-// --- 6. VEX/CHEX draw path does not throw (absorbing canvas stub) ---
+// --- 6. Draw paths do not throw (absorbing canvas stub) ---
 let drawOk = true;
 try {
-  drawChart(R, 'vexChart');
-  drawChart(R, 'chexChart');
-  renderGreekExposureKpis(R, 'vex');
-  renderGreekExposureKpis(R, 'chex');
-} catch (e) { drawOk = false; console.log('draw error:', e.message); }
-check('vex/chex draw + KPI render no-throw', drawOk);
-
-// --- 7. Weighted overlay draw path on gexChart ---
-let wOk = true;
-try {
-  ACTIVE.add('weighted');
+  ['ag', 'call_oi', 'put_oi', 'call_vol', 'put_vol', 'power'].forEach(m => ACTIVE.add(m));
   drawChart(R, 'gexChart');
-  ACTIVE.delete('weighted');
-} catch (e) { wOk = false; console.log('weighted draw error:', e.message); }
-check('weighted overlay draw no-throw', wOk);
+  PRICE.SPX = { candles: latestSessionCandles(JSON.parse(fs.readFileSync('candles_data.json', 'utf8')).SPX.candles) };
+  drawPriceCharts('SPX');
+  PRICE.XYZ = { error: 'No intraday prices for XYZ' };
+  drawPriceCharts('XYZ');
+  check('a ticker with no candles says so', byId('priceEmpty').textContent === 'No intraday prices for XYZ' && byId('priceChart')._matrixPrice === null);
+  drawPriceCharts('SPX');
+} catch (e) { drawOk = false; console.log('draw error:', e.message); }
+check('strike and price charts draw without errors', drawOk);
+check('price charts keep their candles for hover', PRICE.SPX.candles.length > 0 &&
+  byId('priceChart')._matrixPrice?.candles.length === PRICE.SPX.candles.length &&
+  byId('priceSimpleChart')._matrixPrice?.kind === 'line');
 
 process.exit(failures ? 1 : 0);
