@@ -230,3 +230,15 @@ def test_guide_has_his_structure():
     section = page[start:page.index("</section>", start)]
     for tag in ("<h2>", "<h3>", "<ul>", "<table>", "<strong>"):
         assert tag in section
+
+
+def test_power_zone_is_the_new_definition_everywhere():
+    """Build 9 (#39): Power Zone = AG/8 + volume x S^2/20000, near spot only; the
+    old score, AVG Power Zone and Power Range exist nowhere."""
+    script = (host.MATRIX_WEB_DIR / "matrix.js").read_text(encoding="utf-8")
+    page = (host.MATRIX_WEB_DIR / "matrix.html").read_text(encoding="utf-8")
+    assert "s.ag/8 + s.totalVol*spot*spot/20000" in script
+    assert "0.58*agScore" not in script
+    for gone in ("AVG Power Zone", "avgPowerZone", "Power Range", "power-range"):
+        assert gone not in script
+        assert gone not in page

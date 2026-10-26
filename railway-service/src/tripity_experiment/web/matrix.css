@@ -248,3 +248,7 @@
     .guide-page h1{font-size:26px}
     .guide-page h2{font-size:20px}
   }
+
+  /* Strike Chart price legend: one entry per Price Line */
+  .price-legend{flex-wrap:wrap;justify-content:flex-end;gap:8px;font-size:11px}
+  .price-legend > span{display:inline-flex;align-items:center;gap:4px;white-space:nowrap}
