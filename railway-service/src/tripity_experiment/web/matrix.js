@@ -269,7 +269,8 @@ function renderImpl(R){
 let ACTIVE = new Set(["net_gex","ag"]);
 // Strikes shown: spot +/- 2 expected moves.
 const DISPLAY_SIGMA = 2;
-// Power Zone is drawn, and the Matrix level found, only within 1% of spot (#24).
+// The Strike Chart shows, Power Zone is drawn on, and the Matrix level is found among,
+// only strikes within 1% of spot (#24, #39).
 const POWER_ZONE_WINDOW = 0.01;
 // The strikes an area layer is drawn on: all of them, or only those near spot.
 function layerPoints(M,data,spot){
@@ -297,9 +298,12 @@ function chartTargets(chartId){
   };
   return {canvasId:chartId, ...(map[chartId] || map.gexChart)};
 }
-function visibleStrikeData(R){
+// window: a fixed share of spot (the Strike Chart's ±1%); otherwise spot ± 2 expected moves.
+function visibleStrikeData(R,window=null){
   let visibleStrikes=[...R.strikes];
-  if(R.expectedMove>0){
+  if(window){
+    visibleStrikes=visibleStrikes.filter(s=>Math.abs(s.strike-R.spot)/R.spot<=window);
+  } else if(R.expectedMove>0){
     const radius=DISPLAY_SIGMA*R.expectedMove;
     visibleStrikes=visibleStrikes.filter(s=>Math.abs(s.strike-R.spot)<=radius);
   }
@@ -321,7 +325,8 @@ function drawChart(R,chartId='gexChart'){
   const ctx = cv.getContext('2d'); ctx.setTransform(dpr,0,0,dpr,0,0);
   ctx.clearRect(0,0,W,H);
 
-  const data=visibleStrikeData(R);
+  // Like his strike chart: only strikes within 1% of spot (about 27 SPX strikes, #39).
+  const data=visibleStrikeData(R,POWER_ZONE_WINDOW);
   if(!data.length) return;
 
   const metricsState=chartActiveMetrics();
@@ -465,8 +470,8 @@ function drawChart(R,chartId='gexChart'){
 // Draws a smoothed curve through pts (the pen already sits on pts[0]).
 // Catmull-Rom segments as Bezier curves, kept inside the plot so the fill never dips below zero.
 const SPLINE_SMOOTHING = 0.7;
-function splineTo(ctx,pts,top,bottom){
-  const k=SPLINE_SMOOTHING/6;
+function splineTo(ctx,pts,top,bottom,smoothing=SPLINE_SMOOTHING){
+  const k=smoothing/6;
   const clampY=y=>Math.max(top,Math.min(bottom,y));
   for(let i=0;i<pts.length-1;i++){
     const p0=pts[Math.max(0,i-1)], p1=pts[i], p2=pts[i+1], p3=pts[Math.min(pts.length-1,i+2)];
@@ -541,14 +546,18 @@ function hideChartTooltip(){
 // ---------- Price Lines ----------
 // The six strikes drawn across a price chart (CONTEXT "Price Line"). Each strike needs
 // netGex, callVol, putVol, ag and powerZone. Matrix looks only within 1% of spot.
+// chartLabel is how his price chart names each line (research Addendum 5); his magnet
+// label is the product name, so ours reads "Matrix" (#26).
 const PRICE_LINE_STYLES = [
-  {label:'P1',        color:'#22b8ff'},
-  {label:'N1',        color:'#ff453a'},
-  {label:'Call Vol',  color:'#2f73ff'},
-  {label:'Put Vol',   color:'#ff8a3d'},
-  {label:'Matrix',    color:'#ffc107'},
-  {label:'AG Strike', color:'#ab7df6'},
+  {label:'P1',        chartLabel:'P1 Strike',       color:'#22b8ff'},
+  {label:'N1',        chartLabel:'N1 Strike',       color:'#ff453a'},
+  {label:'Call Vol',  chartLabel:'Call Vol Strike', color:'#2f73ff'},
+  {label:'Put Vol',   chartLabel:'Put Vol Strike',  color:'#ff8a3d'},
+  {label:'Matrix',    chartLabel:'Matrix',          color:'#ffc107'},
+  {label:'AG Strike', chartLabel:'AG Strike',       color:'#ab7df6'},
 ];
+// His line values carry two decimals ("6800.00").
+function fmtLineValue(v){ return Number(v).toFixed(2); }
 function priceLines(strikes, spot){
   const top = (list,val)=>list.reduce((best,s)=>!best || val(s)>val(best) ? s : best, null);
   const near = strikes.filter(s=>Math.abs(s.strike-spot)/spot<=POWER_ZONE_WINDOW);
@@ -668,7 +677,7 @@ function drawPriceChart(chartId,symbol){
   const onChart=l=>Math.abs(l.price-levels.spot)/levels.spot<=PRICE_LINE_DISTANCE;
   const legend=byId(cfg.legendId);
   if(legend) legend.innerHTML=levels
-    ? levels.lines.map(l=>`<span><span class="sq" style="background:${l.color}"></span>${esc(l.label)} ${esc(fmtPrice(l.price))}${onChart(l)?'':' (off chart)'}</span>`).join('')
+    ? levels.lines.map(l=>`<span><span class="sq" style="background:${l.color}"></span>${esc(l.chartLabel)} ${esc(fmtLineValue(l.price))}${onChart(l)?'':' (off chart)'}</span>`).join('')
     : esc(cfg.legend);
   if(!candles.length) return;
 
@@ -732,19 +741,22 @@ function drawPriceChart(chartId,symbol){
     const prof=powerZoneProfile(levels.profile).filter(p=>p.price>=lo && p.price<=hi);
     const maxV=Math.max(...prof.map(p=>p.value),0);
     if(prof.length>1 && maxV>0){
-      const width=plotW*0.25, xv=v=>padL+v/maxV*width;
-      ctx.beginPath(); ctx.moveTo(padL,y(prof[0].price));
-      prof.forEach(p=>ctx.lineTo(xv(p.value),y(p.price)));
-      ctx.lineTo(padL,y(prof[prof.length-1].price)); ctx.closePath();
-      ctx.fillStyle='rgba(255,255,0,0.2)'; ctx.fill();
-      ctx.beginPath(); prof.forEach((p,i)=>i?ctx.lineTo(xv(p.value),y(p.price)):ctx.moveTo(xv(p.value),y(p.price)));
+      // A smoothed line (0.8, like his) of width 2 with a translucent fill to the left edge.
+      const width=plotW*0.25;
+      const pts=prof.map(p=>[padL+p.value/maxV*width, y(p.price)]);
+      ctx.beginPath(); ctx.moveTo(padL,pts[0][1]); ctx.lineTo(pts[0][0],pts[0][1]);
+      splineTo(ctx,pts,top,bottom,0.8);
+      ctx.lineTo(padL,pts[pts.length-1][1]); ctx.closePath();
+      ctx.fillStyle='rgba(255,193,7,0.2)'; ctx.fill();
+      ctx.beginPath(); ctx.moveTo(pts[0][0],pts[0][1]);
+      splineTo(ctx,pts,top,bottom,0.8);
       ctx.strokeStyle='#ffc107'; ctx.lineWidth=2; ctx.stroke();
     }
     // The Price Lines; lines on the same strike share one line and one label.
     const groups=[];
     shownLines.forEach(l=>{
       const g=groups.find(o=>o.price===l.price);
-      if(g) g.labels.push(l.label); else groups.push({price:l.price, color:l.color, labels:[l.label]});
+      if(g) g.labels.push(l.chartLabel); else groups.push({price:l.price, color:l.color, labels:[l.chartLabel]});
     });
     ctx.font=mobile?'bold 10px Segoe UI':'bold 11px Segoe UI'; ctx.textAlign='right'; ctx.textBaseline='bottom';
     const labelYs=[];
@@ -756,7 +768,7 @@ function drawPriceChart(chartId,symbol){
       while(labelYs.some(o=>Math.abs(o-ly)<12)) ly+=12;
       labelYs.push(ly);
       ctx.fillStyle=g.color;
-      ctx.fillText(`${g.labels.join(' · ')} ${fmtPrice(g.price)}`, W-padR-4, ly);
+      ctx.fillText(`${g.labels.join(' · ')} ${fmtLineValue(g.price)}`, W-padR-4, ly);
     });
   }
   ctx.strokeStyle='rgba(255,255,255,.18)'; ctx.lineWidth=1;
@@ -2035,12 +2047,12 @@ function drawGexBoardPrice(B){
   const {cv, ctx, W, H, mobile} = c;
   const legend = byId('gbPriceLegend');
   const onChart = l=>Math.abs(l.price-B.spot)/B.spot<=GB_PRICE_LINE_DISTANCE;
-  if(legend) legend.innerHTML = B.lines.map(l=>`<span><span class="sq" style="background:${l.color}"></span>${esc(l.label)} ${esc(fmtStrike(l.price))}${onChart(l)?'':' (off chart)'}</span>`).join('');
+  if(legend) legend.innerHTML = B.lines.map(l=>`<span><span class="sq" style="background:${l.color}"></span>${esc(l.chartLabel)} ${esc(fmtLineValue(l.price))}${onChart(l)?'':' (off chart)'}</span>`).join('');
   // Lines on the same strike share one dashed line and one label.
   const groups = [];
   B.lines.filter(onChart).forEach(l=>{
     const g = groups.find(o=>o.price===l.price);
-    if(g) g.labels.push(l.label); else groups.push({price:l.price, color:l.color, labels:[l.label]});
+    if(g) g.labels.push(l.chartLabel); else groups.push({price:l.price, color:l.color, labels:[l.chartLabel]});
   });
   const candles = gb.candles || [];
   setGbEmpty('Price', candles.length ? '' : (gb.candlesError || `No intraday prices for ${B.symbol}`));
@@ -2081,7 +2093,7 @@ function drawGexBoardPrice(B){
     while(labelYs.some(o=>Math.abs(o-ly)<11)) ly += 11;
     labelYs.push(ly);
     ctx.fillStyle = g.color; ctx.textAlign = 'left'; ctx.textBaseline = 'bottom';
-    ctx.fillText(`${g.labels.join(' · ')} ${fmtStrike(g.price)}`, padL+4, ly);
+    ctx.fillText(`${g.labels.join(' · ')} ${fmtLineValue(g.price)}`, padL+4, ly);
   });
   ctx.fillStyle = '#c4c4c4'; ctx.textBaseline = 'top';
   const every = Math.max(1, Math.ceil(candles.length/(mobile?4:5)));

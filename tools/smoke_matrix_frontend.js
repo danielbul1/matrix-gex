@@ -301,6 +301,17 @@ check('GEX Board reads its own copy of the chain', computeGexBoard('SPX').spot =
   check('six Price Lines in order', PL.map(l => l.label).join() === 'P1,N1,Call Vol,Put Vol,Matrix,AG Strike');
   check('Price Lines pick the right strikes', PL.map(l => l.price).join() === '6070,5950,6070,5950,5995,6070', PL.map(l => l.price).join());
   check('Matrix ignores strikes beyond 1% of spot', PL.find(l => l.label === 'Matrix').price === 5995);
+  const zeroVol = calcGEX({ symbol: 'SPX', spot: 6000, mult: 100, quotes: [
+    { K: 5990, isCall: false, oi: 400, vol: 0, exp: 'x', g: { gamma: 0.002 } },
+    { K: 6000, isCall: true, oi: 900, vol: 0, exp: 'x', g: { gamma: 0.002 } },
+    { K: 6010, isCall: true, oi: 300, vol: 0, exp: 'x', g: { gamma: 0.002 } },
+  ] }).strikes;
+  const pzPeak = zeroVol.reduce((b, s) => s.powerZone > b.powerZone ? s : b), agPeak = zeroVol.reduce((b, s) => s.ag > b.ag ? s : b);
+  check('with no volume the Power Zone peak is the AG Strike', pzPeak.strike === agPeak.strike && pzPeak.strike === 6000);
+  check('his chart labels and two decimals', PL.map(l => l.chartLabel).join() === 'P1 Strike,N1 Strike,Call Vol Strike,Put Vol Strike,Matrix,AG Strike'
+    && fmtLineValue(6800) === '6800.00');
+  check('the Strike Chart shows only strikes within 1% of spot',
+    visibleStrikeData({ spot: 6000, strikes: [5900, 5945, 6000, 6060, 6100].map(strike => ({ strike })) }, POWER_ZONE_WINDOW).map(s => s.strike).join() === '5945,6000,6060');
   const prof = powerZoneProfile([{ strike: 6000, powerZone: 10 }, { strike: 6005, powerZone: 20 }]);
   check('Power Zone profile is sampled every $2.50', prof.map(p => p.price).join() === '6000,6002.5,6005' && prof[1].value === 15);
   REAL.SPX = synthRecord(6000, [exp0, exp1]);
