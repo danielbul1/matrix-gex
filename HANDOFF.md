@@ -93,6 +93,15 @@ Gotchas learned the hard way (2026-07-19):
 
 ## Session Log (every agent MUST append — newest first)
 
+### 2026-10-26 — Glossary: Strike Window (grilling session, no code change)
+- **Docs:** `CONTEXT.md` gains "Strike Window": the Strike Chart draws about 1% of spot for
+  an index (SPX, NDX) and about 3% for anything else, like his 2026 thumbnails
+  (SPY about ±3%, SPX about ±1.1%). Power Zone is still computed within 1%.
+- **Agreed, not built yet:** his sidebar look (plain white links, 10% wide, our fold-out
+  menu kept on phones), his cyan-to-blue Search button and heading gradient, no chart
+  gridlines, the per-ticker Strike Window, and a research note on his design system.
+  Price Lines and Key Levels keep following the chosen expiry.
+
 ### 2026-10-26 — Shell, menu and a path per screen (map #21, task #32)
 - **Frontend:** sidebar in Quant Power's order (the "Matrix" brand link is home = Strike
   Chart, then OI Volume, GEX Analysis, Key Levels, P/C Ratio, How to use GEX, and

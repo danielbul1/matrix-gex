@@ -90,6 +90,10 @@ _Avoid_: test set, out-of-sample, OOS
 The home screen: one ticker and one expiry, with Net GEX, AG, OI, volume and Power Zone drawn per strike beside the price.
 _Avoid_: GEX view, main chart
 
+**Strike Window**:
+The strikes the Strike Chart draws around spot. Its width depends on the ticker: about 1% of spot for an index (SPX, NDX) and about 3% for anything else (SPY, QQQ, single stocks). It is separate from the 1% within which Power Zone is computed.
+_Avoid_: range, zoom, visible strikes
+
 **OI Volume**:
 The screen that shows one ticker and one expiry with Volume Spread, call and put OI and call and put volume per strike, and an intraday price chart with a line at the strike of the most call OI, put OI, call volume and put volume.
 _Avoid_: OI page, volume view
