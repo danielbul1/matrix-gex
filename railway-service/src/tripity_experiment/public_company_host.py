@@ -38,9 +38,6 @@ DEFAULT_OPENAPI_URL = "https://petstore3.swagger.io/api/v3/openapi.json"
 DEFAULT_COMPANY_NAME = "Swagger Petstore"
 MATRIX_SPX_QUOTE_URL = "https://cdn-api.cboe.com/api/global/delayed_quotes/quotes/_SPX.json"
 MATRIX_OPTIONS_URL = "https://cdn-api.cboe.com/api/global/delayed_quotes/options/{}.json"
-MATRIX_CBOE_SYMBOL_DIRECTORY_URL = (
-    "https://www.cboe.com/us/options/symboldir/equity_index_options/?download=csv"
-)
 MATRIX_YAHOO_CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{}"
 # LSE Data 3.0 (the /vault and x_* calls are gone: 410/404 since 2026-10).
 # Free plan: 60 calls a minute and one export download at a time per key.
@@ -77,7 +74,6 @@ MATRIX_CORS_ORIGINS = {
 MATRIX_OCC = re.compile(r"([A-Z]+)(\d{6})([CP])(\d{8})")
 MATRIX_STRIKE_RANGE = 0.25
 MATRIX_CBOE_DATA_CACHE_SECONDS = 120.0
-MATRIX_SYMBOL_CATALOG_CACHE_SECONDS = 86400.0
 MATRIX_DYNAMIC_CHAIN_CACHE_MAX = 64
 MATRIX_DYNAMIC_CHAIN_FETCHES_PER_MINUTE = 12
 MATRIX_MARKET_DATA_CACHE_SECONDS = 300.0
@@ -88,13 +84,17 @@ MATRIX_WEB_DIR = (
     if (_MATRIX_PACKAGED_WEB_DIR / "matrix.html").exists()
     else Path.cwd() / "src" / "tripity_experiment" / "web"
 )
+# Every Matrix screen has its own path; all of them serve the same matrix.html,
+# which picks the screen from the path (map #21, "בנייה 2").
+MATRIX_SCREEN_PATHS = frozenset(
+    "/matrix" + ("/" + screen if screen else "")
+    for screen in ("", "oi-volume", "gex-analysis", "key-levels", "options-summary", "how-to-use-gex", "disclaimer")
+)
 _matrix_cboe_data_cache: tuple[float, dict[str, Any]] | None = None
 _matrix_cboe_data_lock = asyncio.Lock()
 _matrix_dynamic_chain_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 _matrix_dynamic_chain_lock = asyncio.Lock()
 _matrix_dynamic_chain_fetches: list[float] = []
-_matrix_symbol_catalog_cache: tuple[float, list[dict[str, str]]] | None = None
-_matrix_symbol_catalog_lock = asyncio.Lock()
 _matrix_market_data_cache: tuple[float, dict[str, Any]] | None = None
 _matrix_market_data_lock = asyncio.Lock()
 _matrix_candles_cache: dict[tuple[str, str, str], tuple[float, dict[str, Any]]] = {}
@@ -594,80 +594,6 @@ class MatrixDynamicRateLimitError(RuntimeError):
     pass
 
 
-async def _fetch_matrix_symbol_catalog() -> list[dict[str, str]]:
-    global _matrix_symbol_catalog_cache
-    now = time.time()
-    if (
-        _matrix_symbol_catalog_cache is not None
-        and now - _matrix_symbol_catalog_cache[0] < MATRIX_SYMBOL_CATALOG_CACHE_SECONDS
-    ):
-        return _matrix_symbol_catalog_cache[1]
-    async with _matrix_symbol_catalog_lock:
-        now = time.time()
-        if (
-            _matrix_symbol_catalog_cache is not None
-            and now - _matrix_symbol_catalog_cache[0] < MATRIX_SYMBOL_CATALOG_CACHE_SECONDS
-        ):
-            return _matrix_symbol_catalog_cache[1]
-        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
-            response = await client.get(
-                MATRIX_CBOE_SYMBOL_DIRECTORY_URL,
-                headers={"User-Agent": "Tripity Matrix symbol search (+https://trytripity.site)"},
-            )
-            response.raise_for_status()
-        rows: list[dict[str, str]] = []
-        for row in csv.DictReader(io.StringIO(response.text.lstrip("\ufeff"))):
-            symbol = str(row.get(" Stock Symbol") or row.get("Stock Symbol") or "").upper().strip()
-            name = str(row.get("Company Name") or "").strip()
-            if not symbol or not name:
-                continue
-            try:
-                symbol = _matrix_dynamic_symbol(symbol)
-            except ValueError:
-                continue
-            rows.append({"symbol": symbol, "name": name})
-        if not rows:
-            raise ValueError("CBOE symbol directory returned no symbols")
-        _matrix_symbol_catalog_cache = (time.time(), rows)
-        return rows
-
-
-async def _search_matrix_symbols(query: str, limit: int = 12) -> list[dict[str, str]]:
-    text = query.strip()[:80]
-    if not text:
-        return []
-    upper = text.upper()
-    try:
-        catalog = await _fetch_matrix_symbol_catalog()
-    except (httpx.HTTPError, ValueError):
-        catalog = []
-    ranked: list[tuple[int, str, str, dict[str, str]]] = []
-    for item in catalog:
-        symbol = item["symbol"]
-        name = item["name"]
-        name_upper = name.upper()
-        if symbol == upper:
-            score = 0
-        elif symbol.startswith(upper):
-            score = 1
-        elif upper in symbol:
-            score = 2
-        elif name_upper.startswith(upper):
-            score = 3
-        elif upper in name_upper:
-            score = 4
-        else:
-            continue
-        ranked.append((score, symbol, name_upper, item))
-    ranked.sort(key=lambda item: (item[0], len(item[1]), item[1], item[2]))
-    results = [item[3] for item in ranked[: max(1, min(limit, 20))]]
-    if re.fullmatch(r"[A-Z][A-Z0-9.-]{0,5}", upper) and not any(
-        item["symbol"] == upper for item in results
-    ):
-        results.insert(0, {"symbol": upper, "name": "Load exact symbol"})
-    return results[: max(1, min(limit, 20))]
-
-
 async def _fetch_matrix_dynamic_chain(symbol: str) -> dict[str, Any]:
     symbol = _matrix_dynamic_symbol(symbol)
     now = time.time()
@@ -1019,21 +945,25 @@ class PublicCompanyApp:
             await self._response(send, 200, CREATE_PAGE.encode("utf-8"), b"text/html; charset=utf-8")
             return
         if method == "GET" and path == "/matrix":
+            query = scope.get("query_string", b"")
             await self._response(
                 send,
                 307,
                 b"",
                 b"text/plain; charset=utf-8",
-                headers=[(b"location", b"/matrix/")],
+                headers=[(b"location", b"/matrix/" + (b"?" + query if query else b""))],
             )
             return
         matrix_static = {
-            "/matrix/": ("matrix.html", b"text/html; charset=utf-8"),
             "/matrix/matrix.css": ("matrix.css", b"text/css; charset=utf-8"),
             "/matrix/matrix.js": ("matrix.js", b"text/javascript; charset=utf-8"),
         }
-        if method == "GET" and path in matrix_static:
-            filename, content_type = matrix_static[path]
+        if path.rstrip("/") in MATRIX_SCREEN_PATHS:
+            matrix_file = ("matrix.html", b"text/html; charset=utf-8")
+        else:
+            matrix_file = matrix_static.get(path)
+        if method == "GET" and matrix_file:
+            filename, content_type = matrix_file
             await self._response(
                 send,
                 200,
@@ -1082,19 +1012,6 @@ class PublicCompanyApp:
                 return
             if method == "GET":
                 await self._matrix_cboe_data(scope, send)
-                return
-        if path == "/api/matrix/symbol-search":
-            if method == "OPTIONS":
-                await self._response(
-                    send,
-                    204,
-                    b"",
-                    b"text/plain; charset=utf-8",
-                    headers=self._matrix_cors_headers(scope),
-                )
-                return
-            if method == "GET":
-                await self._matrix_symbol_search(scope, send)
                 return
         if path == "/api/matrix/symbol-data":
             if method == "OPTIONS":
@@ -1308,27 +1225,6 @@ class PublicCompanyApp:
                 headers=[
                     *self._matrix_cors_headers(scope),
                     (b"cache-control", b"public, max-age=30"),
-                ],
-            )
-        except Exception as exc:  # noqa: BLE001
-            await self._json(
-                send,
-                {"ok": False, "detail": str(exc)},
-                status=502,
-                headers=self._matrix_cors_headers(scope),
-            )
-
-    async def _matrix_symbol_search(self, scope: dict[str, Any], send: Any) -> None:
-        try:
-            query = parse_qs(scope.get("query_string", b"").decode("latin1"))
-            text = (query.get("q") or [""])[0]
-            items = await _search_matrix_symbols(text)
-            await self._json(
-                send,
-                {"ok": True, "query": text, "items": items},
-                headers=[
-                    *self._matrix_cors_headers(scope),
-                    (b"cache-control", b"public, max-age=300"),
                 ],
             )
         except Exception as exc:  # noqa: BLE001

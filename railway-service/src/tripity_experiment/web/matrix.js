@@ -294,10 +294,6 @@ const VIEW_RENDERERS = {
 };
 function renderImpl(R){
   window._lastR=R;
-  const badge=document.getElementById('srcBadge');
-  const nowClient=new Date().toLocaleTimeString('he-IL');
-  badge.style.color="var(--green)"; badge.style.borderColor="var(--green)";
-  badge.textContent=`LIVE - ${R.source||'Tripity'} · data ${R.asof||''} · refreshed ${nowClient}`;
   const viewRenderer=VIEW_RENDERERS[activeView];
   if(viewRenderer) viewRenderer(R);
 }
@@ -554,9 +550,20 @@ function showChartTooltip(ev){
 function hideChartTooltip(){
   ['chartTooltip','chartCrosshairX'].forEach(id=>{const el=byId(id); if(el) el.style.display='none';});
 }
-// ---------- Wiring ----------
-let activeView = 'gex';
-const selectedExpirationsByView = {gex:null};
+// ---------- Screens and routes ----------
+// One page serves every screen: the path picks the screen and ?ticker= its ticker,
+// so a copied link opens the same screen on the same ticker.
+const MATRIX_BASE_PATH = '/matrix/';
+const SCREENS = {
+  'gex':             {path:'',                ticker:true},
+  'oi-volume':       {path:'oi-volume',       ticker:true},
+  'gex-analysis':    {path:'gex-analysis',    ticker:true},
+  'key-levels':      {path:'key-levels',      ticker:true},
+  'options-summary': {path:'options-summary', ticker:false},
+  'how-to-use-gex':  {path:'how-to-use-gex',  ticker:false},
+  'disclaimer':      {path:'disclaimer',      ticker:false},
+};
+const HOME_VIEW = 'gex';
 const CORE_SYMBOL_INFO = {
   NDX:'Nasdaq-100 Index',
   SPX:'S&P 500 Index',
@@ -564,165 +571,52 @@ const CORE_SYMBOL_INFO = {
   QQQ:'Invesco QQQ Trust',
   VIX:'Cboe Volatility Index',
 };
-const FAVORITES_STORE_KEY = 'matrix-symbol-favorites-v1';
+const TICKER_PATTERN = /^[A-Z][A-Z0-9.-]{0,5}$/;
 const DYNAMIC_SYMBOLS = new Set();
-const SYMBOL_NAMES = new Map(Object.entries(CORE_SYMBOL_INFO));
-let _symbolSearchTimer=null;
-let _symbolSearchSequence=0;
-function currentExpirationValues(){
-  return [...document.querySelectorAll('#expirationPicker input:checked')].map(input=>input.value);
-}
-function saveCurrentExpirationSelection(){
-  if(selectedExpirationsByView.hasOwnProperty(activeView)){
-    selectedExpirationsByView[activeView] = currentExpirationValues();
-  }
-}
-function populateSymbols(){
-  const sel=document.getElementById('symbol');
-  const current=sel.value || DEFAULT_SYMBOL;
-  sel.innerHTML="";
-  Object.keys(SYMBOLS).forEach(k=>{
-    const o=document.createElement('option');o.value=k;o.textContent=k;sel.appendChild(o);
-  });
-  readSymbolFavorites().forEach(item=>{
-    SYMBOL_NAMES.set(item.symbol,item.name || item.symbol);
-    ensureSymbolOption(item.symbol);
-  });
-  sel.value=[...sel.options].some(option=>option.value===current)?current:DEFAULT_SYMBOL;
-  const search=document.getElementById('symbolSearch');
-  if(search) search.value=sel.value;
-  renderSymbolFavorites();
-  syncSymbolFavoriteButton();
-}
+let activeView = null;
+// Each screen keeps its own ticker, the way each of his screens has its own ticker input.
+const screenTickers = Object.fromEntries(
+  Object.keys(SCREENS).filter(view=>SCREENS[view].ticker).map(view=>[view,DEFAULT_SYMBOL])
+);
+let selectedExpirations = null;
+
 function normalizeSymbol(value){
   return String(value||'').trim().toUpperCase();
 }
-function readSymbolFavorites(){
-  try{
-    const rows=JSON.parse(localStorage.getItem(FAVORITES_STORE_KEY)||'[]');
-    return Array.isArray(rows) ? rows.filter(row=>row&&/^[A-Z][A-Z0-9.-]{0,5}$/.test(row.symbol)).slice(0,40) : [];
-  }catch(_err){
-    return [];
-  }
+function validTicker(value){
+  return TICKER_PATTERN.test(value);
 }
-function writeSymbolFavorites(rows){
-  localStorage.setItem(FAVORITES_STORE_KEY,JSON.stringify(rows.slice(0,40)));
+function isCoreSymbol(symbol){
+  return Object.prototype.hasOwnProperty.call(CORE_SYMBOL_INFO,symbol);
 }
-function ensureSymbolOption(symbol){
-  const sel=document.getElementById('symbol');
-  if(!sel || [...sel.options].some(option=>option.value===symbol)) return;
-  const option=document.createElement('option');
-  option.value=symbol;
-  option.textContent=symbol;
-  sel.appendChild(option);
+function viewFromPath(pathname){
+  const rest=String(pathname||'').replace(/^\/matrix\/?/,'').replace(/\/+$/,'');
+  return Object.keys(SCREENS).find(view=>SCREENS[view].path===rest) || HOME_VIEW;
 }
-function renderSymbolFavorites(){
-  const host=document.getElementById('symbolFavorites');
-  if(!host) return;
-  const current=document.getElementById('symbol')?.value;
-  const favorites=readSymbolFavorites();
-  const quick=[...new Set([...favorites.map(item=>item.symbol),'NDX','SPX','SPY','QQQ'])];
-  host.innerHTML=quick.map(symbol=>`<button type="button" class="symbol-favorite-chip ${symbol===current?'current':''}" data-symbol-chip="${esc(symbol)}" title="${esc(SYMBOL_NAMES.get(symbol)||symbol)}">${esc(symbol)}</button>`).join('');
+function screenUrl(view){
+  const url=MATRIX_BASE_PATH+SCREENS[view].path;
+  return SCREENS[view].ticker ? `${url}?ticker=${encodeURIComponent(screenTickers[view])}` : url;
 }
-function syncSymbolFavoriteButton(){
-  const button=document.getElementById('symbolFavorite');
-  if(!button) return;
-  const symbol=document.getElementById('symbol')?.value;
-  const active=readSymbolFavorites().some(item=>item.symbol===symbol);
-  button.classList.toggle('active',active);
-  button.textContent=active?'★':'☆';
-  button.title=active?'Remove current symbol from favorites':'Add current symbol to favorites';
-  button.setAttribute('aria-label',button.title);
+function currentSymbol(){
+  return screenTickers[HOME_VIEW];
 }
-function setSymbolSearchStatus(text='',state=''){
-  const status=document.getElementById('symbolSearchStatus');
+function screenForm(view){
+  return document.querySelector(`.ticker-form[data-screen="${view}"]`);
+}
+function setTickerStatus(view,text='',state=''){
+  const status=screenForm(view)?.querySelector('.ticker-status');
   if(!status) return;
   status.textContent=text;
-  status.className=`symbol-search-status${state?' '+state:''}`;
+  status.className=`ticker-status${state?' '+state:''}`;
 }
-function localSymbolResults(query=''){
-  const upper=normalizeSymbol(query);
-  const symbols=[...new Set([...readSymbolFavorites().map(item=>item.symbol),...Object.keys(CORE_SYMBOL_INFO)])];
-  return symbols.filter(symbol=>{
-    const name=SYMBOL_NAMES.get(symbol)||'';
-    return !upper || symbol.includes(upper) || name.toUpperCase().includes(upper);
-  }).map(symbol=>({symbol,name:SYMBOL_NAMES.get(symbol)||symbol}));
+function syncTickerInput(view,value=screenTickers[view]){
+  const input=screenForm(view)?.elements.ticker;
+  if(input && value) input.value=value;
 }
-function renderSymbolSearchResults(items){
-  const host=document.getElementById('symbolSearchResults');
-  if(!host) return;
-  host.innerHTML=items.map((item,index)=>`<button type="button" class="symbol-search-result${index===0?' active':''}" role="option" data-symbol-result="${esc(item.symbol)}" data-symbol-name="${esc(item.name||item.symbol)}"><b>${esc(item.symbol)}</b><span>${esc(item.name||'Option symbol')}</span></button>`).join('');
-  host.hidden=!items.length;
-  document.getElementById('symbolSearch')?.setAttribute('aria-expanded',items.length?'true':'false');
-}
-function closeSymbolSearchResults(){
-  const host=document.getElementById('symbolSearchResults');
-  if(host) host.hidden=true;
-  document.getElementById('symbolSearch')?.setAttribute('aria-expanded','false');
-}
-function searchSymbols(query){
-  const text=String(query||'').trim();
-  clearTimeout(_symbolSearchTimer);
-  if(!text){
-    renderSymbolSearchResults(localSymbolResults());
-    setSymbolSearchStatus('Favorites and core symbols');
-    return;
-  }
-  const local=localSymbolResults(text);
-  renderSymbolSearchResults(local);
-  setSymbolSearchStatus('Searching Cboe symbols…');
-  const sequence=++_symbolSearchSequence;
-  _symbolSearchTimer=setTimeout(async()=>{
-    const payload=await fetchLiveData(`${MATRIX_SYMBOL_SEARCH_URL}?q=${encodeURIComponent(text)}`);
-    if(sequence!==_symbolSearchSequence) return;
-    const remote=payload?.ok&&Array.isArray(payload.items)?payload.items:[];
-    const merged=[...local];
-    remote.forEach(item=>{
-      const symbol=normalizeSymbol(item.symbol);
-      if(!symbol || merged.some(row=>row.symbol===symbol)) return;
-      merged.push({symbol,name:item.name||symbol});
-    });
-    renderSymbolSearchResults(merged.slice(0,12));
-    setSymbolSearchStatus(merged.length?`${merged.length} option symbols found`:'No matching option symbols','');
-  },250);
-}
-function selectMatrixSymbol(symbol,name=''){
-  symbol=normalizeSymbol(symbol);
-  if(!/^[A-Z][A-Z0-9.-]{0,5}$/.test(symbol)) return Promise.resolve(false);
-  _symbolSearchSequence++;
-  const previousSymbol=document.getElementById('symbol')?.value || DEFAULT_SYMBOL;
-  if(name) SYMBOL_NAMES.set(symbol,name);
-  ensureSymbolOption(symbol);
-  document.getElementById('symbol').value=symbol;
-  document.getElementById('symbolSearch').value=symbol;
-  document.getElementById('expirationPicker').innerHTML='';
-  resetExpirationSelections();
-  closeSymbolSearchResults();
-  renderSymbolFavorites();
-  syncSymbolFavoriteButton();
-  const isCore=Object.prototype.hasOwnProperty.call(CORE_SYMBOL_INFO,symbol);
-  if(isCore){
-    setSymbolSearchStatus(SYMBOL_NAMES.get(symbol)||symbol);
-    if(REAL[symbol]) run();
-    else loadData(true);
-    return Promise.resolve(true);
-  }
-  document.getElementById('symbol').value=previousSymbol;
-  renderSymbolFavorites();
-  syncSymbolFavoriteButton();
-  DYNAMIC_SYMBOLS.add(symbol);
-  return loadDynamicSymbol(symbol,true);
-}
-function toggleCurrentSymbolFavorite(){
-  const symbol=document.getElementById('symbol')?.value;
-  if(!symbol) return;
-  const rows=readSymbolFavorites();
-  const index=rows.findIndex(item=>item.symbol===symbol);
-  if(index>=0) rows.splice(index,1);
-  else rows.unshift({symbol,name:SYMBOL_NAMES.get(symbol)||symbol});
-  writeSymbolFavorites(rows);
-  renderSymbolFavorites();
-  syncSymbolFavoriteButton();
+
+// ---------- Expirations (Strike Chart) ----------
+function currentExpirationValues(){
+  return [...document.querySelectorAll('#expirationPicker input:checked')].map(input=>input.value);
 }
 function renderExpirationPicker(picker, expiries, byExp, selectedValues){
   const selected = new Set(selectedValues || []);
@@ -736,21 +630,14 @@ function renderExpirationPicker(picker, expiries, byExp, selectedValues){
   return [...active];
 }
 function populateExpirations(chain){
-  const picker = document.getElementById('expirationPicker');
-  const remembered = selectedExpirationsByView[activeView];
-  const selectedValues = remembered || (selectedExpirationsByView.hasOwnProperty(activeView) ? [] : currentExpirationValues());
-  const selected = new Set(selectedValues);
+  const picker = byId('expirationPicker');
   const byExp = new Map();
   const todayIso = new Date().toISOString().slice(0,10);
-  const monthIso = new Date(Date.now()+30*86400000).toISOString().slice(0,10);
   chain.quotes.forEach(q=>{
     if(q.exp && q.exp >= todayIso && !byExp.has(q.exp)) byExp.set(q.exp, q.dte);
   });
   const expiries = [...byExp.keys()].sort();
-  renderExpirationPicker(picker, expiries, byExp, selectedValues);
-  if(selectedExpirationsByView.hasOwnProperty(activeView) && !remembered){
-    selectedExpirationsByView[activeView] = currentExpirationValues();
-  }
+  selectedExpirations = renderExpirationPicker(picker, expiries, byExp, selectedExpirations);
   syncExpiryQuickButtons();
 }
 // Quick-select buttons (0DTE / Week / All) above the expiration picker.
@@ -773,34 +660,91 @@ function applyExpirationQuickSelect(kind){
   const pred=expiryQuickPredicate(kind);
   if(!inputs.some(i=>pred(Number(i.dataset.dte)))) return;  // e.g. no 0DTE listed: keep current selection
   inputs.forEach(input=>{ input.checked=pred(Number(input.dataset.dte)); });
-  // Same flow as a manual checkbox change: per-view memory, re-render, flow reload.
-  syncExpiryQuickButtons();
-  saveCurrentExpirationSelection();
+  selectedExpirations=currentExpirationValues();
   run();
+}
+
+// ---------- Navigation ----------
+function closeMenu(){
+  byId('sidebar')?.classList.remove('menu-open');
+  const toggle=byId('menuToggle');
+  if(toggle){
+    toggle.setAttribute('aria-expanded','false');
+    toggle.setAttribute('aria-label','Open menu');
+  }
+}
+function toggleMenu(){
+  const open=byId('sidebar').classList.toggle('menu-open');
+  const toggle=byId('menuToggle');
+  toggle.setAttribute('aria-expanded',String(open));
+  toggle.setAttribute('aria-label',open?'Close menu':'Open menu');
 }
 function setView(view){
-  if(view === activeView) return;
-  saveCurrentExpirationSelection();
+  const changed = view !== activeView;
   activeView = view;
-  document.querySelectorAll('.side-nav a[data-view]').forEach(a=>a.classList.toggle('active',a.dataset.view===view));
+  document.querySelectorAll('a[data-view]').forEach(link=>{
+    const current=link.dataset.view===view;
+    link.classList.toggle('active',current);
+    if(current) link.setAttribute('aria-current','page');
+    else link.removeAttribute('aria-current');
+  });
   document.querySelectorAll('.app-view').forEach(section=>section.classList.toggle('active',section.id===`view-${view}`));
+  const title=byId(`view-${view}`)?.dataset.title;
+  document.title = title ? `${title} · Matrix` : 'Matrix';
+  syncTickerInput(view);
   hideAllHoverHelpers();
-  run();
-  const viewRenderer=VIEW_RENDERERS[view];
-  if(viewRenderer && window._lastR) requestAnimationFrame(()=>viewRenderer(window._lastR));
-  window.scrollTo({top:0,left:0});
+  closeMenu();
+  if(changed) window.scrollTo({top:0,left:0});
 }
+// Shows the screen the address bar names. The Strike Chart loads data only when
+// it has none for its ticker; after that, data reloads only on Search or Enter.
+function applyLocation(){
+  const view=viewFromPath(window.location.pathname);
+  const fromUrl=normalizeSymbol(new URLSearchParams(window.location.search).get('ticker'));
+  const urlTicker=SCREENS[view].ticker && validTicker(fromUrl) ? fromUrl : null;
+  if(urlTicker && view!==HOME_VIEW) screenTickers[view]=urlTicker;
+  setView(view);
+  if(view!==HOME_VIEW) return;
+  const symbol=urlTicker || currentSymbol();
+  if(symbol===currentSymbol() && REAL[symbol]) run();
+  else refreshHome(symbol);
+}
+function navigate(view){
+  if(view===activeView){
+    closeMenu();
+    return;
+  }
+  history.pushState(null,'',screenUrl(view));
+  applyLocation();
+}
+function search(view,raw){
+  const symbol=normalizeSymbol(raw);
+  if(!validTicker(symbol)){
+    setTickerStatus(view,'Enter a ticker, e.g. SPX','error');
+    return;
+  }
+  if(view===HOME_VIEW){
+    refreshHome(symbol);
+    return;
+  }
+  screenTickers[view]=symbol;
+  syncTickerInput(view);
+  setTickerStatus(view,'');
+  if(activeView===view) history.replaceState(null,'',screenUrl(view));
+}
+
+// ---------- Strike Chart ----------
 function run(){
-  const sym=document.getElementById('symbol').value;
+  const sym=currentSymbol();
   if(!REAL[sym]){
-    setSymbolSearchStatus(`${sym}: no data yet. Press Refresh to try again.`,'error');
+    setTickerStatus(HOME_VIEW,`${sym}: no data yet. Press Search to try again.`,'error');
     return;
   }
   let chain = buildChainReal(sym);
   populateExpirations(chain);
-  const selectedExpirations = new Set(currentExpirationValues());
-  if(selectedExpirations.size){
-    chain = {...chain, quotes: chain.quotes.filter(q=>selectedExpirations.has(q.exp))};
+  const chosen = new Set(currentExpirationValues());
+  if(chosen.size){
+    chain = {...chain, quotes: chain.quotes.filter(q=>chosen.has(q.exp))};
   }
   const R = calcGEX(chain);
   R.expectedMove = calcExpectedMove(chain);
@@ -808,100 +752,18 @@ function run(){
   R.asof = REAL[sym].asof;
   renderImpl(R);
 }
-function resetExpirationSelections(){
-  Object.keys(selectedExpirationsByView).forEach(view=>{ selectedExpirationsByView[view]=null; });
-}
-bind('symbol','change',()=>{
-  document.getElementById('expirationPicker').innerHTML='';
-  resetExpirationSelections();
-  run();
-});
-bind('symbolSearch','focus',event=>searchSymbols(event.currentTarget.value===document.getElementById('symbol').value?'':event.currentTarget.value));
-bind('symbolSearch','input',event=>searchSymbols(event.currentTarget.value));
-bind('symbolSearch','keydown',event=>{
-  if(event.key==='Escape'){
-    closeSymbolSearchResults();
-    event.currentTarget.value=document.getElementById('symbol').value;
-    return;
-  }
-  if(event.key!=='Enter') return;
-  event.preventDefault();
-  const first=document.querySelector('#symbolSearchResults .symbol-search-result.active, #symbolSearchResults .symbol-search-result');
-  const symbol=first?.dataset.symbolResult || normalizeSymbol(event.currentTarget.value);
-  const name=first?.dataset.symbolName || symbol;
-  selectMatrixSymbol(symbol,name);
-});
-bind('symbolSearchResults','click',event=>{
-  const result=event.target.closest('[data-symbol-result]');
-  if(result) selectMatrixSymbol(result.dataset.symbolResult,result.dataset.symbolName||'');
-});
-bind('symbolFavorites','click',event=>{
-  const chip=event.target.closest('[data-symbol-chip]');
-  if(chip) selectMatrixSymbol(chip.dataset.symbolChip,SYMBOL_NAMES.get(chip.dataset.symbolChip)||'');
-});
-bind('symbolFavorite','click',toggleCurrentSymbolFavorite);
-document.addEventListener('click',event=>{
-  if(!event.target.closest('.symbol-picker')) closeSymbolSearchResults();
-});
-bind('expirationPicker','change',()=>{
-  saveCurrentExpirationSelection();
-  syncExpiryQuickButtons();
-  run();
-});
-if(byId('run')) byId('run').textContent = 'Refresh';
-bind('run','click',()=>loadData(true));
-window.addEventListener('resize',()=>{
-  if(!window._lastR) return;
-  const viewRenderer=VIEW_RENDERERS[activeView];
-  if(viewRenderer) viewRenderer(window._lastR);
-});
-['gexChart'].forEach(id=>{
-  bind(id,'mousemove',showChartTooltip);
-  bind(id,'mouseleave',hideChartTooltip);
-  bind(id,'touchstart',showChartTooltip,{passive:true});
-  bind(id,'touchmove',showChartTooltip,{passive:true});
-  bind(id,'touchend',()=>setTimeout(hideChartTooltip,1200),{passive:true});
-});
 
-document.querySelectorAll('.side-nav a[data-view]').forEach(link=>{
-  link.addEventListener('click',e=>{
-    e.preventDefault();
-    setView(link.dataset.view);
-  });
-});
-
-// parameter buttons - toggle metrics on/off (multi-select overlay)
-document.querySelectorAll('.pbtn').forEach(btn=>{
-  btn.addEventListener('click',()=>{
-    const m=btn.dataset.metric;
-    if(!m) return;
-    if(ACTIVE.has(m)) ACTIVE.delete(m); else ACTIVE.add(m);
-    btn.classList.toggle('active', ACTIVE.has(m));
-    if(window._lastR && activeView === 'gex'){
-      drawChart(window._lastR);
-    }
-  });
-});
-
-// expiration quick-select buttons (0DTE / Week / All)
-document.querySelectorAll('.expiry-quick-btn').forEach(btn=>{
-  btn.addEventListener('click',()=>applyExpirationQuickSelect(btn.dataset.expquick));
-});
-
-// ---------- Data loading (only on Refresh: Search, Enter or a button) ----------
-let _timerUiTimer=null, _loadingData=false;
-let _lastFileLoadedAt=null, _lastLoadOk=false;
-let _lastDataSource='Waiting';
+// ---------- Data loading (only on Search or Enter) ----------
 const MATRIX_CBOE_DATA_URL = 'https://api.trytripity.site/api/matrix/cboe-data';
-const MATRIX_SYMBOL_SEARCH_URL = 'https://api.trytripity.site/api/matrix/symbol-search';
 const MATRIX_SYMBOL_DATA_URL = 'https://api.trytripity.site/api/matrix/symbol-data';
-const MARKET_FRESHNESS_MAX_MS = 75 * 60 * 1000;
-const MARKET_FRESHNESS_START_MIN = 9 * 60 + 45;
-const MARKET_FRESHNESS_END_MIN = 16 * 60 + 30;
+let _homeRequest=0;
 function fetchLiveData(url){
   return fetch(url, {cache:'no-store'})
     .then(r=>r.ok?r.json():null)
     .catch(()=>null);
+}
+function validCboeData(d){
+  return d && d.SPX && Array.isArray(d.SPX.opts) && Number.isFinite(Number(d.SPX.spot));
 }
 function dynamicSymbolConfig(symbol,record){
   const strikes=[...new Set((record.opts||[]).map(option=>Number(option.k)).filter(Number.isFinite))].sort((a,b)=>a-b);
@@ -921,187 +783,101 @@ function dynamicSymbolConfig(symbol,record){
     dynamic:true,
   };
 }
-async function loadDynamicSymbol(symbol,thenRun=true){
-  symbol=normalizeSymbol(symbol);
-  while(_loadingData){
-    setSymbolSearchStatus(`Waiting to load ${symbol}…`);
-    await new Promise(resolve=>setTimeout(resolve,150));
-  }
-  _loadingData=true;
-  setSymbolSearchStatus(`Loading ${symbol} option chain from Cboe…`);
-  updateDataTimer();
+// The core tickers (NDX, SPX, SPY, QQQ, VIX) come in one call.
+async function loadCoreData(){
+  const data=await fetchLiveData(MATRIX_CBOE_DATA_URL + '?t=' + Date.now());
+  if(!validCboeData(data)) return {ok:false, detail:'Could not load market data. Press Search to try again.'};
+  const dynamicRecords=Object.fromEntries([...DYNAMIC_SYMBOLS].filter(symbol=>REAL[symbol]).map(symbol=>[symbol,REAL[symbol]]));
+  REAL={...data,...dynamicRecords};
+  return {ok:true};
+}
+// Any other ticker loads its own Cboe chain through symbol-data.
+async function loadDynamicSymbol(symbol){
+  let response=null, payload=null;
   try{
-    const response=await fetch(`${MATRIX_SYMBOL_DATA_URL}?symbol=${encodeURIComponent(symbol)}`,{cache:'no-store'});
-    let payload=null;
-    try{ payload=await response.json(); }catch(_err){ payload=null; }
-    if(!response.ok || !payload?.ok || !payload.record){
-      throw new Error(payload?.detail || `${symbol} option chain is unavailable`);
-    }
-    dynamicSymbolConfig(symbol,payload.record);
-    REAL[symbol]=payload.record;
-    DYNAMIC_SYMBOLS.add(symbol);
-    ensureSymbolOption(symbol);
-    document.getElementById('symbol').value=symbol;
-    document.getElementById('symbolSearch').value=symbol;
-    document.getElementById('expirationPicker').innerHTML='';
-    resetExpirationSelections();
-    renderSymbolFavorites();
-    syncSymbolFavoriteButton();
-    _lastDataSource='Cboe on-demand';
-    _lastFileLoadedAt=Date.now();
-    _lastLoadOk=true;
-    setSymbolSearchStatus(`${symbol}: ${(payload.record.opts||[]).length.toLocaleString('en-US')} contracts · daily Cboe OI · Cboe spot`);
-    if(thenRun!==false && document.getElementById('symbol').value===symbol) run();
-    return true;
-  }catch(error){
-    setSymbolSearchStatus(error?.message||`Could not load ${symbol}`,'error');
-    if(!REAL[symbol]){
-      ensureSymbolOption(DEFAULT_SYMBOL);
-      document.getElementById('symbol').value=DEFAULT_SYMBOL;
-      document.getElementById('symbolSearch').value=DEFAULT_SYMBOL;
-      renderSymbolFavorites();
-      syncSymbolFavoriteButton();
-      if(REAL[DEFAULT_SYMBOL]) run();
-    }
-    return false;
-  }finally{
-    _loadingData=false;
-    updateDataTimer();
+    response=await fetch(`${MATRIX_SYMBOL_DATA_URL}?symbol=${encodeURIComponent(symbol)}`,{cache:'no-store'});
+    payload=await response.json();
+  }catch(_err){
+    payload=null;
   }
-}
-function validCboeData(d){
-  return d && d.SPX && Array.isArray(d.SPX.opts) && Number.isFinite(Number(d.SPX.spot));
-}
-function fetchCboeDataWithSource(url, sourceName){
-  return fetchLiveData(url).then(d=>validCboeData(d) ? {data:d, source:sourceName} : null);
-}
-function dataAsofToMs(value){
-  if(!value) return null;
-  const text=String(value);
-  let parsed;
-  if(/Z$|[+-]\d{2}:?\d{2}$/.test(text)){
-    parsed=Date.parse(text);
-  } else {
-    const match=text.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?/);
-    if(match){
-      const [,y,m,d,h,min]=match;
-      parsed=zonedDateTimeToUtc(Number(y),Number(m),Number(d),Number(h),Number(min),'America/New_York');
-    } else {
-      parsed=Date.parse(text);
-    }
+  if(!response?.ok || !payload?.ok || !payload.record){
+    return {ok:false, detail:payload?.detail || `${symbol}: option chain is unavailable`};
   }
-  return Number.isFinite(parsed) ? parsed : null;
+  dynamicSymbolConfig(symbol,payload.record);
+  REAL[symbol]=payload.record;
+  DYNAMIC_SYMBOLS.add(symbol);
+  return {ok:true};
 }
-function fmtAsofShort(value){
-  if(!value) return '--';
-  const ms=dataAsofToMs(value);
-  if(ms==null) return String(value);
-  const time=new Intl.DateTimeFormat('en-US',{
-    timeZone:'America/New_York',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'
-  }).format(new Date(ms));
-  return `${time} ET`;
-}
-function fmtDataAge(ms){
-  if(ms == null) return '--';
-  const minutes=Math.max(0,Math.floor(ms/60000));
-  if(minutes<60) return `${minutes}m`;
-  return `${Math.floor(minutes/60)}h ${minutes%60}m`;
-}
-function dataHealthFromAge(ageMs){
-  if(_loadingData) return {key:'checking', label:'Checking'};
-  if(!_lastLoadOk) return {key:'failed', label:'Failed'};
-  if(ageMs == null) return {key:'failed', label:'No Time'};
-  const minutes=Math.max(0,ageMs/60000);
-  if(minutes<=5) return {key:'fresh', label:'Live'};
-  if(minutes<=15) return {key:'delayed', label:'Recent'};
-  if(!isUsMarketFreshnessWindow()) return {key:'closed', label:'Market Closed'};
-  return {key:'stale', label:'Stale'};
-}
-function getEtClockParts(date=new Date()){
-  const parts=new Intl.DateTimeFormat('en-US',{
-    timeZone:'America/New_York',
-    weekday:'short',
-    hour:'2-digit',
-    minute:'2-digit',
-    hourCycle:'h23'
-  }).formatToParts(date);
-  const get=type=>parts.find(part=>part.type===type)?.value;
-  return {weekday:get('weekday'), hour:Number(get('hour')), minute:Number(get('minute'))};
-}
-function isUsMarketFreshnessWindow(date=new Date()){
-  const et=getEtClockParts(date);
-  if(['Sat','Sun'].includes(et.weekday)) return false;
-  const minutes=et.hour*60+et.minute;
-  return minutes>=MARKET_FRESHNESS_START_MIN && minutes<=MARKET_FRESHNESS_END_MIN;
-}
-function shouldShowStaleDataBanner(ageMs, date=new Date()){
-  return ageMs!=null && ageMs>MARKET_FRESHNESS_MAX_MS && isUsMarketFreshnessWindow(date);
-}
-function forceStaleBannerForDebug(){
-  return new URLSearchParams(window.location.search).get('debugStaleBanner') === '1';
-}
-function updateStaleDataBanner(rec, ageMs){
-  const banner=document.getElementById('staleDataBanner');
-  if(!banner) return;
-  const shouldShow=forceStaleBannerForDebug() || shouldShowStaleDataBanner(ageMs);
-  banner.hidden=!shouldShow;
-  if(!shouldShow){
-    banner.textContent='';
+// Refresh of the Strike Chart: Search, Enter, or opening it with no data yet.
+async function refreshHome(symbol){
+  const request=++_homeRequest;
+  const previous=currentSymbol();
+  if(activeView===HOME_VIEW) syncTickerInput(HOME_VIEW,symbol);
+  setTickerStatus(HOME_VIEW,`Loading ${symbol}…`);
+  const result=isCoreSymbol(symbol) ? await loadCoreData() : await loadDynamicSymbol(symbol);
+  if(request!==_homeRequest) return;  // a newer Search took over
+  if(!REAL[symbol]){
+    // Nothing to show for this ticker: fall back to the last ticker, or the default one.
+    if(!REAL[previous] && symbol!==previous) await refreshHome(previous);
+    setTickerStatus(HOME_VIEW,result.detail,'error');
     return;
   }
-  banner.innerHTML=`<b>Live feed delayed:</b> ${rec?.price_source||'LSE'} price is ${fmtDataAge(ageMs)} old, as of ${fmtAsofShort(rec?.price_asof||rec?.asof)}. OI remains a separate daily Cboe snapshot.`;
-}
-function updateDataTimer(){
-  const card=document.getElementById('dataHealth');
-  if(!card) return;
-  const symbol=document.getElementById('symbol')?.value || DEFAULT_SYMBOL;
-  const rec=REAL?.[symbol] || window._lastR;
-  const liveAsof=rec?.price_asof || rec?.asof;
-  const asofMs=dataAsofToMs(liveAsof);
-  const ageMs=asofMs==null ? null : Date.now()-asofMs;
-  const health=dataHealthFromAge(ageMs);
-  card.classList.remove('fresh','delayed','closed','stale','failed');
-  if(health.key!=='checking') card.classList.add(health.key);
-  document.getElementById('dataHealthState').textContent = health.label;
-  document.getElementById('dataHealthSymbol').textContent = symbol;
-  document.getElementById('dataHealthSource').textContent = rec?.price_source || _lastDataSource;
-  document.getElementById('dataHealthAge').textContent = fmtDataAge(ageMs);
-  document.getElementById('dataHealthContracts').textContent = rec?.opts ? rec.opts.length.toLocaleString('en-US') : '--';
-  document.getElementById('dataHealthAsof').textContent = fmtAsofShort(liveAsof);
-  document.getElementById('dataHealthOiSource').textContent = rec?.oi_source==='cboe_daily' ? 'Cboe daily' : 'Cboe daily';
-  document.getElementById('dataHealthOiAsof').textContent = fmtAsofShort(rec?.oi_asof);
-  document.getElementById('dataHealthSpot').textContent = rec?.spot ? fmtPrice(rec.spot) : '--';
-  document.getElementById('dataHealthLoaded').textContent = _lastFileLoadedAt ? new Date(_lastFileLoadedAt).toLocaleTimeString('he-IL') : '--';
-  updateStaleDataBanner(rec, ageMs);
-  const forceBtn=document.getElementById('forceTripityRefresh');
-  if(forceBtn) forceBtn.disabled = _loadingData;
-}
-function loadData(thenRun){
-  const currentSymbol=document.getElementById('symbol')?.value;
-  if(DYNAMIC_SYMBOLS.has(currentSymbol)) return loadDynamicSymbol(currentSymbol,thenRun);
-  if(_loadingData) return Promise.resolve();
-  _loadingData = true;
-  updateDataTimer();
-  return fetchCboeDataWithSource(MATRIX_CBOE_DATA_URL + '?t=' + Date.now(), 'Tripity hybrid')
-    .then(result=>{
-      // A failed Refresh keeps the last good data on screen.
-      _lastLoadOk=!!result || validCboeData(REAL);
-      if(result){
-        const dynamicRecords=Object.fromEntries([...DYNAMIC_SYMBOLS].filter(symbol=>REAL[symbol]).map(symbol=>[symbol,REAL[symbol]]));
-        REAL={...result.data,...dynamicRecords};
-        _lastDataSource=result.source;
-        _lastFileLoadedAt=Date.now();
-      }
-    })
-    .finally(()=>{
-      _loadingData = false;
-      if(thenRun!==false) run();
-      updateDataTimer();
-    });
+  if(symbol!==previous) selectedExpirations=null;
+  screenTickers[HOME_VIEW]=symbol;
+  if(activeView===HOME_VIEW){
+    syncTickerInput(HOME_VIEW);
+    history.replaceState(null,'',screenUrl(HOME_VIEW));
+  }
+  run();
+  setTickerStatus(HOME_VIEW,result.ok?'':`Refresh failed. Showing the last data for ${symbol}.`,result.ok?'':'error');
 }
 
-populateSymbols();
-document.getElementById('symbol').value = DEFAULT_SYMBOL;
-document.getElementById('forceTripityRefresh').addEventListener('click',()=>loadData(true));
-_timerUiTimer=setInterval(updateDataTimer,1000);
-loadData(true);
+// ---------- Wiring ----------
+document.querySelectorAll('a[data-view]').forEach(link=>{
+  link.addEventListener('click',event=>{
+    // Let ctrl/cmd/shift/middle clicks open the screen in a new tab.
+    if(event.defaultPrevented || event.button!==0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    navigate(link.dataset.view);
+  });
+});
+window.addEventListener('popstate',applyLocation);
+bind('menuToggle','click',toggleMenu);
+document.querySelectorAll('.ticker-form').forEach(form=>{
+  form.addEventListener('submit',event=>{
+    event.preventDefault();
+    search(form.dataset.screen,form.elements.ticker.value);
+  });
+});
+bind('expirationPicker','change',()=>{
+  selectedExpirations=currentExpirationValues();
+  syncExpiryQuickButtons();
+  run();
+});
+document.querySelectorAll('.expiry-quick-btn').forEach(btn=>{
+  btn.addEventListener('click',()=>applyExpirationQuickSelect(btn.dataset.expquick));
+});
+// parameter buttons - toggle metrics on/off (multi-select overlay)
+document.querySelectorAll('.pbtn').forEach(btn=>{
+  btn.addEventListener('click',()=>{
+    const m=btn.dataset.metric;
+    if(!m) return;
+    if(ACTIVE.has(m)) ACTIVE.delete(m); else ACTIVE.add(m);
+    btn.classList.toggle('active', ACTIVE.has(m));
+    if(window._lastR && activeView === HOME_VIEW) drawChart(window._lastR);
+  });
+});
+window.addEventListener('resize',()=>{
+  if(!window._lastR) return;
+  const viewRenderer=VIEW_RENDERERS[activeView];
+  if(viewRenderer) viewRenderer(window._lastR);
+});
+['gexChart'].forEach(id=>{
+  bind(id,'mousemove',showChartTooltip);
+  bind(id,'mouseleave',hideChartTooltip);
+  bind(id,'touchstart',showChartTooltip,{passive:true});
+  bind(id,'touchmove',showChartTooltip,{passive:true});
+  bind(id,'touchend',()=>setTimeout(hideChartTooltip,1200),{passive:true});
+});
+
+applyLocation();

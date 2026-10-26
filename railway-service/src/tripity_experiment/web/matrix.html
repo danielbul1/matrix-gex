@@ -3,70 +3,48 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>GEX Analytics Dashboard</title>
-<link rel="stylesheet" href="matrix.css?v=20261026-mirror">
+<title>Matrix</title>
+<link rel="stylesheet" href="/matrix/matrix.css?v=20261026-shell">
 </head>
 <body>
-<header>
-  <nav class="side-nav">
-    <a href="#" class="active" data-view="gex">GEX</a>
+<header id="sidebar">
+  <div class="sidebar-top">
+    <a class="brand" href="/matrix/" data-view="gex">Matrix</a>
+    <button type="button" class="menu-toggle" id="menuToggle" aria-controls="sideNav" aria-expanded="false" aria-label="Open menu">
+      <span></span><span></span><span></span>
+    </button>
+  </div>
+  <nav class="side-nav" id="sideNav" aria-label="Screens">
+    <a href="/matrix/oi-volume" data-view="oi-volume">OI Volume</a>
+    <a href="/matrix/gex-analysis" data-view="gex-analysis">GEX Analysis</a>
+    <a href="/matrix/key-levels" data-view="key-levels">Key Levels</a>
+    <a href="/matrix/options-summary" data-view="options-summary">P/C Ratio</a>
+    <a href="/matrix/how-to-use-gex" data-view="how-to-use-gex">How to use GEX</a>
+    <a class="side-disclaimer" href="/matrix/disclaimer" data-view="disclaimer">Disclaimer</a>
   </nav>
-  <div class="side-disclaimer">Disclaimer</div>
-  <h1>GEX Analytics</h1>
-  <span class="sub">Gamma Exposure &amp; Options Flow Engine - local implementation based on KaranChavan21/GEX_Dashboard documentation</span>
-  <span class="badge-demo" id="srcBadge">Waiting for data</span>
 </header>
 
-<div class="controls">
-  <div class="ctrl">
-    <label>Symbol</label>
-    <div class="symbol-picker">
-      <div class="symbol-search-row">
-        <input id="symbolSearch" type="search" placeholder="Search ticker or company (e.g. MSFT)" autocomplete="off" spellcheck="false" aria-label="Search an option symbol" aria-controls="symbolSearchResults" aria-expanded="false">
-        <button type="button" id="symbolFavorite" class="symbol-favorite" title="Add current symbol to favorites" aria-label="Add current symbol to favorites">☆</button>
-      </div>
-      <select id="symbol" hidden aria-hidden="true"></select>
-      <div id="symbolSearchResults" class="symbol-search-results" role="listbox" hidden></div>
-      <div id="symbolFavorites" class="symbol-favorites" aria-label="Favorite symbols"></div>
-      <div id="symbolSearchStatus" class="symbol-search-status" aria-live="polite"></div>
-    </div>
-  </div>
-  <div class="ctrl">
-    <label>Expirations</label>
-    <div class="expiry-quick" role="group" aria-label="Quick expiration selection">
-      <button type="button" class="range-btn expiry-quick-btn" data-expquick="0dte">0DTE</button>
-      <button type="button" class="range-btn expiry-quick-btn" data-expquick="week">Week</button>
-      <button type="button" class="range-btn expiry-quick-btn" data-expquick="all">All</button>
-    </div>
-    <div id="expirationPicker" class="expiry-picker" aria-label="Choose expiration dates"></div>
-  </div>
-  <button id="run">Calculate GEX</button>
-  <div class="data-health" id="dataHealth" aria-live="polite">
-    <div class="data-health-top">
-      <span class="data-health-title">Live Data Health</span>
-      <div class="data-health-actions">
-        <button type="button" class="data-refresh-btn" id="forceTripityRefresh" title="Force refresh from Tripity">Refresh</button>
-        <span class="data-health-state" id="dataHealthState">Waiting</span>
-      </div>
-    </div>
-    <div class="data-health-meta">
-      <span>Symbol <b id="dataHealthSymbol">--</b></span>
-      <span>Live feed <b id="dataHealthSource">--</b></span>
-      <span>Live age <b id="dataHealthAge">--</b></span>
-      <span>Price as of <b id="dataHealthAsof">--</b></span>
-      <span>OI feed <b id="dataHealthOiSource">Cboe daily</b></span>
-      <span>OI snapshot <b id="dataHealthOiAsof">--</b></span>
-      <span>Contracts <b id="dataHealthContracts">--</b></span>
-      <span>Live spot <b id="dataHealthSpot">--</b></span>
-      <span>Checked <b id="dataHealthLoaded">--</b></span>
-    </div>
-  </div>
-</div>
-
-<div class="stale-data-banner" id="staleDataBanner" role="status" aria-live="polite" hidden></div>
-
 <main>
-  <section class="app-view active" id="view-gex">
+  <section class="app-view" id="view-gex" data-title="Strike Chart">
+    <div class="screen-bar">
+      <form class="ticker-form" data-screen="gex" autocomplete="off">
+        <label>Ticker
+          <input name="ticker" type="text" placeholder="e.g. SPX" spellcheck="false" autocapitalize="characters" aria-label="Ticker">
+        </label>
+        <button type="submit">Search</button>
+        <span class="ticker-status" aria-live="polite"></span>
+      </form>
+      <div class="ctrl">
+        <label>Expirations</label>
+        <div class="expiry-quick" role="group" aria-label="Quick expiration selection">
+          <button type="button" class="range-btn expiry-quick-btn" data-expquick="0dte">0DTE</button>
+          <button type="button" class="range-btn expiry-quick-btn" data-expquick="week">Week</button>
+          <button type="button" class="range-btn expiry-quick-btn" data-expquick="all">All</button>
+        </div>
+        <div id="expirationPicker" class="expiry-picker" aria-label="Choose expiration dates"></div>
+      </div>
+    </div>
+
     <div class="params">
       <span class="plabel">Parameters:</span>
       <button class="pbtn active" data-metric="net_gex"  style="--c:#22b8ff">Net GEX</button>
@@ -92,14 +70,58 @@
     </div>
   </section>
 
+  <section class="app-view" id="view-oi-volume" data-title="OI Volume">
+    <div class="screen-bar">
+      <form class="ticker-form" data-screen="oi-volume" autocomplete="off">
+        <label>Ticker
+          <input name="ticker" type="text" placeholder="e.g. SPX" spellcheck="false" autocapitalize="characters" aria-label="Ticker">
+        </label>
+        <button type="submit">Search</button>
+        <span class="ticker-status" aria-live="polite"></span>
+      </form>
+    </div>
+    <div class="coming-soon"><h2>OI Volume</h2><p>Coming soon.</p></div>
+  </section>
 
+  <section class="app-view" id="view-gex-analysis" data-title="GEX Analysis">
+    <div class="screen-bar">
+      <form class="ticker-form" data-screen="gex-analysis" autocomplete="off">
+        <label>Ticker
+          <input name="ticker" type="text" placeholder="e.g. SPX" spellcheck="false" autocapitalize="characters" aria-label="Ticker">
+        </label>
+        <button type="submit">Search</button>
+        <span class="ticker-status" aria-live="polite"></span>
+      </form>
+    </div>
+    <div class="coming-soon"><h2>GEX Analysis</h2><p>Coming soon.</p></div>
+  </section>
+
+  <section class="app-view" id="view-key-levels" data-title="Key Levels">
+    <div class="screen-bar">
+      <form class="ticker-form" data-screen="key-levels" autocomplete="off">
+        <label>Ticker
+          <input name="ticker" type="text" placeholder="e.g. SPX" spellcheck="false" autocapitalize="characters" aria-label="Ticker">
+        </label>
+        <button type="submit">Search</button>
+        <span class="ticker-status" aria-live="polite"></span>
+      </form>
+    </div>
+    <div class="coming-soon"><h2>Key Levels</h2><p>Coming soon.</p></div>
+  </section>
+
+  <section class="app-view" id="view-options-summary" data-title="P/C Ratio">
+    <div class="coming-soon"><h2>P/C Ratio</h2><p>Coming soon.</p></div>
+  </section>
+
+  <section class="app-view" id="view-how-to-use-gex" data-title="How to use GEX">
+    <div class="coming-soon"><h2>How to use GEX</h2><p>Coming soon.</p></div>
+  </section>
+
+  <section class="app-view" id="view-disclaimer" data-title="Disclaimer">
+    <div class="coming-soon"><h2>Disclaimer</h2><p>Coming soon.</p></div>
+  </section>
 </main>
 
-<footer>
-  Implementation based on the documented model: Black-Scholes Greeks · GEX = Gamma x OI x Multiplier x Spot^2 ·
-  Zero-Gamma Flip interpolation · Call/Put Walls.
-</footer>
-
-<script src="matrix.js?v=20261026-mirror"></script>
+<script src="/matrix/matrix.js?v=20261026-shell"></script>
 </body>
 </html>
