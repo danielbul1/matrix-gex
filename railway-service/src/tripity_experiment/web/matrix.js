@@ -1684,8 +1684,7 @@ async function loadPcRatio(){
     return;
   }
   renderPcTable(data);
-  const asof=PC_TICKERS.map(symbol=>data[symbol]?.asof).find(Boolean);
-  setPcStatus(asof ? `As of ${String(asof).replace('T',' ')}` : '');
+  setPcStatus('');
 }
 
 // ---------- Wiring ----------
