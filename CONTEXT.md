@@ -83,3 +83,21 @@ _Avoid_: in-sample, training period
 **Holdout**:
 The span of history held back from parameter choice and run once, after the Dev Period is frozen.
 _Avoid_: test set, out-of-sample, OOS
+
+## Dashboard
+
+**Strike Chart**:
+The home screen: one ticker and one expiry, with Net GEX, AG, OI, volume and Power Zone drawn per strike beside the price.
+_Avoid_: GEX view, main chart
+
+**GEX Board**:
+The screen that shows one ticker's strike table and its gamma total, gamma split and price charts over a set of selected expiries. Its menu label is "GEX Analysis".
+_Avoid_: GEX Analysis page, heat map
+
+**Forecast**:
+The sectioned text read of one ticker, shown under the Key Levels chart and loaded with it.
+_Avoid_: Market Read, Scenario Ladder, outlook
+
+**Refresh**:
+Reloading a screen's data because the trader asked (Search, Enter, or an expiry or ticker button). The dashboard never reloads on a timer.
+_Avoid_: monitoring, live, auto-refresh, polling
