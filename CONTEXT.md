@@ -94,6 +94,10 @@ _Avoid_: GEX view, main chart
 The screen that shows one ticker's strike table and its gamma total, gamma split and price charts over a set of selected expiries. Its menu label is "GEX Analysis".
 _Avoid_: GEX Analysis page, heat map
 
+**Key Level**:
+One of the four prices the Key Levels screen marks from a ticker's GEX profile: Zero Gamma, Max Gamma, Call Wall and Put Wall. Max Pain is not a Key Level.
+_Avoid_: support/resistance, levels
+
 **Forecast**:
 The sectioned text read of one ticker, shown under the Key Levels chart and loaded with it.
 _Avoid_: Market Read, Scenario Ladder, outlook
