@@ -140,3 +140,14 @@ def test_page_loads_each_asset_once():
     assert page.count('src="/matrix/matrix.js') == 1
     assert page.count('href="/matrix/matrix.css') == 1
     assert "<<<<<<<" not in page and ">>>>>>>" not in page
+
+
+def test_right_axes_and_six_dates():
+    """AG and Power Zone share one GEX-unit axis; OI and volume get their own
+    scale (a guess). The date list holds the six nearest dates (a guess)."""
+    script = (host.MATRIX_WEB_DIR / "matrix.js").read_text(encoding="utf-8")
+    axes = dict(re.findall(r'\n  (\w+):\s+\{[^\n]*axis:"(\w+)"', script))
+    assert axes == {"ag": "gex", "power": "gex", "call_oi": "count", "put_oi": "count",
+                    "call_vol": "count", "put_vol": "count"}
+    assert "const EXPIRATION_COUNT = 6;" in script
+    assert ".slice(0,EXPIRATION_COUNT)" in script

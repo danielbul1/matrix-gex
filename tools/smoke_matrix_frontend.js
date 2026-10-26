@@ -84,6 +84,13 @@ check('his seven parameter buttons',
   Object.keys(METRICS).join() === 'net_gex,ag,call_oi,put_oi,call_vol,put_vol,power');
 R.expectedMove = calcExpectedMove(buildChainReal('SPX'));
 check('Strike Chart draws', noThrow(() => drawChart(R)));
+check('dropdown lists only the six nearest dates',
+  JSON.stringify(chainExpirations({ quotes: ['2099-01-08', '2099-01-01', '2099-01-03', '2099-01-02', '2099-01-05', '2099-01-04', '2099-01-07', '2099-01-06'].map(exp => ({ exp })) }))
+  === JSON.stringify(['2099-01-01', '2099-01-02', '2099-01-03', '2099-01-04', '2099-01-05', '2099-01-06']));
+check('AG and Power Zone share the GEX axis; OI and volume get their own',
+  METRICS.ag.axis === 'gex' && METRICS.power.axis === 'gex'
+  && ['call_oi', 'put_oi', 'call_vol', 'put_vol'].every(m => METRICS[m].axis === 'count'));
+check('Strike Chart draws with both right axes', noThrow(() => { ['call_oi', 'power'].forEach(m => ACTIVE.add(m)); drawChart(R); ['call_oi', 'power'].forEach(m => ACTIVE.delete(m)); }));
 check('Net GEX and AG start on', ACTIVE.has('net_gex') && ACTIVE.has('ag') && ACTIVE.size === 2);
 // Each screen keeps its own chain: a Search elsewhere replacing REAL leaves the Strike Chart alone.
 homeRecord = REAL.SPX;

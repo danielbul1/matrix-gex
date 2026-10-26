@@ -263,19 +263,21 @@ function renderImpl(R){
 }
 
 // ---------- Metric definitions (Quant-Power style param buttons) ----------
-// net_gex = bars. Other metrics are area layers on one shared right axis.
+// net_gex = bars on the left axis. The others are area layers on the right: AG and
+// Power Zone share one axis in GEX units (his AG sits on its own right axis, and his
+// Power Zone is in AG's units); OI and volume counts get their own scale (a guess).
 // Net GEX and AG start on, as in his 2026 screenshots (a guess at his default).
 let ACTIVE = new Set(["net_gex","ag"]);
 // Strikes shown: spot +/- 2 expected moves.
 const DISPLAY_SIGMA = 2;
 const METRICS = {
   net_gex:  {label:"Net GEX",     color:"#22b8ff", kind:"bar",  signed:true,  val:s=>s.netGex},
-  ag:       {label:"AG",          color:"#ab7df6", kind:"area", val:s=>Math.abs(s.callGex)+Math.abs(s.putGex)},
-  call_oi:  {label:"Call OI",     color:"#26c281", kind:"area", val:s=>s.callOI},
-  put_oi:   {label:"Put OI",      color:"#ef5350", kind:"area", val:s=>s.putOI},
-  call_vol: {label:"Call Volume", color:"#2f73ff", kind:"area", val:s=>s.callVol},
-  put_vol:  {label:"Put Volume",  color:"#ff8a3d", kind:"area", val:s=>s.putVol},
-  power:    {label:"Power Zone",  color:"#ffc107", kind:"area", val:s=>s.powerZone || 0},
+  ag:       {label:"AG",          color:"#ab7df6", kind:"area", axis:"gex", val:s=>Math.abs(s.callGex)+Math.abs(s.putGex)},
+  call_oi:  {label:"Call OI",     color:"#26c281", kind:"area", axis:"count", val:s=>s.callOI},
+  put_oi:   {label:"Put OI",      color:"#ef5350", kind:"area", axis:"count", val:s=>s.putOI},
+  call_vol: {label:"Call Volume", color:"#2f73ff", kind:"area", axis:"count", val:s=>s.callVol},
+  put_vol:  {label:"Put Volume",  color:"#ff8a3d", kind:"area", axis:"count", val:s=>s.putVol},
+  power:    {label:"Power Zone",  color:"#ffc107", kind:"area", axis:"gex", val:s=>s.powerZone || 0},
 };
 // Active metrics in button order; the Net GEX bars draw only while its button is on.
 function chartActiveMetrics(){
@@ -336,7 +338,10 @@ function drawChart(R,chartId='gexChart'){
   }).join('&nbsp;&nbsp;') || '<span style="color:#7d8799">Choose a parameter</span>';
 
   const padL=mobile ? 48 : 70;
-  const padR=mobile ? (areas.length ? 42 : 18) : (areas.length?62:42);
+  // One right-hand scale per active group, side by side.
+  const rightAxes=['gex','count'].filter(ax=>areas.some(m=>METRICS[m].axis===ax));
+  const axisW=mobile ? 42 : 62;
+  const padR=(rightAxes.length ? rightAxes.length*axisW : (mobile ? 18 : 42));
   const padT=mobile ? 28 : 36;
   const padB=mobile ? 72 : 88;
   const plotW = W-padL-padR, plotH = H-padT-padB;
@@ -352,10 +357,13 @@ function drawChart(R,chartId='gexChart'){
     lMin=-maxAbs; lMax=maxAbs;
     yL=v=>top+(lMax-v)/(lMax-lMin)*plotH; y0=yL(0);
   }
-  // ----- RIGHT axis: one shared axis in real units for every active layer, like his
-  // "OI - VOLUME - ABS GEX" axis; its title lists the active layers -----
-  const rMax = areas.length ? Math.max(...areas.flatMap(m=>data.map(METRICS[m].val)),1)*1.08 : 1;
-  const rightTitle = areas.map(m=>METRICS[m].label.toUpperCase()).join(' - ');
+  // ----- RIGHT axes, in real units; each title lists its active layers -----
+  const axisMax={}, axisTitle={};
+  rightAxes.forEach(ax=>{
+    const layers=areas.filter(m=>METRICS[m].axis===ax);
+    axisMax[ax]=Math.max(...layers.flatMap(m=>data.map(METRICS[m].val)),1)*1.08;
+    axisTitle[ax]=layers.map(m=>METRICS[m].label.toUpperCase()).join(' - ');
+  });
 
   // ----- gridlines + tick labels -----
   ctx.font=(mobile ? "bold 10px Segoe UI" : "bold 13px Segoe UI"); ctx.textBaseline="middle";
@@ -366,14 +374,14 @@ function drawChart(R,chartId='gexChart'){
     ctx.beginPath(); ctx.moveTo(padL,yy); ctx.lineTo(W-padR,yy); ctx.stroke();
     if(hasBar){ ctx.fillStyle="#c4c4c4"; ctx.textAlign="right";
       ctx.fillText(fmtAxis(lMin+(lMax-lMin)*f), padL-8, yy); }
-    if(areas.length){ ctx.fillStyle="#c4c4c4"; ctx.textAlign="left";
-      ctx.fillText(fmtAxis(rMax*f), W-padR+8, yy); }
+    rightAxes.forEach((ax,i)=>{ ctx.fillStyle="#c4c4c4"; ctx.textAlign="left";
+      ctx.fillText(fmtAxis(axisMax[ax]*f), W-padR+6+i*axisW, yy); });
   }
 
   // ----- area overlays: a smoothed spline with markers, filled to zero, like his -----
   areas.forEach(m=>{
     const M=METRICS[m];
-    const yA=v=>bottom-(v/rMax)*plotH;
+    const yA=v=>bottom-(v/axisMax[M.axis])*plotH;
     const pts=data.map((s,i)=>[xCenter(i),yA(M.val(s))]);
     ctx.beginPath(); ctx.moveTo(pts[0][0],bottom); ctx.lineTo(pts[0][0],pts[0][1]);
     splineTo(ctx,pts,top,bottom);
@@ -442,9 +450,9 @@ function drawChart(R,chartId='gexChart'){
   if(hasBar){ ctx.save(); ctx.translate(14,padT+plotH/2); ctx.rotate(-Math.PI/2);
     ctx.fillStyle="#d0d0d0"; ctx.font=(mobile ? "bold 11px Segoe UI" : "bold 13px Segoe UI"); ctx.textAlign="center";
     ctx.fillText(barMetric.axisLabel || barMetric.label,0,0); ctx.restore(); }
-  if(areas.length){ ctx.save(); ctx.translate(W-12,padT+plotH/2); ctx.rotate(Math.PI/2);
+  rightAxes.forEach((ax,i)=>{ ctx.save(); ctx.translate(W-padR+(i+1)*axisW-8,padT+plotH/2); ctx.rotate(Math.PI/2);
     ctx.fillStyle="#d0d0d0"; ctx.font=(mobile ? "bold 11px Segoe UI" : "bold 13px Segoe UI"); ctx.textAlign="center";
-    ctx.fillText(rightTitle,0,0); ctx.restore(); }
+    ctx.fillText(axisTitle[ax],0,0); ctx.restore(); });
   ctx.fillStyle="#d0d0d0"; ctx.font=(mobile ? "bold 10px Segoe UI" : "bold 12px Segoe UI"); ctx.textAlign="center"; ctx.textBaseline="bottom";
   ctx.fillText("STRIKE",padL+plotW/2,H-4);
 }
@@ -749,13 +757,15 @@ function syncTickerInput(view,value=screenTickers[view]){
 
 // ---------- Expiration (Strike Chart) ----------
 // One date at a time from a dropdown filled per ticker, like his date dropdown.
-// It starts on the nearest date (guess: his default is not public).
+// It lists only the six nearest dates (a guess from one sample of his list) and
+// starts on the nearest one (also a guess).
+const EXPIRATION_COUNT = 6;
 function currentExpiration(){
   return byId('expirationSelect')?.value || null;
 }
 function chainExpirations(chain){
   const todayIso = new Date().toISOString().slice(0,10);
-  return [...new Set(chain.quotes.map(q=>q.exp).filter(exp=>exp && exp >= todayIso))].sort();
+  return [...new Set(chain.quotes.map(q=>q.exp).filter(exp=>exp && exp >= todayIso))].sort().slice(0,EXPIRATION_COUNT);
 }
 function pickExpiration(expiries, wanted){
   return expiries.includes(wanted) ? wanted : (expiries[0] || null);
