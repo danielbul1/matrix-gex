@@ -1048,8 +1048,8 @@ function run(){
 }
 
 // ---------- Data loading (only on Search or Enter) ----------
-const MATRIX_CBOE_DATA_URL = 'https://api.trytripity.site/api/matrix/cboe-data';
-const MATRIX_SYMBOL_DATA_URL = 'https://api.trytripity.site/api/matrix/symbol-data';
+const MATRIX_CBOE_DATA_URL = '/api/matrix/cboe-data';
+const MATRIX_SYMBOL_DATA_URL = '/api/matrix/symbol-data';
 let _homeRequest=0;
 function fetchLiveData(url){
   return fetch(url, {cache:'no-store'})
@@ -1434,7 +1434,7 @@ const OIV_METRICS = {
   put_vol:       {label:'Put Vol',       color:'#e55f04', kind:'area', val:s=>s.putVol},
 };
 const OIV_ACTIVE = new Set(['volume_spread']);
-const MATRIX_CANDLES_URL = 'https://api.trytripity.site/api/matrix/candles';
+const MATRIX_CANDLES_URL = '/api/matrix/candles';
 // record: this screen's own copy of the chain, so other screens' Searches leave it alone.
 const oiv = {symbol:null, record:null, expiry:null, candles:null, candlesError:''};
 let _oivRequest = 0;

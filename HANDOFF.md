@@ -8,7 +8,7 @@
 A market-analytics stack for 5 US symbols — **NDX, SPX, SPY, QQQ, VIX**. The dashboard copies
 Quant Power's screens and nothing else (ADR `docs/adr/0001-matrix-mirrors-quant-power-screens.md`,
 map issue #21); data reloads only on Refresh, never on a timer.
-Owner + his father are the only users. Live dashboard: https://api.trytripity.site/matrix/
+Owner + his father are the only users. Live dashboard: https://matrixgex.app/ (redirects to /matrix/)
 
 ## Repository layout
 
@@ -92,6 +92,18 @@ Gotchas learned the hard way (2026-07-19):
    b. Always append an entry to the Session Log below (newest on top).
 
 ## Session Log (every agent MUST append — newest first)
+
+### 2026-10-26 — New domain matrixgex.app; dashboard served at the root
+- **Domain:** the site moved to **matrixgex.app** (owner registered it on Cloudflare).
+  Added as a Railway custom domain on `backend`; DNS in Cloudflare is an apex CNAME
+  (DNS-only) to the Railway target plus the `_railway-verify` TXT. Cert is valid.
+- **Code:** the dashboard's API calls (`cboe-data`, `symbol-data`, `candles`) are now
+  relative paths, so they work on whatever domain serves the page (no CORS, no hardcoded
+  host). `GET /` now 307-redirects to `/matrix/`, so matrixgex.app opens the dashboard.
+- **trytripity:** `mcp.trytripity.site` was deleted (connector landing, unused). Railway
+  caps the service at 2 custom domains, so `api.trytripity.site` stays attached until the
+  new domain is verified live, then it is removed too (owner: throw out trytripity).
+- **Deploy:** production is pinned to this branch commit so it is live now, before #63 merges.
 
 ### 2026-10-26 — Expirations: start on the nearest only, list every date (owner)
 - The owner wants to choose the dates: the Strike Chart and the GEX board now start on
