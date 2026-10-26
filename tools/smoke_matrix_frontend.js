@@ -1,6 +1,6 @@
 /* Smoke test: load matrix.js with DOM stubs (offline), then verify
    VIX AM-settlement, real VIX chain aggregation, quick-select predicates,
-   the Strike Chart draw path and the P/C Ratio table.
+   the Strike Chart draw path, the P/C Ratio table and the OI Volume screen.
    Needs a Cboe VIX chain at $TEMP/vix.json
    (https://cdn-api.cboe.com/api/global/delayed_quotes/options/_VIX.json). */
 const fs = require('fs');
@@ -111,5 +111,47 @@ check('SPX row: ticker, spot, P/C OI, P/C Vol, call/put OI, call/put vol',
   spxCells.join(' | '));
 check('No calls shows a dash, not Infinity', pcRows[1].includes('—') && !pcRows[1].includes('Infinity'));
 check('Missing ticker shows dashes', /SPY<\/td>(<td class="pc-missing">—<\/td>){7}/.test(pcRows[2]));
+
+// --- 6. OI Volume (synthetic SPX chain, two expirations) ---
+function synthRecord(spot, exps) {
+  const opts = [];
+  for (const exp of exps) {
+    for (let k = spot - 50; k <= spot + 50; k += 5) {
+      opts.push({ k, t: 'C', exp, dte: 0, iv: 0.15, oi: 200 + (k % 20), vol: 100 + (k - spot + 50), g: 0.002, d: 0.5 });
+      opts.push({ k, t: 'P', exp, dte: 0, iv: 0.16, oi: 300, vol: 150, g: 0.002, d: -0.5 });
+    }
+  }
+  return { spot, asof: new Date().toISOString(), mult: 100, opts, source: 'smoke' };
+}
+const isoDay = n => new Date(Date.now() + n * 86400000).toISOString().slice(0, 10);
+const exp0 = isoDay(1), exp1 = isoDay(8);
+REAL.SPX = synthRecord(6000, [exp0, exp1]);
+check('OI Volume has his five buttons in his order',
+  JSON.stringify(Object.keys(OIV_METRICS)) === JSON.stringify(['volume_spread', 'call_oi', 'put_oi', 'call_vol', 'put_vol']));
+check('Volume Spread is on by default and drawn as bars', OIV_ACTIVE.has('volume_spread') && OIV_ACTIVE.size === 1 && OIV_METRICS.volume_spread.kind === 'bar');
+const agg = aggregateOiVolume([
+  { K: 100, isCall: true, oi: 10, vol: 7 }, { K: 100, isCall: false, oi: 4, vol: 9 },
+  { K: 105, isCall: true, oi: 0, vol: 0 }, { K: 105, isCall: false, oi: 0, vol: 0 },
+  { K: 110, isCall: true, oi: 2, vol: 5 }, { K: 110, isCall: true, oi: 3, vol: 1 },
+]);
+check('Volume Spread = call vol - put vol per strike', agg.length === 2 && agg[0].volumeSpread === -2 && agg[1].volumeSpread === 6,
+  JSON.stringify(agg.map(s => [s.strike, s.volumeSpread])));
+check('OI and volume sum per strike', agg[1].callOI === 5 && agg[1].callVol === 6);
+check('OI Volume lists future expirations only, sorted', JSON.stringify(oiVolumeExpiries(buildChainReal('SPX'))) === JSON.stringify([exp0, exp1]));
+const O = computeOiVolume('SPX', exp1);
+check('OI Volume uses one expiration', O.strikes.length === 21 && O.strikes.every(s => s.callOI > 0));
+const lines = oiVolumePriceLines(O.strikes);
+check('price chart lines: Call OI, Put OI, Call Vol, Put Vol', JSON.stringify(lines.map(l => l.label)) === JSON.stringify(['Call OI', 'Put OI', 'Call Vol', 'Put Vol']));
+check('Call Vol line sits at the top call-volume strike', lines[2].price === 6050);
+let oivOk = true;
+try {
+  oiv.symbol = 'SPX'; oiv.expiry = exp0;
+  oiv.candles = [{ time: 1761573000, open: 5990, high: 6010, low: 5985, close: 6005 }, { time: 1761573060, open: 6005, high: 6012, low: 6000, close: 6001 }];
+  for (const m of Object.keys(OIV_METRICS)) OIV_ACTIVE.add(m);
+  renderOiVolume();
+  oiv.candles = null; renderOiVolume();
+  OIV_ACTIVE.clear(); renderOiVolume(); OIV_ACTIVE.add('volume_spread');
+} catch (e) { oivOk = false; console.log('oi volume draw error:', e.stack); }
+check('OI Volume strike and price charts draw (no-throw)', oivOk);
 
 process.exit(failures ? 1 : 0);

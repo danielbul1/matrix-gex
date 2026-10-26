@@ -287,10 +287,12 @@ function bind(id,event,handler,opts){
 
 function hideAllHoverHelpers(){
   hideChartTooltip();
+  hideOiVolumeTooltip();
 }
 // Single view -> renderer dispatch, shared by renderImpl, setView and the resize handler.
 const VIEW_RENDERERS = {
-  'gex': R=>drawChart(R),
+  'gex': R=>R && drawChart(R),
+  'oi-volume': ()=>renderOiVolume(),
 };
 function renderImpl(R){
   window._lastR=R;
@@ -705,6 +707,12 @@ function applyLocation(){
   if(urlTicker && view!==HOME_VIEW) screenTickers[view]=urlTicker;
   setView(view);
   if(view==='options-summary') loadPcRatio();
+  if(view===OIV_VIEW){
+    const symbol=screenTickers[OIV_VIEW];
+    if(symbol===oiv.symbol && REAL[symbol]) renderOiVolume();
+    else refreshOiVolume(symbol);
+    return;
+  }
   if(view!==HOME_VIEW) return;
   const symbol=urlTicker || currentSymbol();
   if(symbol===currentSymbol() && REAL[symbol]) run();
@@ -726,6 +734,10 @@ function search(view,raw){
   }
   if(view===HOME_VIEW){
     refreshHome(symbol);
+    return;
+  }
+  if(view===OIV_VIEW){
+    refreshOiVolume(symbol);
     return;
   }
   screenTickers[view]=symbol;
@@ -833,6 +845,330 @@ async function refreshHome(symbol){
   setTickerStatus(HOME_VIEW,result.ok?'':`Refresh failed. Showing the last data for ${symbol}.`,result.ok?'':'error');
 }
 
+// ---------- OI Volume ----------
+// His OI Volume page: ticker + Search, one expiration date, five multi-select
+// buttons over a per-strike chart, and a price chart with OI/volume strike lines.
+const OIV_VIEW = 'oi-volume';
+// Volume Spread = call volume minus put volume per strike, for the session so far
+// (map #21, #24). It is our guess: no public source defines it. Bars in Net GEX colours.
+const OIV_METRICS = {
+  volume_spread: {label:'Volume Spread', color:'#22b8ff', kind:'bar',  val:s=>s.volumeSpread},
+  call_oi:       {label:'Call OI',       color:'#26c281', kind:'area', val:s=>s.callOI},
+  put_oi:        {label:'Put OI',        color:'#ef5350', kind:'area', val:s=>s.putOI},
+  call_vol:      {label:'Call Vol',      color:'#2f73ff', kind:'area', val:s=>s.callVol},
+  put_vol:       {label:'Put Vol',       color:'#ff8a3d', kind:'area', val:s=>s.putVol},
+};
+const OIV_ACTIVE = new Set(['volume_spread']);
+const MATRIX_CANDLES_URL = 'https://api.trytripity.site/api/matrix/candles';
+// The candles proxy serves these tickers only.
+const CANDLE_SYMBOLS = new Set(['SPX','NDX','SPY','QQQ']);
+const oiv = {symbol:null, expiry:null, candles:null, candlesError:''};
+let _oivRequest = 0;
+
+// One expiration's chain summed per strike. No OI floor here: a strike that
+// trades today but has little open interest still counts for volume.
+function aggregateOiVolume(quotes){
+  const byStrike = new Map();
+  for(const q of quotes){
+    if(!byStrike.has(q.K)) byStrike.set(q.K,{strike:q.K, callOI:0, putOI:0, callVol:0, putVol:0});
+    const s = byStrike.get(q.K);
+    const oi = Number(q.oi)||0, vol = Number(q.vol)||0;
+    if(q.isCall){ s.callOI += oi; s.callVol += vol; }
+    else { s.putOI += oi; s.putVol += vol; }
+  }
+  return [...byStrike.values()]
+    .filter(s=>s.callOI||s.putOI||s.callVol||s.putVol)
+    .map(s=>({...s, volumeSpread:s.callVol-s.putVol}))
+    .sort((a,b)=>a.strike-b.strike);
+}
+function oiVolumeExpiries(chain){
+  const todayIso = new Date().toISOString().slice(0,10);
+  return [...new Set(chain.quotes.map(q=>q.exp).filter(exp=>exp && exp>=todayIso))].sort();
+}
+function computeOiVolume(symbol, expiry){
+  const chain = buildChainReal(symbol);
+  const quotes = chain.quotes.filter(q=>q.exp===expiry);
+  const scoped = {...chain, quotes};
+  return {symbol, spot:chain.spot, expiry, strikes:aggregateOiVolume(quotes), expectedMove:calcExpectedMove(scoped)};
+}
+// The strike of the largest value for each OI/volume series: these are the
+// lines on his price chart. Which lines he draws is not public, so this is our guess.
+function oiVolumePriceLines(strikes){
+  const top = key=>strikes.reduce((best,s)=>s[key]>0 && (!best || s[key]>best[key]) ? s : best, null);
+  return [
+    ['Call OI','callOI',OIV_METRICS.call_oi.color],
+    ['Put OI','putOI',OIV_METRICS.put_oi.color],
+    ['Call Vol','callVol',OIV_METRICS.call_vol.color],
+    ['Put Vol','putVol',OIV_METRICS.put_vol.color],
+  ].map(([label,key,color])=>{ const s=top(key); return s && {label, color, price:s.strike}; }).filter(Boolean);
+}
+function populateOiVolumeExpiries(symbol){
+  const select = byId('oivExpiry');
+  const expiries = oiVolumeExpiries(buildChainReal(symbol));
+  if(!expiries.includes(oiv.expiry)) oiv.expiry = expiries[0] || null;
+  if(select){
+    select.innerHTML = expiries.length
+      ? expiries.map(exp=>`<option value="${esc(exp)}"${exp===oiv.expiry?' selected':''}>${esc(exp)}</option>`).join('')
+      : '<option value="">No expirations</option>';
+    select.disabled = !expiries.length;
+  }
+}
+function renderOiVolume(){
+  const symbol = oiv.symbol;
+  if(!symbol || !REAL[symbol] || !oiv.expiry) return;
+  const R = computeOiVolume(symbol, oiv.expiry);
+  window._oivR = R;
+  drawOiVolumeChart(R);
+  drawOiVolumePriceChart(R);
+}
+
+function drawOiVolumeChart(R){
+  const cv = byId('oiVolumeChart');
+  if(!cv) return;
+  const dpr = window.devicePixelRatio||1;
+  const W = cv.clientWidth;
+  const mobile = W < 640;
+  const H = mobile ? Math.max(380, Math.min(520, window.innerHeight - 260)) : Math.max(520, Math.min(720, window.innerHeight - 230));
+  cv.width=W*dpr; cv.height=H*dpr; cv.style.height=H+'px';
+  const ctx = cv.getContext('2d'); ctx.setTransform(dpr,0,0,dpr,0,0);
+  ctx.clearRect(0,0,W,H);
+  cv._matrixBars = [];
+
+  const active = Object.keys(OIV_METRICS).filter(m=>OIV_ACTIVE.has(m));
+  const hasBar = OIV_ACTIVE.has('volume_spread');
+  const barMetric = OIV_METRICS.volume_spread;
+  const areas = active.filter(m=>OIV_METRICS[m].kind==='area');
+  const symLabel = byId('oivSymLabel');
+  const legend = byId('oivChartLegend');
+  if(symLabel) symLabel.textContent = `${R.symbol} · ${R.expiry}`;
+  if(legend) legend.innerHTML = active.map(m=>{
+    const M=OIV_METRICS[m];
+    return (M.kind==='bar'
+      ? `<span class="sq" style="background:${M.color}"></span>`
+      : `<span class="sq" style="background:${hexA(M.color,.5)};border-top:2px solid ${M.color}"></span>`)+M.label;
+  }).join('&nbsp;&nbsp;') || '<span style="color:#7d8799">Choose a parameter</span>';
+
+  const data = R.strikes.length ? visibleStrikeData(R) : [];
+  if(!data.length) return;
+
+  const padL=mobile?48:70, padR=mobile?(areas.length?42:18):(areas.length?62:42);
+  const padT=mobile?28:36, padB=mobile?72:88;
+  const plotW=W-padL-padR, plotH=H-padT-padB;
+  const slot=plotW/data.length;
+  const xCenter=i=>padL+slot*(i+0.5);
+  const top=padT, bottom=padT+plotH;
+
+  let lMin=0,lMax=1,yL=()=>bottom,y0=bottom;
+  if(hasBar){
+    const maxAbs=Math.max(...data.map(s=>Math.abs(barMetric.val(s))),1)*1.08;
+    lMin=-maxAbs; lMax=maxAbs;
+    yL=v=>top+(lMax-v)/(lMax-lMin)*plotH; y0=yL(0);
+  }
+  const ownMax={}; areas.forEach(m=>ownMax[m]=Math.max(...data.map(OIV_METRICS[m].val),1));
+  const dom = areas.length ? areas.reduce((a,b)=>ownMax[b]>ownMax[a]?b:a,areas[0]) : null;
+  const rMax = dom ? ownMax[dom]*1.08 : 1;
+
+  ctx.font=(mobile?'bold 10px Segoe UI':'bold 13px Segoe UI'); ctx.textBaseline='middle';
+  for(let t=0;t<=6;t++){
+    const f=t/6, yy=bottom-f*plotH;
+    ctx.strokeStyle='rgba(255,255,255,.025)'; ctx.lineWidth=1;
+    ctx.beginPath(); ctx.moveTo(padL,yy); ctx.lineTo(W-padR,yy); ctx.stroke();
+    ctx.fillStyle='#c4c4c4';
+    if(hasBar){ ctx.textAlign='right'; ctx.fillText(fmtAxis(lMin+(lMax-lMin)*f), padL-8, yy); }
+    if(dom){ ctx.textAlign='left'; ctx.fillText(fmtAxis(rMax*f), W-padR+8, yy); }
+  }
+
+  areas.forEach(m=>{
+    const M=OIV_METRICS[m], own=ownMax[m];
+    const yA=v=>bottom-(v/own)*0.92*plotH;
+    ctx.beginPath(); ctx.moveTo(xCenter(0),bottom);
+    data.forEach((s,i)=>ctx.lineTo(xCenter(i),yA(M.val(s))));
+    ctx.lineTo(xCenter(data.length-1),bottom); ctx.closePath();
+    ctx.fillStyle=hexA(M.color,.33); ctx.fill();
+    ctx.beginPath();
+    data.forEach((s,i)=>{const x=xCenter(i),y=yA(M.val(s)); i?ctx.lineTo(x,y):ctx.moveTo(x,y);});
+    ctx.strokeStyle=M.color; ctx.lineWidth=1.6; ctx.stroke();
+  });
+
+  const hitBars = data.map((s,i)=>({x:padL+slot*i,y:top,w:slot,h:plotH,s}));
+  if(hasBar){
+    const bw=Math.max(2,Math.min(slot*0.70,32));
+    data.forEach((s,i)=>{
+      const v=barMetric.val(s), yy=yL(v);
+      const x=xCenter(i)-bw/2;
+      ctx.fillStyle = v>=0 ? '#22aaf2' : '#ff2417';
+      ctx.fillRect(x, Math.min(yy,y0), bw, Math.max(1,Math.abs(yy-y0)));
+    });
+    ctx.strokeStyle='rgba(255,255,255,.18)'; ctx.lineWidth=1;
+    ctx.beginPath(); ctx.moveTo(padL,y0); ctx.lineTo(W-padR,y0); ctx.stroke();
+  }
+  cv._matrixBars = hitBars;
+
+  ctx.fillStyle='#c4c4c4'; ctx.font=(mobile?'bold 9px Segoe UI':'bold 11px Segoe UI');
+  data.forEach((s,i)=>{
+    ctx.save(); ctx.translate(xCenter(i),bottom+7); ctx.rotate(-Math.PI/2);
+    ctx.textAlign='right'; ctx.textBaseline='middle'; ctx.fillText(fmtPrice(s.strike),0,0);
+    ctx.restore();
+  });
+
+  // spot line
+  const first=data[0].strike, last=data[data.length-1].strike;
+  let px=padL+plotW/2;
+  if(R.spot<=first) px=padL; else if(R.spot>=last) px=padL+plotW;
+  else for(let i=0;i<data.length-1;i++){
+    if(R.spot>=data[i].strike && R.spot<=data[i+1].strike){
+      px=xCenter(i)+(R.spot-data[i].strike)/(data[i+1].strike-data[i].strike)*slot; break;
+    }
+  }
+  ctx.strokeStyle='#d58b16'; ctx.lineWidth=2;
+  ctx.beginPath(); ctx.moveTo(px,padT-6); ctx.lineTo(px,bottom); ctx.stroke();
+  ctx.fillStyle='#d58b16'; ctx.font=(mobile?'bold 10px Segoe UI':'bold 12px Segoe UI'); ctx.textBaseline='alphabetic';
+  const priceLabel='Price: '+fmtPrice(R.spot);
+  const alignRight=px>W-ctx.measureText(priceLabel).width-12;
+  ctx.textAlign=alignRight?'right':'left';
+  ctx.fillText(priceLabel, px+(alignRight?-6:6), padT-9);
+
+  ctx.fillStyle='#d0d0d0'; ctx.font=(mobile?'bold 11px Segoe UI':'bold 13px Segoe UI'); ctx.textAlign='center';
+  if(hasBar){ ctx.save(); ctx.translate(14,padT+plotH/2); ctx.rotate(-Math.PI/2); ctx.fillText(barMetric.label,0,0); ctx.restore(); }
+  if(dom){ ctx.save(); ctx.translate(W-12,padT+plotH/2); ctx.rotate(Math.PI/2); ctx.fillText(OIV_METRICS[dom].label,0,0); ctx.restore(); }
+  ctx.textBaseline='bottom'; ctx.fillText('Strike',padL+plotW/2,H-4);
+}
+
+function showOiVolumeTooltip(ev){
+  const cv=byId('oiVolumeChart'), tt=byId('oivTooltip'), cross=byId('oivCrosshairX');
+  const bars=cv?._matrixBars||[];
+  if(!tt || !cross || !bars.length) return;
+  const rect=cv.getBoundingClientRect();
+  const point=ev.touches && ev.touches[0] ? ev.touches[0] : ev;
+  const x=point.clientX-rect.left, y=point.clientY-rect.top;
+  const hit=bars.find(b=>x>=b.x && x<b.x+b.w);
+  if(!hit){ hideOiVolumeTooltip(); return; }
+  const s=hit.s;
+  const row=(label,value,cls='')=>`<div class="tt-row"><span>${label}</span><span class="${cls}">${value}</span></div>`;
+  const rows=Object.keys(OIV_METRICS).filter(m=>OIV_ACTIVE.has(m)).map(m=>{
+    const v=OIV_METRICS[m].val(s);
+    const cls=m==='volume_spread' ? (v>=0?'pos':'neg') : (m.startsWith('call')?'pos':'neg');
+    return row(OIV_METRICS[m].label, fmtNum(v), cls);
+  }).join('');
+  tt.innerHTML=`<div class="tt-title">${esc(window._oivR?.symbol||'')} Strike ${fmtPrice(s.strike)}</div>${rows || row('No metric selected','')}`;
+  tt.style.display='block';
+  cross.style.display='block';
+  cross.style.left=Math.max(0,Math.min(rect.width,hit.x+hit.w/2))+'px';
+  const tw=tt.offsetWidth, th=tt.offsetHeight;
+  let left=x+14, top=y+14;
+  if(left+tw>rect.width) left=x-tw-14;
+  if(top+th>rect.height) top=y-th-14;
+  tt.style.left=Math.max(6,left)+'px';
+  tt.style.top=Math.max(6,top)+'px';
+}
+function hideOiVolumeTooltip(){
+  ['oivTooltip','oivCrosshairX'].forEach(id=>{const el=byId(id); if(el) el.style.display='none';});
+}
+
+// Intraday candles for the ticker, with the OI/volume strike lines of the chosen date.
+function drawOiVolumePriceChart(R){
+  const cv=byId('oiVolumePriceChart');
+  if(!cv) return;
+  const empty=byId('oivPriceEmpty');
+  const label=byId('oivPriceLabel');
+  const legend=byId('oivPriceLegend');
+  const lines=oiVolumePriceLines(R.strikes);
+  if(label) label.textContent=`${R.symbol} Price`;
+  if(legend) legend.innerHTML=lines.map(l=>`<span class="sq" style="background:${l.color}"></span>${esc(l.label)} ${fmtPrice(l.price)}`).join('&nbsp;&nbsp;');
+  const dpr=window.devicePixelRatio||1;
+  const W=cv.clientWidth;
+  const mobile=W<640;
+  const H=mobile?320:420;
+  cv.width=W*dpr; cv.height=H*dpr; cv.style.height=H+'px';
+  const ctx=cv.getContext('2d'); ctx.setTransform(dpr,0,0,dpr,0,0);
+  ctx.clearRect(0,0,W,H);
+  const candles=oiv.candles||[];
+  if(empty){
+    empty.textContent=candles.length ? '' : (oiv.candlesError || `No price data for ${R.symbol}`);
+    empty.classList.toggle('show',!candles.length);
+  }
+  if(!candles.length) return;
+
+  // Lines widen the price range so every one stays on the chart.
+  const lo=Math.min(...candles.map(c=>c.low), ...lines.map(l=>l.price));
+  const hi=Math.max(...candles.map(c=>c.high), ...lines.map(l=>l.price));
+  const pad=Math.max((hi-lo)*0.04, hi*0.0005);
+  const yMin=lo-pad, yMax=hi+pad;
+  const padL=mobile?8:16, padR=mobile?58:74, padT=16, padB=30;
+  const plotW=W-padL-padR, plotH=H-padT-padB;
+  const y=v=>padT+(yMax-v)/(yMax-yMin)*plotH;
+  const step=plotW/candles.length;
+  const x=i=>padL+step*(i+0.5);
+
+  ctx.font=(mobile?'bold 10px Segoe UI':'bold 12px Segoe UI'); ctx.textBaseline='middle'; ctx.textAlign='left';
+  for(let t=0;t<=5;t++){
+    const v=yMin+(yMax-yMin)*t/5, yy=y(v);
+    ctx.strokeStyle='rgba(255,255,255,.035)'; ctx.lineWidth=1;
+    ctx.beginPath(); ctx.moveTo(padL,yy); ctx.lineTo(W-padR,yy); ctx.stroke();
+    ctx.fillStyle='#c4c4c4'; ctx.fillText(fmtPrice(v), W-padR+6, yy);
+  }
+  const bw=Math.max(1,Math.min(step*0.7,9));
+  candles.forEach((c,i)=>{
+    const color=c.close>=c.open ? '#17b65f' : '#ff2a17';
+    ctx.strokeStyle=color; ctx.fillStyle=color; ctx.lineWidth=1;
+    ctx.beginPath(); ctx.moveTo(x(i),y(c.high)); ctx.lineTo(x(i),y(c.low)); ctx.stroke();
+    ctx.fillRect(x(i)-bw/2, Math.min(y(c.open),y(c.close)), bw, Math.max(1,Math.abs(y(c.open)-y(c.close))));
+  });
+  lines.forEach(l=>{
+    const yy=y(l.price);
+    ctx.strokeStyle=l.color; ctx.lineWidth=1.5; ctx.setLineDash([6,4]);
+    ctx.beginPath(); ctx.moveTo(padL,yy); ctx.lineTo(W-padR,yy); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle=l.color; ctx.textAlign='left'; ctx.textBaseline='bottom';
+    ctx.fillText(`${l.label} ${fmtPrice(l.price)}`, padL+4, yy-2);
+  });
+  // time axis: New York clock, about six labels
+  const fmtTime=new Intl.DateTimeFormat('en-US',{timeZone:'America/New_York',hour:'2-digit',minute:'2-digit',hourCycle:'h23'});
+  ctx.fillStyle='#c4c4c4'; ctx.textAlign='center'; ctx.textBaseline='top';
+  const every=Math.max(1,Math.ceil(candles.length/6));
+  for(let i=0;i<candles.length;i+=every){
+    ctx.textAlign=i===0?'left':'center';
+    ctx.fillText(fmtTime.format(new Date(candles[i].time*1000)), i===0?padL:x(i), H-padB+8);
+  }
+}
+
+async function loadOiVolumeCandles(symbol){
+  if(!CANDLE_SYMBOLS.has(symbol)) return {candles:null, error:`No price chart for ${symbol}`};
+  const data=await fetchLiveData(`${MATRIX_CANDLES_URL}?symbol=${encodeURIComponent(symbol)}&interval=1m&range=1d`);
+  const candles=Array.isArray(data?.candles) ? data.candles : null;
+  if(!candles?.length) return {candles:null, error:`Could not load the ${symbol} price chart`};
+  // Today's session only: the last trading day in the feed.
+  const day=t=>new Intl.DateTimeFormat('en-CA',{timeZone:'America/New_York'}).format(new Date(t*1000));
+  const lastDay=day(candles[candles.length-1].time);
+  return {candles:candles.filter(c=>day(c.time)===lastDay), error:''};
+}
+// Refresh of OI Volume: Search, Enter, or opening it with no data yet.
+async function refreshOiVolume(symbol){
+  const request=++_oivRequest;
+  const previous=oiv.symbol;
+  syncTickerInput(OIV_VIEW,symbol);
+  setTickerStatus(OIV_VIEW,`Loading ${symbol}…`);
+  const [result,price]=await Promise.all([
+    isCoreSymbol(symbol) ? loadCoreData() : loadDynamicSymbol(symbol),
+    loadOiVolumeCandles(symbol),
+  ]);
+  if(request!==_oivRequest) return;  // a newer Search took over
+  if(!REAL[symbol]){
+    setTickerStatus(OIV_VIEW,result.detail,'error');
+    if(previous) syncTickerInput(OIV_VIEW,previous);
+    return;
+  }
+  if(symbol!==previous) oiv.expiry=null;
+  oiv.symbol=symbol;
+  oiv.candles=price.candles;
+  oiv.candlesError=price.error;
+  screenTickers[OIV_VIEW]=symbol;
+  if(activeView===OIV_VIEW) history.replaceState(null,'',screenUrl(OIV_VIEW));
+  populateOiVolumeExpiries(symbol);
+  renderOiVolume();
+  setTickerStatus(OIV_VIEW,result.ok?'':`Refresh failed. Showing the last data for ${symbol}.`,result.ok?'':'error');
+}
+
 // ---------- P/C Ratio ----------
 // Like his options-summary table: loads every time the screen opens, no ticker or
 // expiry input, one row per core ticker. Totals span all expiries and strikes and
@@ -919,10 +1255,27 @@ document.querySelectorAll('.pbtn').forEach(btn=>{
   });
 });
 window.addEventListener('resize',()=>{
-  if(!window._lastR) return;
   const viewRenderer=VIEW_RENDERERS[activeView];
   if(viewRenderer) viewRenderer(window._lastR);
 });
+// OI Volume: the date and the buttons redraw from the loaded chain; only Search reloads.
+bind('oivExpiry','change',event=>{
+  oiv.expiry=event.target.value || null;
+  renderOiVolume();
+});
+document.querySelectorAll('[data-oiv-metric]').forEach(btn=>{
+  btn.addEventListener('click',()=>{
+    const m=btn.dataset.oivMetric;
+    if(OIV_ACTIVE.has(m)) OIV_ACTIVE.delete(m); else OIV_ACTIVE.add(m);
+    btn.classList.toggle('active',OIV_ACTIVE.has(m));
+    if(window._oivR && activeView===OIV_VIEW) drawOiVolumeChart(window._oivR);
+  });
+});
+bind('oiVolumeChart','mousemove',showOiVolumeTooltip);
+bind('oiVolumeChart','mouseleave',hideOiVolumeTooltip);
+bind('oiVolumeChart','touchstart',showOiVolumeTooltip,{passive:true});
+bind('oiVolumeChart','touchmove',showOiVolumeTooltip,{passive:true});
+bind('oiVolumeChart','touchend',()=>setTimeout(hideOiVolumeTooltip,1200),{passive:true});
 ['gexChart'].forEach(id=>{
   bind(id,'mousemove',showChartTooltip);
   bind(id,'mouseleave',hideChartTooltip);

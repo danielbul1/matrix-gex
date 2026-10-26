@@ -174,3 +174,23 @@ def test_old_shell_is_gone():
         assert old not in script
     assert "setInterval" not in script
     assert "symbol-search" not in script
+
+
+def test_oi_volume_screen_is_built():
+    """OI Volume has his controls: ticker, one expiration date, and his five
+    buttons in his order with Volume Spread first and on (map #21, #35)."""
+    page = (host.MATRIX_WEB_DIR / "matrix.html").read_text(encoding="utf-8")
+    section = page.split('id="view-oi-volume"', 1)[1].split("</section>", 1)[0]
+    assert "Coming soon" not in section
+    assert 'data-screen="oi-volume"' in section
+    assert '<select id="oivExpiry"' in section
+    buttons = re.findall(r'<button class="pbtn( active)?"\s+data-oiv-metric="([a-z_]+)"[^>]*>([^<]+)</button>', section)
+    assert [(label, bool(on)) for on, _, label in buttons] == [
+        ("Volume Spread", True),
+        ("Call OI", False),
+        ("Put OI", False),
+        ("Call Vol", False),
+        ("Put Vol", False),
+    ]
+    assert 'id="oiVolumeChart"' in section
+    assert 'id="oiVolumePriceChart"' in section

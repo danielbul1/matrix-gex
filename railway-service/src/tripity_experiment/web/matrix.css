@@ -147,3 +147,10 @@
     .chartcard{padding-left:4px;padding-right:4px}
     .watermark{font-size:34px}
   }
+
+  /* OI Volume */
+  .pricecard{min-height:auto;margin-top:10px}
+  .price-empty{position:absolute;inset:0;display:none;align-items:center;justify-content:center;
+               color:var(--muted);font-size:15px;font-weight:700;text-align:center;padding:0 16px}
+  .price-empty.show{display:flex}
+  #oivExpiry{min-width:170px}
