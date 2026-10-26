@@ -132,3 +132,11 @@ def test_home_price_message_is_not_hidden_by_oi_volume_rule():
     assert 'class="home-price-empty" id="priceEmpty"' in home
     assert ".home-price-empty{" in css
     assert "price-empty\"" not in home.replace("home-price-empty", "")
+
+
+def test_page_loads_each_asset_once():
+    """Parallel screen merges must not leave two script or stylesheet tags."""
+    page = (host.MATRIX_WEB_DIR / "matrix.html").read_text(encoding="utf-8")
+    assert page.count('src="/matrix/matrix.js') == 1
+    assert page.count('href="/matrix/matrix.css') == 1
+    assert "<<<<<<<" not in page and ">>>>>>>" not in page
