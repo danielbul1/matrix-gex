@@ -219,7 +219,9 @@ def test_guide_pages_have_content(view, title):
     section = page[start:page.index("</section>", start)]
     assert "Coming soon" not in section
     assert f"<h1>{title}</h1>" in section
-    assert "educational purposes only" in page
+    assert "for learning only" in page
+    # Our own wording: his login page line must not be copied (map #21).
+    assert "educational purposes only" not in page
 
 
 def test_guide_has_his_structure():
