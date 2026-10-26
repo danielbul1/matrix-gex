@@ -123,8 +123,11 @@ Gotchas learned the hard way (2026-07-19):
   `pip install "tastytrade>=13,<14"` (not in requirements.txt yet).
 - **Terms to respect:** personal use only, no display to third parties, no bulk
   "data collection" (ToS §8) — stream near-the-money strikes, not whole chains.
-- **Not done:** not run yet (needs the owner's credentials during market hours);
-  nothing on Railway changed.
+- **Railway:** the three `TASTY_*` vars sit on `backend` (values redacted to agents).
+  A separate one-shot service `tasty-probe` (restart NEVER) builds this branch and runs
+  the probe with references to them; read its result with `railway logs`. `backend` is
+  untouched. Delete `tasty-probe` once the feed decision is made.
+- `--check` tests login, chain and stream at any hour; the full run needs market hours.
 
 ### 2026-10-26 — LSE Data 3.0 migration
 - **Outage:** LSE retired its old REST API. `x_options_snapshot`/`x_candles_15m` answer

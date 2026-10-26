@@ -12,6 +12,7 @@ or print them):
 Run during US market hours:
     pip install "tastytrade>=13,<14"
     python tools/tasty_probe.py --minutes 10 --strikes 30 --out tasty_probe.json
+    python tools/tasty_probe.py --check     # login + chain + stream only, any time
 """
 
 from __future__ import annotations
@@ -127,7 +128,39 @@ def pick_contracts(chain, spot: float, strikes: int):
     return expiry, [o.streamer_symbol for o in options if float(o.strike_price) in keep]
 
 
-async def run(minutes: float, strikes: int) -> dict:
+async def spx_spot(streamer, Summary, Trade) -> float | None:
+    """Last SPX trade, or the latest close when the index is not printing."""
+    await streamer.subscribe(Trade, ["SPX"])
+    await streamer.subscribe(Summary, ["SPX"])
+    try:
+        trade = await asyncio.wait_for(streamer.get_event(Trade), timeout=20)
+        if trade.price:
+            return float(trade.price)
+    except asyncio.TimeoutError:
+        pass
+    try:
+        summary = await asyncio.wait_for(streamer.get_event(Summary), timeout=10)
+    except asyncio.TimeoutError:
+        return None
+    close = summary.day_close_price or summary.prev_day_close_price
+    return float(close) if close else None
+
+
+async def connection_check(streamer, Greeks, Quote, Summary, symbols, spot, expiry) -> dict:
+    """Login, chain and stream work; first events for a few contracts. Market need not be open."""
+    sample = symbols[: min(10, len(symbols))]
+    seen = {}
+    for cls in (Quote, Greeks, Summary):
+        await streamer.subscribe(cls, sample)
+        try:
+            event = await asyncio.wait_for(streamer.get_event(cls), timeout=20)
+            seen[cls.__name__] = event.event_symbol
+        except asyncio.TimeoutError:
+            seen[cls.__name__] = None
+    return {"check": "ok", "spot": spot, "expiry": str(expiry), "contracts": len(symbols), "first_event": seen}
+
+
+async def run(minutes: float, strikes: int, check_only: bool = False) -> dict:
     from tastytrade import DXLinkStreamer, Session
     from tastytrade.dxfeed import Greeks, Quote, Summary, TimeAndSale, Trade
     from tastytrade.instruments import get_option_chain
@@ -149,14 +182,15 @@ async def run(minutes: float, strikes: int) -> dict:
     last_quote: dict[str, tuple] = {}
 
     async with DXLinkStreamer(session) as streamer:
-        await streamer.subscribe(Quote, ["SPX"])
-        spx = await asyncio.wait_for(streamer.get_event(Quote), timeout=30)
-        spot = float((spx.bid_price + spx.ask_price) / 2) if spx.bid_price and spx.ask_price else None
+        spot = await spx_spot(streamer, Summary, Trade)
         if not spot:
-            raise SystemExit("No SPX quote; is the market open and the account funded?")
+            raise SystemExit("No SPX price from the streamer; is the account fully onboarded?")
         expiry, symbols = pick_contracts(chain, spot, strikes)
         print(f"SPX {spot:.2f}, expiry {expiry}, {len(symbols)} contracts", file=sys.stderr)
+        if check_only:
+            return await connection_check(streamer, Greeks, Quote, Summary, symbols, spot, expiry)
 
+        wanted = set(symbols)
         for cls in (Quote, Greeks, Summary, Trade, TimeAndSale):
             await streamer.subscribe(cls, symbols)
 
@@ -175,11 +209,15 @@ async def run(minutes: float, strikes: int) -> dict:
 
         async def summaries():
             async for s in streamer.listen(Summary):
+                if s.event_symbol not in wanted:
+                    continue
                 counts["Summary"] += 1
                 open_interest[s.event_symbol] = s.open_interest or 0
 
         async def trades():
             async for t in streamer.listen(Trade):
+                if t.event_symbol not in wanted:
+                    continue
                 counts["Trade"] += 1
                 if t.day_volume is not None:
                     vol = int(t.day_volume)
@@ -222,8 +260,9 @@ def main() -> None:
     parser.add_argument("--minutes", type=float, default=10)
     parser.add_argument("--strikes", type=int, default=30, help="strikes each side of spot")
     parser.add_argument("--out", help="also write the report to this JSON file")
+    parser.add_argument("--check", action="store_true", help="only test login, chain and stream (works when closed)")
     args = parser.parse_args()
-    report = asyncio.run(run(args.minutes, args.strikes))
+    report = asyncio.run(run(args.minutes, args.strikes, args.check))
     text = json.dumps(report, indent=2, default=lambda v: float(v) if isinstance(v, Decimal) else str(v))
     print(text)
     if args.out:
