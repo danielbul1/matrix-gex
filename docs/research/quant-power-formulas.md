@@ -281,7 +281,7 @@ We compared the public files of `151212aa.pythonanywhere.com` (Max Power) and `m
 
 So the old site is the same app, still running under its earlier Russian brand. Everything it does beyond these files sits behind the login, which this effort does not bypass.
 
-## Addendum 4: second pass over both repos (2026-10-26, at the user's request)
+## Addendum 5: second pass over both repos (2026-10-26, at the user's request)
 
 Neither repo has a commit newer than those above (`gex_dashboard` head `130487e`, 2026-09-07; validator head `3569449`, 2026-09-29). The author's other public repos have nothing on Max Power or Quant Power. The new facts below come from parts the earlier addenda did not cite: the **first version** of `docs/power_zone_analysis.md` (commit `e8fb70f`, later rewritten) and `gex_dashboard`'s commit messages. Unless marked otherwise, each is something **he reports the app does**. We did not copy his code or numbers.
 
