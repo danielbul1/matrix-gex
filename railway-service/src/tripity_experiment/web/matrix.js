@@ -1230,13 +1230,6 @@ function drawKeyLevelsChart(state){
     ctx.fillText(mobile ? level.label : `${level.label} ${fmtPrice(level.price)}`, padL+plotW+5, ly);
   });
 
-  // current price
-  const py = y(R.spot);
-  ctx.save(); ctx.setLineDash([3,4]); ctx.strokeStyle = "#d58b16"; ctx.lineWidth = 1.5;
-  ctx.beginPath(); ctx.moveTo(padL,py); ctx.lineTo(padL+plotW,py); ctx.stroke(); ctx.restore();
-  ctx.fillStyle = "#d58b16"; ctx.textAlign = "left"; ctx.textBaseline = "bottom";
-  ctx.fillText(`Price ${fmtPrice(R.spot)}`, padL+4, py-3);
-
   cv._klPlot = {padL, plotW, top, bottom, slot, candles, symbol:R.symbol};
 }
 function showKeyLevelsTooltip(ev){
