@@ -41,3 +41,14 @@ def test_screen_path_still_served():
     status, body = _get(_make_app(), "/matrix/options-summary")
     assert status == 200
     assert b'id="pcTable"' in body
+
+
+def test_screen_is_only_the_table():
+    """His page is one DataTable: no title, explanation text, tiles, charts or refresh."""
+    page = (host.MATRIX_WEB_DIR / "matrix.html").read_text(encoding="utf-8")
+    section = page.split('id="view-options-summary"', 1)[1].split("</section>", 1)[0]
+    assert len(re.findall(r"<table", section)) == 1
+    for extra in ("<h1", "<h2", "<h3", "<canvas", "<button", "<form", "<input", "pc-note"):
+        assert extra not in section
+    script = (host.MATRIX_WEB_DIR / "matrix.js").read_text(encoding="utf-8")
+    assert "As of" not in script.split("// ---------- P/C Ratio", 1)[1].split("// ----------", 1)[0]

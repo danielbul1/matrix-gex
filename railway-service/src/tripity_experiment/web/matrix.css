@@ -113,8 +113,6 @@
   .forecast-card .neg{color:#ff3b2f;font-weight:800}
   /* P/C Ratio screen */
   .pc-card{margin-top:10px;background:#202020;border:0;padding:28px 30px}
-  .pc-title{margin:0 0 4px;color:#e2e2e2;font-size:24px}
-  .pc-note{margin:0 0 16px;color:var(--muted);font-size:13px}
   .pc-table-wrap{overflow-x:auto}
   .pc-table{font-size:14px;min-width:640px}
   .pc-table th{font-size:12px;padding:10px 8px;border-bottom:1px solid #3a3a3a}
