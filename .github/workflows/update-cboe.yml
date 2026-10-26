@@ -9,6 +9,7 @@ on:
       - "fetch_cboe.py"
       - "tools/build_data_status.py"
       - "tools/build_exposure_history.py"
+      - "railway-service/src/tripity_experiment/matrix_gex.py"
       - "tools/smoke_check.py"
       - ".github/workflows/update-cboe.yml"
   schedule:
@@ -89,9 +90,13 @@ jobs:
           }
 
           if python fetch_lse.py $MODE_FLAGS && run_status && MATRIX_REQUIRE_FRESH_DATA=1 python tools/smoke_check.py; then
-            rm -rf /tmp/matrix-gex-data
-            mkdir -p /tmp/matrix-gex-data
-            cp tools/build_exposure_history.py /tmp/matrix-gex-data/
+            rm -rf /tmp/matrix-gex-data /tmp/matrix-gex-tools
+            mkdir -p /tmp/matrix-gex-data /tmp/matrix-gex-tools/tools /tmp/matrix-gex-tools/railway-service/src/tripity_experiment
+            # build_exposure_history.py imports matrix_gex from ../railway-service/src,
+            # and runs after the switch to the data branch, so stage that layout too.
+            cp tools/build_exposure_history.py /tmp/matrix-gex-tools/tools/
+            cp railway-service/src/tripity_experiment/__init__.py railway-service/src/tripity_experiment/matrix_gex.py \
+              /tmp/matrix-gex-tools/railway-service/src/tripity_experiment/
             # Stage ONLY the file(s) this mode fetched — never clobber the
             # other mode's file on the data branch.
             if [ "$MODE_KIND" = "candles" ]; then
@@ -113,7 +118,7 @@ jobs:
             if [ "$MODE_KIND" = "candles" ]; then
               git add candles_data.json
             else
-              python /tmp/matrix-gex-data/build_exposure_history.py --input cboe_data.json --root exposure_history --retain 7
+              python /tmp/matrix-gex-tools/tools/build_exposure_history.py --input cboe_data.json --root exposure_history --retain 7
               if [ "$MODE_KIND" = "full" ]; then
                 git add cboe_data.json candles_data.json data_status.json exposure_history
               else

@@ -93,6 +93,15 @@ Gotchas learned the hard way (2026-07-19):
 
 ## Session Log (every agent MUST append — newest first)
 
+### 2026-10-26 — Pipeline: stage matrix_gex for the exposure-history step
+- The first `update-cboe.yml` run to get past the fetch (after the LSE v3 migration, #19)
+  failed at `build_exposure_history.py`: the workflow copies it to /tmp before switching to
+  the `data` branch, and since 2026-08-18 it imports `matrix_gex` from
+  `../railway-service/src`, which was not copied. The workflow now stages that layout
+  (`/tmp/matrix-gex-tools/{tools,railway-service/src/tripity_experiment}`).
+- Railway's `TRIPITY_MATRIX_LSE_API_KEY` was also stale ("Invalid or inactive API key" on
+  the WebSocket); it was replaced with the current key on 2026-10-26.
+
 ### 2026-10-26 — Shell, menu and a path per screen (map #21, task #32)
 - **Frontend:** sidebar in Quant Power's order (the "Matrix" brand link is home = Strike
   Chart, then OI Volume, GEX Analysis, Key Levels, P/C Ratio, How to use GEX, and
