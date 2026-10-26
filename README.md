@@ -54,15 +54,13 @@ computed twice a day, which is why the chains and OI stay on Cboe.
 
 ### On-demand US option symbols
 
-The Railway Matrix UI can search the official Cboe option-symbol directory and
-load symbols such as `MSFT` or `AVGO` on demand. These symbols use a delayed
-Cboe option-chain snapshot and do not consume LSE historical-download quota.
-Search results are cached for 24 hours and each option chain for the current
-ET calendar day; new uncached chains are also capped at 12 upstream fetches
-per minute. Their spot is Cboe's delayed quote, and the browser recalculates
-the Greeks locally against the daily Cboe OI/IV snapshot.
-
-Favorites are stored only in the browser.
+Typing any other ticker, such as `MSFT` or `AVGO`, into a Matrix screen and
+pressing Search loads it on demand (`/api/matrix/symbol-data`). These symbols use
+a delayed Cboe option-chain snapshot and do not consume LSE historical-download
+quota. Each option chain is cached for the current ET calendar day; new uncached
+chains are capped at 12 upstream fetches per minute. Their spot is Cboe's delayed
+quote, and the browser recalculates the Greeks locally against the daily Cboe
+OI/IV snapshot.
 
 ## API key
 
