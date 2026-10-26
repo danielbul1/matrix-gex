@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Matrix</title>
-<link rel="stylesheet" href="/matrix/matrix.css?v=20261026-shell">
+<link rel="stylesheet" href="/matrix/matrix.css?v=20261026-oiv">
 </head>
 <body>
 <header id="sidebar">
@@ -79,8 +79,45 @@
         <button type="submit">Search</button>
         <span class="ticker-status" aria-live="polite"></span>
       </form>
+      <div class="ctrl">
+        <label for="oivExpiry">Expiration</label>
+        <select id="oivExpiry" aria-label="Expiration date"></select>
+      </div>
     </div>
-    <div class="coming-soon"><h2>OI Volume</h2><p>Coming soon.</p></div>
+
+    <div class="params" id="oivParams">
+      <span class="plabel">Parameters:</span>
+      <button class="pbtn active" data-oiv-metric="volume_spread" style="--c:#22b8ff">Volume Spread</button>
+      <button class="pbtn"        data-oiv-metric="call_oi"       style="--c:#26c281">Call OI</button>
+      <button class="pbtn"        data-oiv-metric="put_oi"        style="--c:#ef5350">Put OI</button>
+      <button class="pbtn"        data-oiv-metric="call_vol"      style="--c:#2f73ff">Call Vol</button>
+      <button class="pbtn"        data-oiv-metric="put_vol"       style="--c:#ff8a3d">Put Vol</button>
+    </div>
+
+    <div class="card chartcard">
+      <div class="charttop">
+        <span class="symlabel" id="oivSymLabel"></span>
+        <span class="chartlegend" id="oivChartLegend"></span>
+      </div>
+      <div class="chartwrap">
+        <div class="watermark">Matrix</div>
+        <div class="chart-crosshair-x" id="oivCrosshairX"></div>
+        <div class="chart-tooltip" id="oivTooltip"></div>
+        <canvas id="oiVolumeChart" height="540"></canvas>
+      </div>
+    </div>
+
+    <div class="card chartcard pricecard">
+      <div class="charttop">
+        <span class="symlabel" id="oivPriceLabel"></span>
+        <span class="chartlegend" id="oivPriceLegend"></span>
+      </div>
+      <div class="chartwrap">
+        <div class="watermark">Matrix</div>
+        <div class="price-empty" id="oivPriceEmpty"></div>
+        <canvas id="oiVolumePriceChart" height="420"></canvas>
+      </div>
+    </div>
   </section>
 
   <section class="app-view" id="view-gex-analysis" data-title="GEX Analysis">
@@ -122,6 +159,6 @@
   </section>
 </main>
 
-<script src="/matrix/matrix.js?v=20261026-shell"></script>
+<script src="/matrix/matrix.js?v=20261026-oiv"></script>
 </body>
 </html>

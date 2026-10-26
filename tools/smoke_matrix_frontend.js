@@ -1,6 +1,6 @@
 /* Smoke test: load matrix.js with DOM stubs (offline), then verify
-   VIX AM-settlement, real VIX chain aggregation (netVex/netCharm),
-   OI-weighted strikes, and quick-select predicates. */
+   VIX AM-settlement, the Strike Chart engine, quick-select predicates
+   and the OI Volume screen. */
 const fs = require('fs');
 const vm = require('vm');
 
@@ -14,7 +14,7 @@ function makeEl(id) {
     id, innerHTML: '', textContent: '', value: '2', disabled: false,
     style: {}, dataset: {},
     classList: { add() {}, remove() {}, toggle() {}, contains: () => false },
-    addEventListener() {}, appendChild() {},
+    addEventListener() {}, appendChild() {}, setAttribute() {}, removeAttribute() {},
     getContext: () => absorb, clientWidth: 900, clientHeight: 600,
     getBoundingClientRect: () => ({ left: 0, top: 0, width: 900, height: 600 }),
   };
@@ -23,13 +23,16 @@ const els = new Map();
 global.document = {
   hidden: true,
   getElementById: id => { if (!els.has(id)) els.set(id, makeEl(id)); return els.get(id); },
+  querySelector: () => null,
   querySelectorAll: () => [],
   createElement: () => makeEl('created'),
 };
 global.window = {
   addEventListener() {}, innerWidth: 1280, innerHeight: 800,
-  devicePixelRatio: 1, location: { search: '' },
+  devicePixelRatio: 1, location: { pathname: '/matrix/', search: '' },
+  scrollTo() {},
 };
+global.history = { pushState() {}, replaceState() {} };
 global.localStorage = { getItem: () => null, setItem() {} };
 global.fetch = () => Promise.reject(new Error('offline smoke test'));
 
@@ -50,90 +53,58 @@ const tSpy = preciseYearsToExpiry('2026-07-22', 'SPY', now);
 check('VIX is AM-settled (shorter T than PM-settled)', tVix < tSpy, `vix=${(tVix * 365.25 * 24).toFixed(1)}h spy=${(tSpy * 365.25 * 24).toFixed(1)}h`);
 check('VIXW matches VIX AM settlement', tVix === tVixw);
 
-// --- 2. Real VIX chain through the engine ---
-const vix = JSON.parse(fs.readFileSync(process.env.TEMP + '/vix.json', 'utf8'));
-const OCC = /([A-Z]+)(\d{6})([CP])(\d{8})/;
-const today = new Date();
-const opts = [];
-for (const o of vix.data.options) {
-  const m = OCC.exec(o.option || '');
-  if (!m) continue;
-  const exp = `20${m[2].slice(0, 2)}-${m[2].slice(2, 4)}-${m[2].slice(4, 6)}`;
-  const dte = Math.max(0, Math.round((Date.parse(exp + 'T00:00:00Z') - Date.now()) / 86400000));
-  const spot = vix.data.current_price;
-  const strike = parseInt(m[4], 10) / 1000;
-  if (Math.abs(strike - spot) / spot > 0.25) continue;
-  if (!(o.open_interest > 0)) continue;
-  opts.push({ k: strike, t: m[3], root: m[1], exp, dte, iv: o.iv || 0, oi: o.open_interest | 0, vol: o.volume | 0, g: o.gamma || 0, d: o.delta || 0 });
+// --- 2. Strike Chart engine on a small synthetic chain ---
+function synthRecord(spot, exps) {
+  const opts = [];
+  for (const exp of exps) {
+    for (let k = spot - 50; k <= spot + 50; k += 5) {
+      opts.push({ k, t: 'C', exp, dte: 0, iv: 0.15, oi: 200 + (k % 20), vol: 100 + (k - spot + 50), g: 0.002, d: 0.5 });
+      opts.push({ k, t: 'P', exp, dte: 0, iv: 0.16, oi: 300, vol: 150, g: 0.002, d: -0.5 });
+    }
+  }
+  return { spot, asof: new Date().toISOString(), mult: 100, opts, source: 'smoke' };
 }
-const rec = { spot: vix.data.current_price, asof: new Date().toISOString(), mult: 100, opts, source: 'smoke' };
-const chain = buildChainRealFromRecord('VIX', rec, null);
-const R = calcGEX(chain, 'full');
-check('VIX chain parsed', opts.length > 100, `${opts.length} options kept (within +/-25% of spot)`);
-check('VIX strikes aggregated', R.strikes.length > 10, `${R.strikes.length} strikes`);
-const hasVex = R.strikes.some(s => Math.abs(s.netVex) > 0);
-const hasCharm = R.strikes.some(s => Math.abs(s.netCharm) > 0);
-check('netVex populated per strike', hasVex);
-check('netCharm populated per strike', hasCharm);
-const roots = new Set(opts.map(o => o.root));
-check('VIX+VIXW roots present', roots.has('VIX'), [...roots].join(','));
+const isoDay = n => new Date(Date.now() + n * 86400000).toISOString().slice(0, 10);
+const exp0 = isoDay(1), exp1 = isoDay(8);
+REAL.SPX = synthRecord(6000, [exp0, exp1]);
+const R = calcGEX(buildChainReal('SPX'));
+check('strikes aggregated', R.strikes.length === 21, `${R.strikes.length} strikes`);
+let drawOk = true;
+try { R.expectedMove = calcExpectedMove(buildChainReal('SPX')); drawChart(R); } catch (e) { drawOk = false; console.log('draw error:', e.message); }
+check('Strike Chart draws (no-throw)', drawOk);
 
-// --- 3. OI-weighted strikes ---
-const w = oiWeightedStrikes(R);
-check('weighted strikes finite', Number.isFinite(w.call) && Number.isFinite(w.put) && Number.isFinite(w.total),
-  `call=${w.call?.toFixed(1)} put=${w.put?.toFixed(1)} total=${w.total?.toFixed(1)} spot=${R.spot}`);
-const ks = R.strikes.map(s => s.strike);
-check('weighted strikes within strike range',
-  w.call >= Math.min(...ks) && w.call <= Math.max(...ks) && w.total >= Math.min(...ks) && w.total <= Math.max(...ks));
-
-// --- 4. Quick-select predicates ---
+// --- 3. Quick-select predicates ---
 check('0DTE predicate', expiryQuickPredicate('0dte')(0) === true && expiryQuickPredicate('0dte')(1) === false);
 check('Week predicate', expiryQuickPredicate('week')(7) === true && expiryQuickPredicate('week')(8) === false);
 check('All predicate', expiryQuickPredicate('all')(45) === true);
 
-// --- 5. METRICS wiring ---
-check('net_vex/net_charm bar metrics exist', METRICS.net_vex.kind === 'bar' && METRICS.net_charm.kind === 'bar');
-check('weighted is overlay kind', METRICS.weighted.kind === 'overlay');
-check('BAR_METRIC_BY_CHART maps vex/chex', BAR_METRIC_BY_CHART.vexChart === 'net_vex' && BAR_METRIC_BY_CHART.chexChart === 'net_charm');
-check('chartTargets vex/chex ids', chartTargets('vexChart').tooltipId === 'vexTooltip' && chartTargets('chexChart').legendId === 'chexChartLegend');
-check('Weighted overlay keeps only Total W', WEIGHTED_LINES.length === 1 && WEIGHTED_LINES[0].key === 'total');
-
-// --- 5b. DEX|GEX|VEX|CHEX switcher on the main gexChart ---
-check('gexChart bar metric defaults to net_gex', chartBarMetricKey('gexChart') === 'net_gex' && GEX_CHART_BAR_METRIC === 'net_gex');
-check('fixed charts unchanged', chartBarMetricKey('dexChart') === 'net_dex' && chartBarMetricKey('matrixGexChart') === null);
-let switchOk = true;
+// --- 4. OI Volume ---
+check('OI Volume has his five buttons in his order',
+  JSON.stringify(Object.keys(OIV_METRICS)) === JSON.stringify(['volume_spread', 'call_oi', 'put_oi', 'call_vol', 'put_vol']));
+check('Volume Spread is on by default and drawn as bars', OIV_ACTIVE.has('volume_spread') && OIV_ACTIVE.size === 1 && OIV_METRICS.volume_spread.kind === 'bar');
+const agg = aggregateOiVolume([
+  { K: 100, isCall: true, oi: 10, vol: 7 }, { K: 100, isCall: false, oi: 4, vol: 9 },
+  { K: 105, isCall: true, oi: 0, vol: 0 }, { K: 105, isCall: false, oi: 0, vol: 0 },
+  { K: 110, isCall: true, oi: 2, vol: 5 }, { K: 110, isCall: true, oi: 3, vol: 1 },
+]);
+check('Volume Spread = call vol - put vol per strike', agg.length === 2 && agg[0].volumeSpread === -2 && agg[1].volumeSpread === 6,
+  JSON.stringify(agg.map(s => [s.strike, s.volumeSpread])));
+check('OI and volume sum per strike', agg[1].callOI === 5 && agg[1].callVol === 6);
+check('OI Volume lists future expirations only, sorted', JSON.stringify(oiVolumeExpiries(buildChainReal('SPX'))) === JSON.stringify([exp0, exp1]));
+const O = computeOiVolume('SPX', exp1);
+check('OI Volume uses one expiration', O.strikes.length === 21 && O.strikes.every(s => s.callOI > 0));
+const lines = oiVolumePriceLines(O.strikes);
+check('price chart lines: Call OI, Put OI, Call Vol, Put Vol', JSON.stringify(lines.map(l => l.label)) === JSON.stringify(['Call OI', 'Put OI', 'Call Vol', 'Put Vol']));
+check('Call Vol line sits at the top call-volume strike', lines[2].price === 6050);
+let oivOk = true;
 try {
-  for (const key of ['net_dex', 'net_vex', 'net_charm', 'net_gex']) {
-    GEX_CHART_BAR_METRIC = key;
-    const st = chartActiveMetrics('gexChart');
-    if (!st.hasBar || st.active[0] !== key) throw new Error(`bad active state for ${key}`);
-    if (st.active.some(m => BAR_METRIC_KEYS.includes(m) && m !== key)) throw new Error(`foreign bar metric leaked for ${key}`);
-    drawChart(R, 'gexChart');
-  }
-} catch (e) { switchOk = false; console.log('switcher error:', e.message); }
-check('switcher swaps gexChart bars (all 4 metrics, no-throw)', switchOk);
-GEX_CHART_BAR_METRIC = 'net_gex';
-const gexOff = (ACTIVE.delete('net_gex'), chartActiveMetrics('gexChart'));
-check('Net GEX pbtn still hides bars when GEX selected', gexOff.hasBar === false && !gexOff.active.includes('net_gex'));
-ACTIVE.add('net_gex');
-
-// --- 6. VEX/CHEX draw path does not throw (absorbing canvas stub) ---
-let drawOk = true;
-try {
-  drawChart(R, 'vexChart');
-  drawChart(R, 'chexChart');
-  renderGreekExposureKpis(R, 'vex');
-  renderGreekExposureKpis(R, 'chex');
-} catch (e) { drawOk = false; console.log('draw error:', e.message); }
-check('vex/chex draw + KPI render no-throw', drawOk);
-
-// --- 7. Weighted overlay draw path on gexChart ---
-let wOk = true;
-try {
-  ACTIVE.add('weighted');
-  drawChart(R, 'gexChart');
-  ACTIVE.delete('weighted');
-} catch (e) { wOk = false; console.log('weighted draw error:', e.message); }
-check('weighted overlay draw no-throw', wOk);
+  oiv.symbol = 'SPX'; oiv.expiry = exp0;
+  oiv.candles = [{ time: 1761573000, open: 5990, high: 6010, low: 5985, close: 6005 }, { time: 1761573060, open: 6005, high: 6012, low: 6000, close: 6001 }];
+  for (const m of Object.keys(OIV_METRICS)) OIV_ACTIVE.add(m);
+  renderOiVolume();
+  oiv.candles = null; renderOiVolume();
+  OIV_ACTIVE.clear(); renderOiVolume(); OIV_ACTIVE.add('volume_spread');
+} catch (e) { oivOk = false; console.log('oi volume draw error:', e.stack); }
+check('OI Volume strike and price charts draw (no-throw)', oivOk);
 
 process.exit(failures ? 1 : 0);
