@@ -47,20 +47,28 @@ MATRIX_CBOE_SYMBOL_DIRECTORY_URL = (
     "https://www.cboe.com/us/options/symboldir/equity_index_options/?download=csv"
 )
 MATRIX_YAHOO_CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{}"
-MATRIX_LSE_CHAIN_URL = "https://api.londonstrategicedge.com/vault/options/chain"
-MATRIX_LSE_CANDLES_URL = "https://api.londonstrategicedge.com/vault/candles"
-MATRIX_LSE_FLOW_URL = "https://api.londonstrategicedge.com/vault/options/flow"
+# LSE Data 3.0 (the /vault and x_* calls are gone: 410/404 since 2026-10).
+# Free plan: 60 calls a minute and one export download at a time per key.
+MATRIX_LSE_V3_URL = "https://download.londonstrategicedge.com/v3"
+MATRIX_LSE_CHAIN_URL = f"{MATRIX_LSE_V3_URL}/options/chain"
+MATRIX_LSE_FLOW_URL = f"{MATRIX_LSE_V3_URL}/options/flow"
+MATRIX_LSE_PREVIEW_URL = f"{MATRIX_LSE_V3_URL}/preview"
+MATRIX_LSE_EXPORT_URL = f"{MATRIX_LSE_V3_URL}/export"
 MATRIX_LSE_SYMBOLS = ("SPY", "QQQ")
-# Index underlyings are streamed under their LSE catalog names (same names the
-# REST vault accepts). If LSE ever rejects these on the free plan, set
+# Index underlyings are streamed under their LSE WebSocket names (REST v3 calls
+# them SPX/NDX in the "indices" market). If LSE ever rejects these, set
 # TRIPITY_MATRIX_STREAM_INDICES=0 to fall back to REST-only index spots.
 MATRIX_LSE_INDEX_STREAM_SYMBOLS = {"SPX500/USD": "SPX", "NAS100/USD": "NDX"}
+# display symbol -> (LSE v3 market, LSE v3 symbol) for REST prices and candles.
 MATRIX_LSE_PRICE_SYMBOLS = {
-    "SPX": "SPX500/USD",
-    "NDX": "NAS100/USD",
-    "SPY": "SPY",
-    "QQQ": "QQQ",
+    "SPX": ("indices", "SPX"),
+    "NDX": ("indices", "NDX"),
+    "SPY": ("us_stocks", "SPY"),
+    "QQQ": ("us_stocks", "QQQ"),
 }
+MATRIX_LSE_TIMEFRAMES = {"1m": "1m", "5m": "5m", "15m": "15m", "30m": "30m", "60m": "1h"}
+MATRIX_LSE_RANGE_DAYS = {"1d": 4, "5d": 8, "1mo": 32}
+MATRIX_LSE_CANDLE_MAX_AGE_SECONDS = 4 * 24 * 3600  # spans a weekend plus a holiday
 MATRIX_CANDLE_SYMBOLS = set(MATRIX_LSE_PRICE_SYMBOLS)
 MATRIX_YAHOO_SYMBOLS = {"SPX": "^GSPC", "NDX": "^NDX"}
 MATRIX_CANDLE_INTERVALS = {"1m", "2m", "5m", "15m", "30m", "60m"}
@@ -112,6 +120,7 @@ _matrix_flow_lock = asyncio.Lock()
 _matrix_flow_collector: MatrixFlowCollector | None = None
 _matrix_lse_spots_cache: tuple[float, dict[str, dict[str, Any]]] | None = None
 _matrix_lse_spots_lock = asyncio.Lock()
+_matrix_lse_export_lock = asyncio.Lock()
 LANDING_PAGE = """<!doctype html>
 <html lang="en">
 <head>
@@ -350,11 +359,11 @@ async def _fetch_matrix_cboe_spot_cached(symbol: str) -> dict[str, Any] | None:
 def _matrix_lse_candles_payload(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     candles: list[dict[str, Any]] = []
     for row in rows:
-        timestamp = row.get("ts") or row.get("timestamp")
+        timestamp = row.get("time") or row.get("ts") or row.get("timestamp")
         if not timestamp:
             continue
         try:
-            parsed = datetime.datetime.fromisoformat(str(timestamp).replace("Z", "+00:00"))
+            parsed = datetime.datetime.fromisoformat(str(timestamp).replace(" ", "T").replace("Z", "+00:00"))
             if parsed.tzinfo is None:
                 parsed = parsed.replace(tzinfo=datetime.timezone.utc)
             values = tuple(float(row[name]) for name in ("open", "high", "low", "close"))
@@ -384,37 +393,48 @@ async def _fetch_matrix_candles_uncached(
     if interval not in MATRIX_CANDLE_INTERVALS:
         raise ValueError("Unsupported candle interval")
     api_key = _matrix_lse_api_key()
-    lse_symbol = MATRIX_LSE_PRICE_SYMBOLS.get(symbol)
-    if api_key and lse_symbol:
+    lse_pair = MATRIX_LSE_PRICE_SYMBOLS.get(symbol)
+    timeframe = MATRIX_LSE_TIMEFRAMES.get(interval)
+    if api_key and lse_pair and timeframe:
+        market, lse_symbol = lse_pair
+        today = datetime.datetime.now(datetime.timezone.utc).date()
+        days = MATRIX_LSE_RANGE_DAYS.get(range_, MATRIX_LSE_RANGE_DAYS["5d"])
         params = {
+            "market": market,
             "symbol": lse_symbol,
-            "timeframe": interval,
-            "order": "desc",
-            "limit": "2500" if range_ != "1d" else "500",
+            "timeframe": timeframe,
+            "data": "candles",
+            "format": "csv",
+            "from": (today - datetime.timedelta(days=days)).isoformat(),
+            "to": today.isoformat(),
         }
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                response = await client.get(
-                    MATRIX_LSE_CANDLES_URL,
-                    params=params,
-                    headers={
-                        "x-api-key": api_key,
-                        "User-Agent": "Tripity Matrix market data (+https://trytripity.site)",
-                    },
-                )
-                response.raise_for_status()
-            candles = _matrix_lse_candles_payload(_matrix_lse_rows(response.json()))
-            if candles:
+            # A key may stream one export at a time; serialize ours so the
+            # dashboard's parallel chart requests don't trip 429s.
+            async with _matrix_lse_export_lock:
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    response = await client.get(
+                        MATRIX_LSE_EXPORT_URL,
+                        params=params,
+                        headers=_matrix_lse_headers(api_key),
+                    )
+                    response.raise_for_status()
+            rows = list(csv.DictReader(io.StringIO(response.text)))
+            candles = _matrix_lse_candles_payload(rows)[-(500 if range_ == "1d" else 2500):]
+            # LSE's intraday index history has gaps (SPX 1h held only two days
+            # of October 2026); a stale last candle falls through to Yahoo.
+            stale_before = time.time() - MATRIX_LSE_CANDLE_MAX_AGE_SECONDS
+            if candles and candles[-1]["time"] >= stale_before:
                 return {
                     "ok": True,
                     "symbol": symbol,
                     "interval": interval,
                     "range": range_,
-                    "source": "lse_vault",
+                    "source": "lse_v3",
                     "asof": candles[-1]["time"],
                     "candles": candles,
                 }
-        except (httpx.HTTPError, ValueError):
+        except (httpx.HTTPError, ValueError, csv.Error):
             pass
 
     yahoo_symbol = MATRIX_YAHOO_SYMBOLS.get(symbol, symbol)
@@ -746,6 +766,10 @@ def _matrix_lse_api_key() -> str:
         or os.getenv("LSE_API_KEY")
         or ""
     ).strip()
+
+
+def _matrix_lse_headers(api_key: str) -> dict[str, str]:
+    return {"X-API-Key": api_key, "User-Agent": "Tripity Matrix market data (+https://trytripity.site)"}
 
 
 def _matrix_lse_rows(payload: Any) -> list[dict[str, Any]]:
@@ -1624,20 +1648,24 @@ async def _fetch_matrix_flow(
             session_start -= datetime.timedelta(days=1)
         params = {
             "underlying": symbol,
-            # The vault accepts UTC ISO timestamps without a suffix here.
-            "start": session_start.astimezone(datetime.timezone.utc).replace(tzinfo=None).isoformat(),
+            # v3 takes "YYYY-MM-DD HH:MM:SS" UTC; "to" defaults to now.
+            "from": session_start.astimezone(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
             "order": "desc",
             "limit": "5000",
         }
-        timeout = httpx.Timeout(30.0, connect=10.0)
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.get(
-                MATRIX_LSE_FLOW_URL,
-                params=params,
-                headers={"x-api-key": api_key, "User-Agent": "Tripity Matrix options flow (+https://trytripity.site)"},
-            )
-            response.raise_for_status()
-            rows = _matrix_lse_rows(response.json())
+        rows: list[dict[str, Any]] = []
+        # Before today's open the window would start in the future, which v3
+        # refuses (400 date-order); there is no flow to fetch yet.
+        if session_start <= et_now:
+            timeout = httpx.Timeout(30.0, connect=10.0)
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                response = await client.get(
+                    MATRIX_LSE_FLOW_URL,
+                    params=params,
+                    headers=_matrix_lse_headers(api_key),
+                )
+                response.raise_for_status()
+                rows = _matrix_lse_rows(response.json())
         payload = _matrix_lse_flow_payload(
             rows,
             symbol,
@@ -1687,15 +1715,9 @@ def _merge_matrix_lse_chain(
         if live is None:
             continue
         matches += 1
-        for source, target, digits in (
-            ("iv", "iv", 6),
-            ("gamma", "g", 8),
-            ("delta", "d", 6),
-        ):
-            value = live.get(source)
-            if value is not None:
-                option[target] = round(float(value), digits)
-        volume = live.get("volume")
+        # LSE v3 Greeks are computed twice a day (at least a session old), so
+        # Cboe's IV/gamma/delta stay; only the live tape fields overlay.
+        volume = live.get("volume_today", live.get("volume"))
         if volume is not None:
             option["vol"] = int(float(volume))
         last_price = live.get("last_price") or live.get("price")
@@ -1731,7 +1753,7 @@ async def _fetch_matrix_lse_chain(
             response = await client.get(
                 MATRIX_LSE_CHAIN_URL,
                 params=params,
-                headers={"x-api-key": api_key, "User-Agent": "Tripity Matrix market data (+https://trytripity.site)"},
+                headers=_matrix_lse_headers(api_key),
             )
             response.raise_for_status()
             return symbol, _matrix_lse_rows(response.json())
@@ -1812,24 +1834,27 @@ async def _fetch_matrix_lse_spots() -> dict[str, dict[str, Any]]:
             return _matrix_lse_spots_cache[1]
         semaphore = asyncio.Semaphore(2)
 
-        async def fetch_one(client: httpx.AsyncClient, display_symbol: str, lse_symbol: str):
+        async def fetch_one(client: httpx.AsyncClient, display_symbol: str, lse_pair: tuple[str, str]):
+            market, lse_symbol = lse_pair
             async with semaphore:
+                # Without from/to, preview answers the newest ten 1m candles, oldest first.
                 response = await client.get(
-                    MATRIX_LSE_CANDLES_URL,
-                    params={"symbol": lse_symbol, "timeframe": "1m", "order": "desc", "limit": "1"},
-                    headers={
-                        "x-api-key": api_key,
-                        "User-Agent": "Tripity Matrix market data (+https://trytripity.site)",
-                    },
+                    MATRIX_LSE_PREVIEW_URL,
+                    params={"market": market, "symbol": lse_symbol, "timeframe": "1m", "data": "candles"},
+                    headers=_matrix_lse_headers(api_key),
                 )
                 response.raise_for_status()
             rows = _matrix_lse_rows(response.json())
             if not rows:
                 raise ValueError(f"LSE returned no price for {display_symbol}")
-            row = rows[0]
-            asof = str(row.get("ts") or row.get("timestamp") or "")
+            row = rows[-1]
+            asof = str(row.get("time") or row.get("ts") or row.get("timestamp") or "")
             if asof and not re.search(r"Z$|[+-]\d{2}:?\d{2}$", asof):
                 asof = asof.replace(" ", "T") + "Z"
+            # A stale LSE print must not override the Cboe spot (see the candle guard).
+            seen = datetime.datetime.fromisoformat(asof.replace("Z", "+00:00")).timestamp() if asof else 0.0
+            if seen < time.time() - MATRIX_LSE_CANDLE_MAX_AGE_SECONDS:
+                raise ValueError(f"LSE price for {display_symbol} is stale ({asof or 'no time'})")
             return display_symbol, {
                 "spot": float(row.get("close") or row.get("price")),
                 "asof": asof,
@@ -1857,7 +1882,7 @@ async def _fetch_matrix_market_data() -> dict[str, Any]:
         record["spot"] = live["spot"]
         record["asof"] = live["asof"]
         record["price_asof"] = live["asof"]
-        record["price_source"] = MATRIX_LSE_PRICE_SYMBOLS[symbol]
+        record["price_source"] = "lse_v3:" + "/".join(MATRIX_LSE_PRICE_SYMBOLS[symbol])
         if symbol in {"SPX", "NDX"}:
             record["source"] = "lse_live_index+cboe_oi"
         elif record.get("source") == "tripity_cboe":

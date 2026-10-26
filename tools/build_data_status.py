@@ -93,7 +93,7 @@ def build_status(data, now_et=None):
 
     return {
         "schema_version": 1,
-        "source": "LSE options snapshot",
+        "source": "Cboe delayed options snapshot",
         "reference_symbol": FRESHNESS_SYMBOL,
         "state": state,
         "market_window": {

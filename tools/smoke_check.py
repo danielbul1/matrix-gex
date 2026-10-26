@@ -143,7 +143,9 @@ def validate_status_file():
         return fail("data_status.json has unsupported schema_version")
     if status.get("reference_symbol") != FRESHNESS_SYMBOL:
         return fail("data_status.json has unexpected reference_symbol")
-    if status.get("source") != "LSE options snapshot":
+    # "LSE options snapshot" is the label status files carried before the
+    # chains moved to Cboe (2026-10); candles-only runs may still validate one.
+    if status.get("source") not in {"Cboe delayed options snapshot", "LSE options snapshot"}:
         return fail("data_status.json has unexpected source")
     if status.get("state") not in {"fresh", "stale", "future", "off_hours", "unknown"}:
         return fail("data_status.json has invalid state")
