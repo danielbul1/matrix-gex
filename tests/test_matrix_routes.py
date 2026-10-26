@@ -209,3 +209,24 @@ def test_gex_board_is_built_like_his():
                     'id="gbSpot"', 'id="gbTable"', 'id="gbTotalChart"', 'id="gbSplitChart"', 'id="gbPriceChart"'):
         assert element in section
     assert section.count('class="gb-expand"') == 3
+
+
+@pytest.mark.parametrize("view, title", [("how-to-use-gex", "How to use GEX"), ("disclaimer", "Disclaimer")])
+def test_guide_pages_have_content(view, title):
+    """Build 8 (#38): both pages carry our own text, laid out like his guide page."""
+    page = (host.MATRIX_WEB_DIR / "matrix.html").read_text(encoding="utf-8")
+    start = page.index(f'id="view-{view}"')
+    section = page[start:page.index("</section>", start)]
+    assert "Coming soon" not in section
+    assert f"<h1>{title}</h1>" in section
+    assert "for learning only" in page
+    # Our own wording: his login page line must not be copied (map #21).
+    assert "educational purposes only" not in page
+
+
+def test_guide_has_his_structure():
+    page = (host.MATRIX_WEB_DIR / "matrix.html").read_text(encoding="utf-8")
+    start = page.index('id="view-how-to-use-gex"')
+    section = page[start:page.index("</section>", start)]
+    for tag in ("<h2>", "<h3>", "<ul>", "<table>", "<strong>"):
+        assert tag in section
