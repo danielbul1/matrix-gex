@@ -106,9 +106,9 @@ _Avoid_: absolute gamma, ABS GEX, aggregate gamma
 A per-strike measure of where dealer hedging is heaviest. It is a strike's AG plus a share of its trading volume so far today, drawn only for strikes near spot.
 _Avoid_: power range, AVG Power Zone, zone band
 
-**Matrix Power**:
-The strike with the highest Power Zone: the level that price is drawn to. It is a Price Line, not a Key Level.
-_Avoid_: Max Power, magnet, Quant Power level
+**Matrix** (the level):
+The strike with the highest Power Zone: the level that price is drawn to. It is a Price Line, not a Key Level. It carries the product's own name, the way Quant Power names its magnet after itself.
+_Avoid_: Matrix Power, Max Power, magnet, Quant Power level
 
 **Price Line**:
 One of the six strikes drawn across the Strike Chart's price chart:
@@ -116,7 +116,7 @@ One of the six strikes drawn across the Strike Chart's price chart:
 - N1: the most negative Net GEX.
 - Call Vol: the most call volume.
 - Put Vol: the most put volume.
-- Matrix Power.
+- Matrix.
 - AG Strike: the largest AG.
 
 _Avoid_: Key Level, support/resistance
