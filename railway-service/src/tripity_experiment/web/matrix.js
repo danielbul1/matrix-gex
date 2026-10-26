@@ -23,13 +23,7 @@ function calcGreeks(S,K,T,sigma,r,isCall){
   const nd1 = normPDF(d1);
   const delta = isCall ? normCDF(d1) : normCDF(d1)-1;
   const gamma = nd1/(S*sigma*sqrtT);       // same for calls/puts
-  const vega  = S*sqrtT*nd1/100;           // per 1% vol
-  const vanna = -nd1*d2/sigma;             // dDelta / dVol
-  const charm = -nd1*(2*r*T-d2*sigma*sqrtT)/(2*T*sigma*sqrtT); // call/put dDelta / dt
-  let theta;
-  if(isCall) theta = -(S*nd1*sigma)/(2*sqrtT) - r*K*Math.exp(-r*T)*normCDF(d2);
-  else       theta = -(S*nd1*sigma)/(2*sqrtT) + r*K*Math.exp(-r*T)*normCDF(-d2);
-  return {delta, gamma, theta:theta/365, vega, vanna, charm, iv:sigma};
+  return {delta, gamma, iv:sigma};
 }
 function parseSourceTimestamp(value){
   if(!value) return Date.now();
@@ -56,18 +50,9 @@ function preciseYearsToExpiry(exp,root,valuationMs){
   return Math.max((expiryMs-valuationMs)/(365.25*86400000),1/(365.25*24*60));
 }
 
-// ---------- Symbol universe ----------
-const SYMBOLS = {
-  NDX:{spot:29252.56, step:25, mult:100, baseIV:0.170, market:"US"},
-  SPX:{spot:7482.71,  step:5,  mult:100, baseIV:0.140, market:"US"},
-  SPY:{spot:746.58,  step:5,  mult:100, baseIV:0.135, market:"US"},
-  QQQ:{spot:715.71,  step:1,  mult:100, baseIV:0.165, market:"US"},
-  VIX:{spot:20,     step:1,  mult:100, baseIV:0.80,  market:"US"},
-};
 // Real market data is served directly by Tripity.
 let REAL = {};
-let REAL_ASOF = {};
-const RISK_FREE = {US:0.05, IN:0.065};
+const RISK_FREE = 0.05;
 const SPX_SPY_RATIO = 10.03657299922611;
 // User-provided conversion example: QQQ 752.00 = NDX 30,916.24.
 const NDX_QQQ_RATIO = 30916.24 / 752;
@@ -80,7 +65,7 @@ function buildChainReal(symKey){
 }
 function buildChainRealFromRecord(symKey, rec){
   const spot = rec.spot;
-  const r = RISK_FREE[SYMBOLS[symKey] ? SYMBOLS[symKey].market : "US"] || 0.05;
+  const r = RISK_FREE;
   const now = parseSourceTimestamp(rec.price_asof || rec.asof);
   const quotes = rec.opts.map(o=>{
     const isCall = o.t==="C";
@@ -92,11 +77,9 @@ function buildChainRealFromRecord(symKey, rec){
     if(recalcFromLiveIndex || !o.g || o.g<=0){
       g = modelGreeks;
     }
-    return {K:o.k, dte:o.dte, T, exp:o.exp, root:o.root||'', isCall, iv:o.iv, oi:o.oi, vol:o.vol,
-      last:Number(o.last), bid:Number(o.bid), ask:Number(o.ask), ts:now, g};
+    return {K:o.k, dte:o.dte, T, exp:o.exp, root:o.root||'', isCall, iv:o.iv, oi:o.oi, vol:o.vol, g};
   });
-  return {symbol:symKey, market:"US", spot, mult:rec.mult||100, fetchTs:now, quotes, live:true,
-    source:rec.source||'tripity'};
+  return {symbol:symKey, spot, mult:rec.mult||100, quotes};
 }
 
 function calcExpectedMove(chain){
@@ -136,20 +119,17 @@ function calcGEX(chain){
   for(const q of kept){
     const gex = q.g.gamma * q.oi * mult * spot * spot * 0.01;
     if(!byStrike[q.K]) byStrike[q.K] = {strike:q.K, callGex:0, putGex:0, netGex:0,
-        callOI:0, putOI:0, callVol:0, putVol:0, callIV:0, putIV:0, gamma:0, ts:q.ts};
+        callOI:0, putOI:0, callVol:0, putVol:0};
     const s = byStrike[q.K];
     if(q.isCall){
-      s.callGex += gex; s.callOI+=q.oi; s.callVol+=q.vol; s.callIV=q.iv;
+      s.callGex += gex; s.callOI+=q.oi; s.callVol+=q.vol;
     } else {
-      s.putGex -= gex; s.putOI +=q.oi; s.putVol +=q.vol; s.putIV =q.iv;
+      s.putGex -= gex; s.putOI +=q.oi; s.putVol +=q.vol;
     }
-    s.gamma = Math.max(s.gamma, q.g.gamma);
     s.netGex = s.callGex + s.putGex;
-    s.ts = Math.max(s.ts, q.ts);
   }
   let strikes = Object.values(byStrike).sort((a,b)=>a.strike-b.strike);
-  strikes.forEach(s=>{ s.totalOI=s.callOI+s.putOI; s.totalVol=s.callVol+s.putVol;
-                       s.pcr=s.callOI>0?s.putOI/s.callOI:0; });
+  strikes.forEach(s=>{ s.totalOI=s.callOI+s.putOI; s.totalVol=s.callVol+s.putVol; });
   const maxAG = Math.max(...strikes.map(s=>Math.abs(s.callGex)+Math.abs(s.putGex)), 1);
   const maxOI = Math.max(...strikes.map(s=>s.totalOI), 1);
   const maxVol = Math.max(...strikes.map(s=>s.totalVol), 1);
@@ -198,34 +178,12 @@ function calcGEX(chain){
   // 7. regime detection
   const distPct = maxGammaStrike>0 ? (spot-maxGammaStrike)/spot*100 : 0;
   const strongMag = Math.abs(totalCallGex)+Math.abs(totalPutGex);
-  let regime,strength;
-  if(totalGex > strongMag*0.04){
-    regime="positive_gamma";
-    strength=Math.abs(distPct)>2?"strong":(Math.abs(distPct)>0.5?"moderate":"weak");
-  } else if(totalGex < -strongMag*0.04){
-    regime="negative_gamma";
-    strength=Math.abs(distPct)>2?"strong":(Math.abs(distPct)>0.5?"moderate":"weak");
-  } else { regime="neutral"; strength="very_weak"; }
+  const regime = totalGex > strongMag*0.04 ? "positive_gamma"
+    : totalGex < -strongMag*0.04 ? "negative_gamma" : "neutral";
 
-  // 8. IV skew & sentiment
-  const near = strikes.filter(s=>Math.abs(s.strike-spot)/spot<=0.05);
-  const avgCallIV = avg(near.map(s=>s.callIV).filter(x=>x>0));
-  const avgPutIV  = avg(near.map(s=>s.putIV).filter(x=>x>0));
-  const ivSkew = avgPutIV - avgCallIV;
-  const callGexPct = totalCallGex/(Math.abs(totalCallGex)+Math.abs(totalPutGex))*100;
-  const sentiment = pcr<0.7?"bullish_positioning":(pcr>1.3?"bearish_positioning":"neutral_positioning");
-
-  const atmQ = kept.filter(q=>q.isCall).sort((a,b)=>Math.abs(a.K-spot)-Math.abs(b.K-spot))[0];
-
-  return {symbol:chain.symbol, market:chain.market, spot, mult, fetchTs:chain.fetchTs, source:chain.source,
-    strikes, totalGex, totalCallGex, totalPutGex,
-    maxGammaStrike, flip, callWall, putWall, callWallGex:cwG, putWallGex:pwG,
-    regime, strength, distPct, pcr, netCallOI, netPutOI, callGexPct,
-    avgCallIV, avgPutIV, ivSkew, sentiment, atmGreeks:atmQ?atmQ.g:null,
-    keptCount:kept.length, totalCount:chain.quotes.length,
-    expiries:[...new Set(kept.map(q=>q.dte))].sort((a,b)=>a-b)};
+  return {symbol:chain.symbol, spot, mult, strikes, totalGex, totalCallGex, totalPutGex,
+    maxGammaStrike, flip, callWall, putWall, regime, distPct, pcr};
 }
-function avg(a){return a.length?a.reduce((x,y)=>x+y,0)/a.length:0;}
 
 // ---------- Formatting ----------
 function fmtNum(n){
@@ -304,8 +262,9 @@ function renderImpl(R){
 }
 
 // ---------- Metric definitions (Quant-Power style param buttons) ----------
-// net_gex = bars. Other metrics are stacked area layers.
-let ACTIVE = new Set(["net_gex"]);
+// net_gex = bars. Other metrics are area layers on one shared right axis.
+// Net GEX and AG start on, as in his 2026 screenshots (a guess at his default).
+let ACTIVE = new Set(["net_gex","ag"]);
 // Strikes shown: spot +/- 2 expected moves.
 const DISPLAY_SIGMA = 2;
 const METRICS = {
@@ -315,7 +274,7 @@ const METRICS = {
   put_oi:   {label:"Put OI",      color:"#ef5350", kind:"area", val:s=>s.putOI},
   call_vol: {label:"Call Volume", color:"#2f73ff", kind:"area", val:s=>s.callVol},
   put_vol:  {label:"Put Volume",  color:"#ff8a3d", kind:"area", val:s=>s.putVol},
-  power:    {label:"Power Zone",  color:"#fff200", kind:"area", val:s=>s.powerZone || 0},
+  power:    {label:"Power Zone",  color:"#ffc107", kind:"area", val:s=>s.powerZone || 0},
 };
 // Active metrics in button order; the Net GEX bars draw only while its button is on.
 function chartActiveMetrics(){
@@ -392,10 +351,10 @@ function drawChart(R,chartId='gexChart'){
     lMin=-maxAbs; lMax=maxAbs;
     yL=v=>top+(lMax-v)/(lMax-lMin)*plotH; y0=yL(0);
   }
-  // ----- RIGHT axis (dominant area metric) -----
-  const ownMax={}; areas.forEach(m=>ownMax[m]=Math.max(...data.map(METRICS[m].val),1));
-  let dom=areas[0], rMax=1;
-  if(areas.length){ dom=areas.reduce((a,b)=>ownMax[b]>ownMax[a]?b:a,areas[0]); rMax=ownMax[dom]*1.08; }
+  // ----- RIGHT axis: one shared axis in real units for every active layer, like his
+  // "OI - VOLUME - ABS GEX" axis; its title lists the active layers -----
+  const rMax = areas.length ? Math.max(...areas.flatMap(m=>data.map(METRICS[m].val)),1)*1.08 : 1;
+  const rightTitle = areas.map(m=>METRICS[m].label.toUpperCase()).join(' - ');
 
   // ----- gridlines + tick labels -----
   ctx.font=(mobile ? "bold 10px Segoe UI" : "bold 13px Segoe UI"); ctx.textBaseline="middle";
@@ -412,8 +371,8 @@ function drawChart(R,chartId='gexChart'){
 
   // ----- area overlays: a smoothed spline with markers, filled to zero, like his -----
   areas.forEach(m=>{
-    const M=METRICS[m], own=ownMax[m];
-    const yA=v=>bottom-(v/own)*0.92*plotH;
+    const M=METRICS[m];
+    const yA=v=>bottom-(v/rMax)*plotH;
     const pts=data.map((s,i)=>[xCenter(i),yA(M.val(s))]);
     ctx.beginPath(); ctx.moveTo(pts[0][0],bottom); ctx.lineTo(pts[0][0],pts[0][1]);
     splineTo(ctx,pts,top,bottom);
@@ -443,7 +402,6 @@ function drawChart(R,chartId='gexChart'){
     ctx.beginPath(); ctx.moveTo(padL,y0); ctx.lineTo(W-padR,y0); ctx.stroke();
   }
   cv._matrixBars = hitBars;
-  cv._matrixPlot = {top,bottom,padL,padR,W,H};
 
   // ----- one rotated strike label below every bar -----
   ctx.fillStyle="#c4c4c4"; ctx.font=(mobile ? "bold 9px Segoe UI" : "bold 11px Segoe UI");
@@ -485,7 +443,7 @@ function drawChart(R,chartId='gexChart'){
     ctx.fillText(barMetric.axisLabel || barMetric.label,0,0); ctx.restore(); }
   if(areas.length){ ctx.save(); ctx.translate(W-12,padT+plotH/2); ctx.rotate(Math.PI/2);
     ctx.fillStyle="#d0d0d0"; ctx.font=(mobile ? "bold 11px Segoe UI" : "bold 13px Segoe UI"); ctx.textAlign="center";
-    ctx.fillText(METRICS[dom].label,0,0); ctx.restore(); }
+    ctx.fillText(rightTitle,0,0); ctx.restore(); }
   ctx.fillStyle="#d0d0d0"; ctx.font=(mobile ? "bold 10px Segoe UI" : "bold 12px Segoe UI"); ctx.textAlign="center"; ctx.textBaseline="bottom";
   ctx.fillText("STRIKE",padL+plotW/2,H-4);
 }
@@ -856,7 +814,7 @@ function applyLocation(){
   if(view==='options-summary') loadPcRatio();
   if(view===OIV_VIEW){
     const symbol=screenTickers[OIV_VIEW];
-    if(symbol===oiv.symbol && REAL[symbol]) renderOiVolume();
+    if(symbol===oiv.symbol && oiv.record) renderOiVolume();
     else refreshOiVolume(symbol);
     return;
   }
@@ -866,7 +824,7 @@ function applyLocation(){
   }
   if(view!==HOME_VIEW) return;
   const symbol=urlTicker || currentSymbol();
-  if(symbol===currentSymbol() && REAL[symbol]){
+  if(symbol===currentSymbol() && homeRecord){
     run();
     drawPriceCharts(symbol);
   }
@@ -905,21 +863,22 @@ function search(view,raw){
 }
 
 // ---------- Strike Chart ----------
+// The Strike Chart keeps its own copy of the chain it loaded, so a Search on
+// another screen never changes what it shows (each screen has its own ticker).
+let homeRecord = null;
 function run(){
   const sym=currentSymbol();
-  if(!REAL[sym]){
+  if(!homeRecord){
     setTickerStatus(HOME_VIEW,`${sym}: no data yet. Press Search to try again.`,'error');
     return;
   }
-  let chain = buildChainReal(sym);
+  let chain = buildChainRealFromRecord(sym,homeRecord);
   populateExpirations(chain);
   if(selectedExpiration){
     chain = {...chain, quotes: chain.quotes.filter(q=>q.exp===selectedExpiration)};
   }
   const R = calcGEX(chain);
   R.expectedMove = calcExpectedMove(chain);
-  R.live = true;
-  R.asof = REAL[sym].asof;
   renderImpl(R);
 }
 
@@ -934,24 +893,6 @@ function fetchLiveData(url){
 }
 function validCboeData(d){
   return d && d.SPX && Array.isArray(d.SPX.opts) && Number.isFinite(Number(d.SPX.spot));
-}
-function dynamicSymbolConfig(symbol,record){
-  const strikes=[...new Set((record.opts||[]).map(option=>Number(option.k)).filter(Number.isFinite))].sort((a,b)=>a-b);
-  let step=1;
-  for(let i=1;i<strikes.length;i++){
-    const diff=strikes[i]-strikes[i-1];
-    if(diff>0 && (step===1 || diff<step)) step=diff;
-  }
-  const ivs=(record.opts||[]).map(option=>Number(option.iv)).filter(iv=>Number.isFinite(iv)&&iv>0);
-  const baseIV=ivs.length?ivs.reduce((sum,iv)=>sum+iv,0)/ivs.length:.25;
-  SYMBOLS[symbol]={
-    spot:Number(record.spot),
-    step:Math.max(.01,step),
-    mult:Number(record.mult)||100,
-    baseIV,
-    market:'US',
-    dynamic:true,
-  };
 }
 // The core tickers (NDX, SPX, SPY, QQQ, VIX) come in one call.
 async function loadCoreData(){
@@ -973,7 +914,6 @@ async function loadDynamicSymbol(symbol){
   if(!response?.ok || !payload?.ok || !payload.record){
     return {ok:false, detail:payload?.detail || `${symbol}: option chain is unavailable`};
   }
-  dynamicSymbolConfig(symbol,payload.record);
   REAL[symbol]=payload.record;
   DYNAMIC_SYMBOLS.add(symbol);
   return {ok:true};
@@ -1012,6 +952,7 @@ async function refreshHome(symbol){
     return;
   }
   if(symbol!==previous) selectedExpiration=null;
+  homeRecord=REAL[symbol];
   screenTickers[HOME_VIEW]=symbol;
   if(activeView===HOME_VIEW){
     syncTickerInput(HOME_VIEW);
@@ -1054,7 +995,6 @@ function keyLevelsGex(symbol){
   const todayIso=new Date().toISOString().slice(0,10);
   const open=chain.quotes.filter(q=>!q.exp || q.exp>=todayIso);
   const R=calcGEX(open.length ? {...chain, quotes:open} : chain);
-  R.asof=REAL[symbol]?.asof;
   return R;
 }
 
@@ -1341,7 +1281,8 @@ const OIV_ACTIVE = new Set(['volume_spread']);
 const MATRIX_CANDLES_URL = 'https://api.trytripity.site/api/matrix/candles';
 // The candles proxy serves these tickers only.
 const CANDLE_SYMBOLS = new Set(['SPX','NDX','SPY','QQQ']);
-const oiv = {symbol:null, expiry:null, candles:null, candlesError:''};
+// record: this screen's own copy of the chain, so other screens' Searches leave it alone.
+const oiv = {symbol:null, record:null, expiry:null, candles:null, candlesError:''};
 let _oivRequest = 0;
 
 // One expiration's chain summed per strike. No OI floor here: a strike that
@@ -1364,8 +1305,8 @@ function oiVolumeExpiries(chain){
   const todayIso = new Date().toISOString().slice(0,10);
   return [...new Set(chain.quotes.map(q=>q.exp).filter(exp=>exp && exp>=todayIso))].sort();
 }
-function computeOiVolume(symbol, expiry){
-  const chain = buildChainReal(symbol);
+function computeOiVolume(symbol, expiry, record=oiv.record){
+  const chain = buildChainRealFromRecord(symbol, record);
   const quotes = chain.quotes.filter(q=>q.exp===expiry);
   const scoped = {...chain, quotes};
   return {symbol, spot:chain.spot, expiry, strikes:aggregateOiVolume(quotes), expectedMove:calcExpectedMove(scoped)};
@@ -1383,7 +1324,7 @@ function oiVolumePriceLines(strikes){
 }
 function populateOiVolumeExpiries(symbol){
   const select = byId('oivExpiry');
-  const expiries = oiVolumeExpiries(buildChainReal(symbol));
+  const expiries = oiVolumeExpiries(buildChainRealFromRecord(symbol, oiv.record));
   if(!expiries.includes(oiv.expiry)) oiv.expiry = expiries[0] || null;
   if(select){
     select.innerHTML = expiries.length
@@ -1394,7 +1335,7 @@ function populateOiVolumeExpiries(symbol){
 }
 function renderOiVolume(){
   const symbol = oiv.symbol;
-  if(!symbol || !REAL[symbol] || !oiv.expiry) return;
+  if(!symbol || !oiv.record || !oiv.expiry) return;
   const R = computeOiVolume(symbol, oiv.expiry);
   window._oivR = R;
   drawOiVolumeChart(R);
@@ -1639,6 +1580,7 @@ async function refreshOiVolume(symbol){
   }
   if(symbol!==previous) oiv.expiry=null;
   oiv.symbol=symbol;
+  oiv.record=REAL[symbol];
   oiv.candles=price.candles;
   oiv.candlesError=price.error;
   screenTickers[OIV_VIEW]=symbol;

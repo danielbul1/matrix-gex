@@ -113,3 +113,22 @@ def test_strike_chart_labels_like_his():
     assert "splineTo(ctx,pts,top,bottom)" in draw
     tooltip = script[script.index("function showChartTooltip("):script.index("function hideChartTooltip(")]
     assert "linkedMarketPrice" not in tooltip
+
+
+def test_power_zone_one_color_and_his_default_buttons():
+    page = (host.MATRIX_WEB_DIR / "matrix.html").read_text(encoding="utf-8")
+    script = (host.MATRIX_WEB_DIR / "matrix.js").read_text(encoding="utf-8")
+    button = re.search(r'data-metric="power"\s+style="--c:(#[0-9a-f]{6})"', page).group(1)
+    line = re.search(r'power:\s*\{label:"Power Zone",\s*color:"(#[0-9a-f]{6})"', script).group(1)
+    assert button == line
+    active = re.findall(r'<button class="pbtn active"[^>]*data-metric="([a-z_]+)"', page)
+    assert active == ["net_gex", "ag"]
+    assert 'let ACTIVE = new Set(["net_gex","ag"]);' in script
+
+
+def test_home_price_message_is_not_hidden_by_oi_volume_rule():
+    css = (host.MATRIX_WEB_DIR / "matrix.css").read_text(encoding="utf-8")
+    home = _home_section()
+    assert 'class="home-price-empty" id="priceEmpty"' in home
+    assert ".home-price-empty{" in css
+    assert "price-empty\"" not in home.replace("home-price-empty", "")
