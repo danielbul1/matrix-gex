@@ -96,6 +96,27 @@ Gotchas learned the hard way (2026-07-19):
 
 ## Session Log (every agent MUST append — newest first)
 
+### 2026-10-26 — Cboe CDN host move fixed; optopsy pinned below 2.3
+- **Outage:** Cboe moved its delayed-quotes CDN from `cdn.cboe.com` to
+  `cdn-api.cboe.com` (old host answers 307). The host's httpx clients did not
+  follow redirects, so `/api/matrix/cboe-data` returned `ok:false`, GEX
+  snapshots stored sessions with zero points, and the VIX spot froze at
+  2026-09-18. Fix: SPX/VIX quote and options-chain URLs point at
+  `cdn-api.cboe.com`, and both Cboe clients now follow redirects. Same host
+  swap in `fetch_cboe.py` and `tools/backfill_chain.py` (both already
+  followed redirects; changed for consistency). The symbol directory moved
+  too, but its client already followed redirects, so it was left alone.
+  Verified live: all 5 chains (NDX/SPX/SPY/QQQ/VIX) load.
+- **Deps:** optopsy 2.3.0 expects a `delta` column our chains lack (36
+  backtest_spread tests fail); `requirements.txt` now pins `>=2.2,<2.3`.
+  190 pytest green with 2.2.0.
+- **Still open (owner action):** the `LSE_API_KEY` repo secret is missing, so
+  `update-cboe.yml` has skipped every commit to the `data` branch since
+  2026-07-16 while showing green. Needs the secret re-added in GitHub
+  Settings → Secrets → Actions.
+- **Not deployed yet:** the Cboe fix needs `railway up` from
+  `railway-service/`, then the health check routine above.
+
 ### 2026-08-18 — Canonical greeks engine, regime engine, VEX/CHEX history, backtester, journal
 - External review + 5-phase build (no prior commit; all verified locally, 92 pytest green).
 - **Fixes:** smoke-check.yml compiled a nonexistent root `gamma_exposure.py` (CI red

@@ -95,7 +95,7 @@ OI_LOOKBACK_DAYS = 7  # how far back to look for a close-of-day OI report
 PROBE_PRE_2022_DATE = date(2021, 6, 14)  # any pre-2022 session
 PROBE_DEV_START = date(2018, 1, 2)  # first session of the Dev Period
 
-CBOE_URL = "https://cdn.cboe.com/api/global/us_indices/daily_prices/{}_History.csv"
+CBOE_URL = "https://cdn-api.cboe.com/api/global/us_indices/daily_prices/{}_History.csv"
 CBOE_CLOSE_COLUMNS = {"VIX": "CLOSE", "SPX": "SPX"}
 
 CHECKPOINT_SCHEMA = """

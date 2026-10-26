@@ -40,9 +40,9 @@ from tripity_experiment.source_analysis import analyze_source_url
 
 DEFAULT_OPENAPI_URL = "https://petstore3.swagger.io/api/v3/openapi.json"
 DEFAULT_COMPANY_NAME = "Swagger Petstore"
-MATRIX_SPX_QUOTE_URL = "https://cdn.cboe.com/api/global/delayed_quotes/quotes/_SPX.json"
-MATRIX_VIX_QUOTE_URL = "https://cdn.cboe.com/api/global/delayed_quotes/quotes/_VIX.json"
-MATRIX_OPTIONS_URL = "https://cdn.cboe.com/api/global/delayed_quotes/options/{}.json"
+MATRIX_SPX_QUOTE_URL = "https://cdn-api.cboe.com/api/global/delayed_quotes/quotes/_SPX.json"
+MATRIX_VIX_QUOTE_URL = "https://cdn-api.cboe.com/api/global/delayed_quotes/quotes/_VIX.json"
+MATRIX_OPTIONS_URL = "https://cdn-api.cboe.com/api/global/delayed_quotes/options/{}.json"
 MATRIX_CBOE_SYMBOL_DIRECTORY_URL = (
     "https://www.cboe.com/us/options/symboldir/equity_index_options/?download=csv"
 )
@@ -294,7 +294,9 @@ class PublicConnector:
 
 
 async def _fetch_matrix_cboe_quote(url: str, symbol: str, cboe_symbol: str) -> dict[str, Any]:
-    async with httpx.AsyncClient(timeout=10.0) as client:
+    # Cboe moves its CDN host now and then (cdn -> cdn-api in 2026-09); follow
+    # its redirects so the next move doesn't silently empty the dashboard.
+    async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
         response = await client.get(
             url,
             headers={"User-Agent": "Tripity Matrix quote proxy (+https://trytripity.site)"},
@@ -562,7 +564,7 @@ async def _fetch_matrix_cboe_symbol(
 async def _fetch_matrix_cboe_data_uncached() -> dict[str, Any]:
     today = datetime.date.today()
     timeout = httpx.Timeout(60.0, connect=10.0)
-    async with httpx.AsyncClient(timeout=timeout) as client:
+    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
         results = await asyncio.gather(
             *[
                 _fetch_matrix_cboe_symbol(client, cboe_symbol, display_symbol, today=today)
