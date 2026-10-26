@@ -92,7 +92,7 @@ _Avoid_: GEX view, main chart
 
 **GEX Board**:
 The screen for one ticker over a set of selected expiries: a strike table beside a Gamma Total, a Gamma Split and a price chart. Its menu label is "GEX Analysis".
-- The table has one row per strike, summed over the selected expiries. Its columns are Strike, Net GEX, AG, Total OI, Call OI, Put OI, Total Vol, Call Vol, Put Vol and %, where % is the strike's Net GEX as a share of the total AG.
+- The table has one row per strike, summed over the selected expiries. Its columns are Strike, Net GEX, AG, Notional Delta, Total OI, Call OI, Put OI, Total Vol, Call Vol, Put Vol and %, where % is the strike's Net GEX as a share of the total AG.
 - It covers strikes within 5% of spot, the same window as the Gamma Split. It runs from the highest strike down, scrolls, and sorts by any column.
 - It highlights the spot row, the rows of the Key Levels and of P1, N1 and AG Strike, and each column's largest value.
 - A line above it gives spot, Total Gamma (Net GEX summed over the selected expiries), its sign as the regime, the number of strikes and the ticker.
@@ -107,6 +107,10 @@ _Avoid_: total GEX, gamma by strike
 **Gamma Split**:
 The GEX Board chart of each strike's call GEX and put GEX, over the selected expiries and strikes within 5% of spot, drawn on opposite sides of zero.
 _Avoid_: AG, split by expiry
+
+**Notional Delta**:
+A strike's delta in dollars with calls and puts both counted as positive: the delta of each contract, taken as a magnitude, times its open interest, 100 and spot, summed over the selected expiries. It is a GEX Board column only.
+_Avoid_: DEX, net delta, delta exposure
 
 **Key Level**:
 One of the four prices the Key Levels screen marks from a ticker's GEX profile: Zero Gamma, Max Gamma, Call Wall and Put Wall. Max Pain is not a Key Level.

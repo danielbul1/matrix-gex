@@ -14,4 +14,4 @@ Every Matrix screen or control he does not have is deleted, not hidden. That cov
 
 ## Consequences
 
-The research side (Engine Label, the spread experiment) no longer has a place in the dashboard. Copying stays behavioural only: we do not copy his code, name, branding or data, and we do not bypass his login (map #21, Notes).
+The research side (Engine Label, the spread experiment) no longer has a place in the dashboard. The GEX Board table later gained a Notional Delta column, because the follower's copy of his app has one (#29). The DEX screen and overlay stay deleted. Copying stays behavioural only: we do not copy his code, name, branding or data, and we do not bypass his login (map #21, Notes).
