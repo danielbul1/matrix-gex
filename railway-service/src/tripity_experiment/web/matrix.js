@@ -287,6 +287,7 @@ function bind(id,event,handler,opts){
 
 function hideAllHoverHelpers(){
   hideChartTooltip();
+  hidePriceTooltips();
   hideKeyLevelsTooltip();
   hideOiVolumeTooltip();
 }
@@ -554,6 +555,165 @@ function showChartTooltip(ev){
 function hideChartTooltip(){
   ['chartTooltip','chartCrosshairX'].forEach(id=>{const el=byId(id); if(el) el.style.display='none';});
 }
+// ---------- Price charts (Strike Chart) ----------
+// Two charts of the searched ticker's latest session, beside the strike chart:
+// 1-minute candles, and a "simplified" close-price line. What his simplified
+// chart holds is not public; a close line is our guess. Neither chart reads the
+// expiration, so only Search or Enter reloads them.
+const PRICE_CHARTS = {
+  priceChart:       {kind:'candles', symbolId:'priceSymLabel',       tooltipId:'priceTooltip',       crosshairId:'priceCrosshairX',       emptyId:'priceEmpty'},
+  priceSimpleChart: {kind:'line',    symbolId:'priceSimpleSymLabel', tooltipId:'priceSimpleTooltip', crosshairId:'priceSimpleCrosshairX', emptyId:'priceSimpleEmpty'},
+};
+const PRICE_UP = '#3d9970', PRICE_DOWN = '#ff4136', PRICE_LINE = '#22b8ff';
+const MARKET_TZ = 'America/New_York';
+// Per ticker: {candles:[...]} or {error:'...'}.
+let PRICE = {};
+function marketParts(sec){
+  const parts=new Intl.DateTimeFormat('en-US',{timeZone:MARKET_TZ,year:'numeric',month:'2-digit',day:'2-digit',
+    hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).formatToParts(new Date(sec*1000));
+  const get=type=>parts.find(part=>part.type===type)?.value||'';
+  return {date:`${get('year')}-${get('month')}-${get('day')}`, hour:Number(get('hour')), minute:Number(get('minute'))};
+}
+// Keeps the regular session (09:30-16:00 ET) of the last trading day in the feed.
+function latestSessionCandles(candles){
+  const valid=(candles||[]).filter(c=>c && [c.time,c.open,c.high,c.low,c.close].every(v=>v!=null && v!=='' && Number.isFinite(Number(v))))
+    .map(c=>({time:Number(c.time),open:Number(c.open),high:Number(c.high),low:Number(c.low),close:Number(c.close)}))
+    .sort((a,b)=>a.time-b.time);
+  const inSession=valid.filter(c=>{
+    const {hour,minute}=marketParts(c.time);
+    const mins=hour*60+minute;
+    return mins>=570 && mins<960;
+  });
+  if(!inSession.length) return [];
+  const lastDate=marketParts(inSession[inSession.length-1].time).date;
+  return inSession.filter(c=>marketParts(c.time).date===lastDate);
+}
+function fmtMarketTime(sec){
+  const {hour,minute}=marketParts(sec);
+  return `${String(hour).padStart(2,'0')}:${String(minute).padStart(2,'0')}`;
+}
+function priceRange(candles,kind){
+  const lows=candles.map(c=>kind==='line'?c.close:c.low);
+  const highs=candles.map(c=>kind==='line'?c.close:c.high);
+  let lo=Math.min(...lows), hi=Math.max(...highs);
+  if(hi-lo<1e-9){ lo-=Math.max(Math.abs(lo)*0.001,0.01); hi+=Math.max(Math.abs(hi)*0.001,0.01); }
+  const pad=(hi-lo)*0.06;
+  return {lo:lo-pad, hi:hi+pad};
+}
+function niceStep(span,count){
+  const raw=span/Math.max(count,1);
+  const pow=Math.pow(10,Math.floor(Math.log10(raw)));
+  const n=raw/pow;
+  return (n<=1?1:n<=2?2:n<=2.5?2.5:n<=5?5:10)*pow;
+}
+function drawPriceChart(chartId,symbol){
+  const cfg=PRICE_CHARTS[chartId];
+  const cv=byId(chartId);
+  if(!cfg || !cv) return;
+  const state=PRICE[symbol];
+  const candles=state?.candles || [];
+  const symLabel=byId(cfg.symbolId);
+  const empty=byId(cfg.emptyId);
+  const dpr=window.devicePixelRatio||1;
+  const W=cv.clientWidth;
+  const mobile=W<640;
+  const H=mobile?300:Math.max(360,Math.min(460,window.innerHeight-360));
+  cv.width=W*dpr; cv.height=H*dpr; cv.style.height=H+'px';
+  const ctx=cv.getContext('2d'); ctx.setTransform(dpr,0,0,dpr,0,0);
+  ctx.clearRect(0,0,W,H);
+  cv._matrixPrice=null;
+  if(symLabel) symLabel.textContent=symbol + (candles.length ? '  ' + marketParts(candles[0].time).date : '');
+  if(empty){
+    empty.textContent = candles.length ? '' : (state ? (state.error || `No intraday prices for ${symbol}`) : `Loading ${symbol}…`);
+  }
+  if(!candles.length) return;
+
+  const padL=mobile?50:66, padR=mobile?10:18, padT=mobile?14:18, padB=mobile?30:36;
+  const plotW=W-padL-padR, plotH=H-padT-padB;
+  const top=padT, bottom=padT+plotH;
+  const {lo,hi}=priceRange(candles,cfg.kind);
+  const y=v=>top+(hi-v)/(hi-lo)*plotH;
+  const slot=plotW/candles.length;
+  const xCenter=i=>padL+slot*(i+0.5);
+
+  // gridlines + price ticks
+  ctx.font=mobile?'bold 10px Segoe UI':'bold 12px Segoe UI'; ctx.textBaseline='middle'; ctx.textAlign='right';
+  const step=niceStep(hi-lo,mobile?4:6);
+  for(let v=Math.ceil(lo/step)*step; v<=hi; v+=step){
+    const yy=y(v);
+    ctx.strokeStyle='rgba(255,255,255,.05)'; ctx.lineWidth=1;
+    ctx.beginPath(); ctx.moveTo(padL,yy); ctx.lineTo(W-padR,yy); ctx.stroke();
+    ctx.fillStyle='#c4c4c4';
+    ctx.fillText(step<1?v.toFixed(2):fmtPrice(v),padL-8,yy);
+  }
+  // time ticks on the hour and half hour
+  ctx.textAlign='center'; ctx.textBaseline='top';
+  const every=mobile||plotW<520?60:30;
+  candles.forEach((c,i)=>{
+    const {hour,minute}=marketParts(c.time);
+    if((hour*60+minute)%every!==0) return;
+    const xx=xCenter(i);
+    ctx.strokeStyle='rgba(255,255,255,.035)';
+    ctx.beginPath(); ctx.moveTo(xx,top); ctx.lineTo(xx,bottom); ctx.stroke();
+    ctx.fillStyle='#c4c4c4';
+    ctx.fillText(fmtMarketTime(c.time),xx,bottom+8);
+  });
+
+  if(cfg.kind==='candles'){
+    const bw=Math.max(1,Math.min(slot*0.7,9));
+    candles.forEach((c,i)=>{
+      const color=c.close>=c.open?PRICE_UP:PRICE_DOWN;
+      const xx=xCenter(i);
+      ctx.strokeStyle=color; ctx.lineWidth=1;
+      ctx.beginPath(); ctx.moveTo(xx,y(c.high)); ctx.lineTo(xx,y(c.low)); ctx.stroke();
+      const yo=y(c.open), yc=y(c.close);
+      ctx.fillStyle=color;
+      ctx.fillRect(xx-bw/2,Math.min(yo,yc),bw,Math.max(1,Math.abs(yc-yo)));
+    });
+  } else {
+    ctx.strokeStyle=PRICE_LINE; ctx.lineWidth=1.8;
+    ctx.beginPath();
+    candles.forEach((c,i)=>{ const xx=xCenter(i), yy=y(c.close); i?ctx.lineTo(xx,yy):ctx.moveTo(xx,yy); });
+    ctx.stroke();
+  }
+  ctx.strokeStyle='rgba(255,255,255,.18)'; ctx.lineWidth=1;
+  ctx.beginPath(); ctx.moveTo(padL,bottom); ctx.lineTo(W-padR,bottom); ctx.stroke();
+  cv._matrixPrice={candles,padL,slot,kind:cfg.kind,symbol};
+}
+function drawPriceCharts(symbol=currentSymbol()){
+  Object.keys(PRICE_CHARTS).forEach(id=>drawPriceChart(id,symbol));
+}
+function showPriceTooltip(ev){
+  const cv=ev.currentTarget;
+  const cfg=PRICE_CHARTS[cv?.id];
+  const info=cv?._matrixPrice;
+  const tt=byId(cfg?.tooltipId), cross=byId(cfg?.crosshairId);
+  if(!info || !tt || !cross) return;
+  const rect=cv.getBoundingClientRect();
+  const point=ev.touches && ev.touches[0] ? ev.touches[0] : ev;
+  const x=point.clientX-rect.left, yPos=point.clientY-rect.top;
+  const i=Math.floor((x-info.padL)/info.slot);
+  const c=info.candles[i];
+  if(!c){ tt.style.display='none'; cross.style.display='none'; return; }
+  const row=(label,value)=>`<div class="tt-row"><span>${label}</span><span>${value}</span></div>`;
+  const fmt=v=>Number(v).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
+  tt.innerHTML=`<div class="tt-title">${esc(info.symbol)} ${fmtMarketTime(c.time)} ET</div>`+
+    (info.kind==='candles'
+      ? row('Open',fmt(c.open))+row('High',fmt(c.high))+row('Low',fmt(c.low))+row('Close',fmt(c.close))
+      : row('Close',fmt(c.close)));
+  tt.style.display='block';
+  cross.style.display='block';
+  cross.style.left=(info.padL+info.slot*(i+0.5))+'px';
+  const tw=tt.offsetWidth, th=tt.offsetHeight;
+  let left=x+14, topPos=yPos+14;
+  if(left+tw>rect.width) left=x-tw-14;
+  if(topPos+th>rect.height) topPos=yPos-th-14;
+  tt.style.left=Math.max(6,left)+'px';
+  tt.style.top=Math.max(6,topPos)+'px';
+}
+function hidePriceTooltips(){
+  Object.values(PRICE_CHARTS).forEach(cfg=>[cfg.tooltipId,cfg.crosshairId].forEach(id=>{const el=byId(id); if(el) el.style.display='none';}));
+}
 // ---------- Screens and routes ----------
 // One page serves every screen: the path picks the screen and ?ticker= its ticker,
 // so a copied link opens the same screen on the same ticker.
@@ -582,7 +742,7 @@ let activeView = null;
 const screenTickers = Object.fromEntries(
   Object.keys(SCREENS).filter(view=>SCREENS[view].ticker).map(view=>[view,DEFAULT_SYMBOL])
 );
-let selectedExpirations = null;
+let selectedExpiration = null;
 
 function normalizeSymbol(value){
   return String(value||'').trim().toUpperCase();
@@ -618,54 +778,29 @@ function syncTickerInput(view,value=screenTickers[view]){
   if(input && value) input.value=value;
 }
 
-// ---------- Expirations (Strike Chart) ----------
-function currentExpirationValues(){
-  return [...document.querySelectorAll('#expirationPicker input:checked')].map(input=>input.value);
+// ---------- Expiration (Strike Chart) ----------
+// One date at a time from a dropdown filled per ticker, like his date dropdown.
+// It starts on the nearest date (guess: his default is not public).
+function currentExpiration(){
+  return byId('expirationSelect')?.value || null;
 }
-function renderExpirationPicker(picker, expiries, byExp, selectedValues){
-  const selected = new Set(selectedValues || []);
-  const validSelected = expiries.filter(exp=>selected.has(exp));
-  const defaultSelection = expiries.slice(0,1);
-  const active = new Set(validSelected.length ? validSelected : defaultSelection);
-  picker.innerHTML = expiries.length ? expiries.map(exp=>{
-    const dte = byExp.get(exp);
-    return `<label class="expiry-option"><input type="checkbox" value="${exp}" data-dte="${dte}" ${active.has(exp)?'checked':''}>${exp} (${dte}DTE)</label>`;
-  }).join('') : '<span class="expiry-empty">No expirations available</span>';
-  return [...active];
+function chainExpirations(chain){
+  const todayIso = new Date().toISOString().slice(0,10);
+  return [...new Set(chain.quotes.map(q=>q.exp).filter(exp=>exp && exp >= todayIso))].sort();
+}
+function pickExpiration(expiries, wanted){
+  return expiries.includes(wanted) ? wanted : (expiries[0] || null);
 }
 function populateExpirations(chain){
-  const picker = byId('expirationPicker');
-  const byExp = new Map();
-  const todayIso = new Date().toISOString().slice(0,10);
-  chain.quotes.forEach(q=>{
-    if(q.exp && q.exp >= todayIso && !byExp.has(q.exp)) byExp.set(q.exp, q.dte);
-  });
-  const expiries = [...byExp.keys()].sort();
-  selectedExpirations = renderExpirationPicker(picker, expiries, byExp, selectedExpirations);
-  syncExpiryQuickButtons();
-}
-// Quick-select buttons (0DTE / Week / All) above the expiration picker.
-function expiryQuickPredicate(kind){
-  return kind==='all' ? ()=>true : kind==='week' ? dte=>dte<=7 : dte=>dte===0;
-}
-function syncExpiryQuickButtons(){
-  const inputs=[...document.querySelectorAll('#expirationPicker input[type=checkbox]')];
-  const checked=inputs.filter(i=>i.checked);
-  const matches=kind=>{
-    const pred=expiryQuickPredicate(kind);
-    const targets=inputs.filter(i=>pred(Number(i.dataset.dte)));
-    return targets.length>0 && checked.length===targets.length && targets.every(i=>i.checked);
-  };
-  document.querySelectorAll('.expiry-quick-btn').forEach(btn=>btn.classList.toggle('active',matches(btn.dataset.expquick)));
-}
-function applyExpirationQuickSelect(kind){
-  const inputs=[...document.querySelectorAll('#expirationPicker input[type=checkbox]')];
-  if(!inputs.length) return;
-  const pred=expiryQuickPredicate(kind);
-  if(!inputs.some(i=>pred(Number(i.dataset.dte)))) return;  // e.g. no 0DTE listed: keep current selection
-  inputs.forEach(input=>{ input.checked=pred(Number(input.dataset.dte)); });
-  selectedExpirations=currentExpirationValues();
-  run();
+  const select = byId('expirationSelect');
+  const expiries = chainExpirations(chain);
+  selectedExpiration = pickExpiration(expiries, selectedExpiration);
+  if(!select) return;
+  select.innerHTML = expiries.length
+    ? expiries.map(exp=>`<option value="${esc(exp)}"${exp===selectedExpiration?' selected':''}>${esc(exp)}</option>`).join('')
+    : '<option value="">No expirations available</option>';
+  select.disabled = !expiries.length;
+  if(selectedExpiration) select.value = selectedExpiration;
 }
 
 // ---------- Navigation ----------
@@ -721,7 +856,10 @@ function applyLocation(){
   }
   if(view!==HOME_VIEW) return;
   const symbol=urlTicker || currentSymbol();
-  if(symbol===currentSymbol() && REAL[symbol]) run();
+  if(symbol===currentSymbol() && REAL[symbol]){
+    run();
+    drawPriceCharts(symbol);
+  }
   else refreshHome(symbol);
 }
 function navigate(view){
@@ -765,9 +903,8 @@ function run(){
   }
   let chain = buildChainReal(sym);
   populateExpirations(chain);
-  const chosen = new Set(currentExpirationValues());
-  if(chosen.size){
-    chain = {...chain, quotes: chain.quotes.filter(q=>chosen.has(q.exp))};
+  if(selectedExpiration){
+    chain = {...chain, quotes: chain.quotes.filter(q=>q.exp===selectedExpiration)};
   }
   const R = calcGEX(chain);
   R.expectedMove = calcExpectedMove(chain);
@@ -831,27 +968,47 @@ async function loadDynamicSymbol(symbol){
   DYNAMIC_SYMBOLS.add(symbol);
   return {ok:true};
 }
+// The latest session's 1-minute candles for the two price charts.
+async function loadPriceData(symbol){
+  let payload=null;
+  try{
+    const response=await fetch(`${MATRIX_CANDLES_URL}?symbol=${encodeURIComponent(symbol)}&interval=1m&range=1d`,{cache:'no-store'});
+    payload=await response.json();
+  }catch(_err){
+    payload=null;
+  }
+  if(!payload?.ok) return {error:`No intraday prices for ${symbol}`};
+  const candles=latestSessionCandles(payload.candles);
+  return candles.length ? {candles} : {error:`No intraday prices for ${symbol}`};
+}
 // Refresh of the Strike Chart: Search, Enter, or opening it with no data yet.
+// The chain and the price candles load together.
 async function refreshHome(symbol){
   const request=++_homeRequest;
   const previous=currentSymbol();
   if(activeView===HOME_VIEW) syncTickerInput(HOME_VIEW,symbol);
   setTickerStatus(HOME_VIEW,`Loading ${symbol}…`);
-  const result=isCoreSymbol(symbol) ? await loadCoreData() : await loadDynamicSymbol(symbol);
+  const [result,price]=await Promise.all([
+    isCoreSymbol(symbol) ? loadCoreData() : loadDynamicSymbol(symbol),
+    loadPriceData(symbol),
+  ]);
   if(request!==_homeRequest) return;  // a newer Search took over
+  // Keep the last good candles if this refresh could not get new ones.
+  if(price.candles || !PRICE[symbol]?.candles) PRICE[symbol]=price;
   if(!REAL[symbol]){
     // Nothing to show for this ticker: fall back to the last ticker, or the default one.
     if(!REAL[previous] && symbol!==previous) await refreshHome(previous);
     setTickerStatus(HOME_VIEW,result.detail,'error');
     return;
   }
-  if(symbol!==previous) selectedExpirations=null;
+  if(symbol!==previous) selectedExpiration=null;
   screenTickers[HOME_VIEW]=symbol;
   if(activeView===HOME_VIEW){
     syncTickerInput(HOME_VIEW);
     history.replaceState(null,'',screenUrl(HOME_VIEW));
   }
   run();
+  drawPriceCharts(symbol);
   setTickerStatus(HOME_VIEW,result.ok?'':`Refresh failed. Showing the last data for ${symbol}.`,result.ok?'':'error');
 }
 
@@ -1548,13 +1705,10 @@ document.querySelectorAll('.ticker-form').forEach(form=>{
     search(form.dataset.screen,form.elements.ticker.value);
   });
 });
-bind('expirationPicker','change',()=>{
-  selectedExpirations=currentExpirationValues();
-  syncExpiryQuickButtons();
+// A new date redraws the strike chart only; the price charts do not read it.
+bind('expirationSelect','change',()=>{
+  selectedExpiration=currentExpiration();
   run();
-});
-document.querySelectorAll('.expiry-quick-btn').forEach(btn=>{
-  btn.addEventListener('click',()=>applyExpirationQuickSelect(btn.dataset.expquick));
 });
 // parameter buttons - toggle metrics on/off (multi-select overlay)
 document.querySelectorAll('.pbtn').forEach(btn=>{
@@ -1567,6 +1721,7 @@ document.querySelectorAll('.pbtn').forEach(btn=>{
   });
 });
 window.addEventListener('resize',()=>{
+  if(activeView===HOME_VIEW && PRICE[currentSymbol()]) drawPriceCharts();
   const viewRenderer=VIEW_RENDERERS[activeView];
   if(viewRenderer) viewRenderer(window._lastR);
 });
@@ -1594,6 +1749,13 @@ bind('oiVolumeChart','touchend',()=>setTimeout(hideOiVolumeTooltip,1200),{passiv
   bind(id,'touchstart',showChartTooltip,{passive:true});
   bind(id,'touchmove',showChartTooltip,{passive:true});
   bind(id,'touchend',()=>setTimeout(hideChartTooltip,1200),{passive:true});
+});
+Object.keys(PRICE_CHARTS).forEach(id=>{
+  bind(id,'mousemove',showPriceTooltip);
+  bind(id,'mouseleave',hidePriceTooltips);
+  bind(id,'touchstart',showPriceTooltip,{passive:true});
+  bind(id,'touchmove',showPriceTooltip,{passive:true});
+  bind(id,'touchend',()=>setTimeout(hidePriceTooltips,1200),{passive:true});
 });
 bind('keyLevelsChart','mousemove',showKeyLevelsTooltip);
 bind('keyLevelsChart','mouseleave',hideKeyLevelsTooltip);

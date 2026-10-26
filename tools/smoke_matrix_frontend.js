@@ -1,5 +1,5 @@
 /* Smoke test: load matrix.js with DOM stubs (offline) and a synthetic chain,
-   then check the GEX engine, the Strike Chart draw path, the P/C Ratio table, OI Volume
+   then check the GEX engine, the Strike Chart (one-date dropdown, price charts), the P/C Ratio table, OI Volume
    and the Key Levels screen (four levels only, the Forecast's h3/h4/h5 layout,
    the price chart). */
 const fs = require('fs');
@@ -72,13 +72,38 @@ check('call wall above put wall', R.callWall > R.putWall, `call=${R.callWall} pu
 check('zero gamma found inside the strike range', R.flip > 7300 && R.flip < 7660, `flip=${R.flip?.toFixed(1)}`);
 
 // --- 3. Strike Chart ---
-check('quick-select predicates',
-  expiryQuickPredicate('0dte')(0) && !expiryQuickPredicate('0dte')(1)
-  && expiryQuickPredicate('week')(7) && !expiryQuickPredicate('week')(8) && expiryQuickPredicate('all')(45));
+// One expiration at a time, nearest by default
+check('nearest date is the default', pickExpiration(['2026-10-27', '2026-10-28'], null) === '2026-10-27');
+check('a listed date is kept', pickExpiration(['2026-10-27', '2026-10-28'], '2026-10-28') === '2026-10-28');
+check('an unlisted date falls back to the nearest', pickExpiration(['2026-10-27'], '2026-07-17') === '2026-10-27');
+check('no dates gives none', pickExpiration([], '2026-10-27') === null);
+check('dropdown lists future dates once, sorted',
+  JSON.stringify(chainExpirations({ quotes: [{ exp: '2099-01-02' }, { exp: '2000-01-01' }, { exp: '2099-01-01' }, { exp: '2099-01-01' }] }))
+  === '["2099-01-01","2099-01-02"]');
 check('his seven parameter buttons',
   Object.keys(METRICS).join() === 'net_gex,ag,call_oi,put_oi,call_vol,put_vol,power');
 R.expectedMove = calcExpectedMove(buildChainReal('SPX'));
 check('Strike Chart draws', noThrow(() => drawChart(R)));
+
+// Price charts keep the latest regular session (09:30-16:00 ET)
+const et = (day, hh, mm) => zonedDateTimeToUtc(2026, 10, day, hh, mm, 'America/New_York') / 1000;
+const bar = t => ({ time: t, open: 1, high: 2, low: 0.5, close: 1.5 });
+const session = latestSessionCandles([
+  bar(et(23, 15, 59)), bar(et(26, 9, 0)), bar(et(26, 9, 30)), bar(et(26, 15, 59)), bar(et(26, 16, 0)),
+  { time: et(26, 10, 0), open: null, high: 1, low: 1, close: 1 },
+]);
+check('price charts keep only the last session', session.length === 2
+  && session[0].time === et(26, 9, 30) && session[1].time === et(26, 15, 59), `${session.length} candles`);
+check('price chart times are New York time', fmtMarketTime(et(26, 9, 30)) === '09:30');
+activeView = HOME_VIEW;
+PRICE.XYZ = { error: 'No intraday prices for XYZ' };
+check('a ticker with no candles says so', noThrow(() => drawPriceCharts('XYZ'))
+  && byId('priceEmpty').textContent === 'No intraday prices for XYZ' && byId('priceChart')._matrixPrice === null);
+PRICE.SPX = { candles: Array.from({ length: 390 }, (_, i) => ({ ...bar(et(26, 9, 30) + i * 60), close: 1 + i / 100 })) };
+check('candle and close-line charts draw', noThrow(() => drawPriceCharts('SPX'))
+  && byId('priceChart')._matrixPrice?.kind === 'candles' && byId('priceSimpleChart')._matrixPrice?.candles.length === 390);
+check('price tooltip shows a candle', noThrow(() => showPriceTooltip({ currentTarget: byId('priceChart'), clientX: 300, clientY: 200 }))
+  && byId('priceTooltip').innerHTML.includes('Close'));
 
 // --- 4. Key Levels ---
 const KR = keyLevelsGex('SPX');

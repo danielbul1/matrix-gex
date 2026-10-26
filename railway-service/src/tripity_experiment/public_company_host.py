@@ -1294,6 +1294,13 @@ class PublicCompanyApp:
                     (b"cache-control", b"public, max-age=15"),
                 ],
             )
+        except ValueError as exc:
+            await self._json(
+                send,
+                {"ok": False, "detail": str(exc)},
+                status=400,
+                headers=self._matrix_cors_headers(scope),
+            )
         except Exception as exc:  # noqa: BLE001
             await self._json(
                 send,
