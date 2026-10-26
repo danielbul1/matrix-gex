@@ -280,3 +280,23 @@ We compared the public files of `151212aa.pythonanywhere.com` (Max Power) and `m
 - The Wayback Machine has no capture of the old site, and web search finds nothing else about it.
 
 So the old site is the same app, still running under its earlier Russian brand. Everything it does beyond these files sits behind the login, which this effort does not bypass.
+
+## Addendum 4: second pass over both repos (2026-10-26, at the user's request)
+
+Neither repo has a commit newer than those above (`gex_dashboard` head `130487e`, 2026-09-07; validator head `3569449`, 2026-09-29). The author's other public repos have nothing on Max Power or Quant Power. The new facts below come from parts the earlier addenda did not cite: the **first version** of `docs/power_zone_analysis.md` (commit `e8fb70f`, later rewritten) and `gex_dashboard`'s commit messages. Unless marked otherwise, each is something **he reports the app does**. We did not copy his code or numbers.
+
+- **Power Zone profile on the price chart:** a yellow line of width 2 with a translucent fill, sampled every **$2.50** (finer than the $5 SPX chain), drawn on the candle chart's own time axis.
+- **Price-chart level labels:** "P1 Strike", "N1 Strike", "Call Vol Strike", "Put Vol Strike", "Max Power", "AG Strike", each value with two decimals ("6800.00"). Medium confidence that these are the app's own strings: he lists them as a level/value table.
+- **Expiry dropdown:** 6 expiries were offered (2026-04-10 to 04-20), not every listed expiry. Medium-low confidence: one sample.
+- **Net GEX scale:** in his per-strike table the app's |Net GEX| stays under about 2.5% of AG at every strike. This fits the thumbnails (left axis in millions, right axis 100M+). Low-medium confidence.
+- **Zero volume:** the Power Zone peak then sits on the AG strike (on 2026-04-10, Max Power = AG Strike = P1 = Put Vol strike).
+- **GEX board:** commit `da08e2d` says his Strike Board was "validated against a reference board" on SPY over 4 expiries:
+  - the strike universe, Call OI and Put OI match exactly;
+  - Abs GEX is within 2.5–6%;
+  - Notional Delta matches only in the **gross** form `|Δ|·OI·100·spot` (corr 1.000), not the net form (−0.648).
+  - He never names the reference. That it is Quant Power's `gex-options-board` is an inference (medium): he follows Max Power, and his board uses the app's current `#1e1e1e` background.
+  - His board drops only OI = 0 contracts.
+- **His own design, not evidence:** his Plotly reconstruction (dashed price line, marker size 8, chart title), `gex_dashboard`'s chart (AG and Power Zone on the left axis in $B, Power Zone = AG redrawn, "x unified" hover, only Net GEX on by default), the board's "%" column, sorting, highlights and info line, and every SpotGamma or Menthor Q definition in his doc.
+- **Still nothing anywhere on:** Volume Spread, the P/C table, the Forecast, the Key Levels page, the Gamma total and Gamma split charts, or the OI Volume price-chart lines.
+
+Where this landed: PR #52 (home: AG and Power Zone share one right axis, OI and volume get their own scale, the expiry list shows the 6 nearest); "בנייה 9" #39 (profile and label details); "בנייה 6" #36 (board columns and the OI = 0 floor).
