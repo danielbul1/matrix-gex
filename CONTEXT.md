@@ -98,6 +98,37 @@ _Avoid_: GEX Analysis page, heat map
 One of the four prices the Key Levels screen marks from a ticker's GEX profile: Zero Gamma, Max Gamma, Call Wall and Put Wall. Max Pain is not a Key Level.
 _Avoid_: support/resistance, levels
 
+**AG**:
+A strike's GEX with calls and puts both counted as positive, so the two sides add instead of cancelling.
+_Avoid_: absolute gamma, ABS GEX, aggregate gamma
+
+**Power Zone**:
+A per-strike measure of where dealer hedging is heaviest. It is a strike's AG plus a share of its trading volume so far today, drawn only for strikes near spot.
+_Avoid_: power range, AVG Power Zone, zone band
+
+**Matrix Power**:
+The strike with the highest Power Zone: the level that price is drawn to. It is a Price Line, not a Key Level.
+_Avoid_: Max Power, magnet, Quant Power level
+
+**Price Line**:
+One of the six strikes drawn across the Strike Chart's price chart:
+- P1: the largest positive Net GEX.
+- N1: the most negative Net GEX.
+- Call Vol: the most call volume.
+- Put Vol: the most put volume.
+- Matrix Power.
+- AG Strike: the largest AG.
+
+_Avoid_: Key Level, support/resistance
+
+**Volume Spread**:
+A strike's call volume minus its put volume, for the session so far.
+_Avoid_: net volume, volume imbalance
+
+**P/C Ratio**:
+Put over call for one ticker across all its expiries, measured both by open interest and by volume.
+_Avoid_: PCR, put/call skew
+
 **Forecast**:
 The sectioned text read of one ticker, shown under the Key Levels chart and loaded with it.
 _Avoid_: Market Read, Scenario Ladder, outlook
