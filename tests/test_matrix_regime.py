@@ -3,12 +3,10 @@
 Covers: every label reachable from crafted inputs, agreement counting,
 contango/backwardation detection from a synthetic chain, Parkinson and
 Garman-Klass estimators against hand-computed series, monthly OpEx proximity,
-reasoning strings, and host integration (snapshot scales + endpoint wiring).
+and reasoning strings.
 """
-import importlib.util
 import math
 import sys
-import types
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -281,51 +279,3 @@ def test_deterministic_same_inputs_same_output():
     args = _inputs(OPEX - timedelta(days=4))
     assert mr.compute_regime(args) == mr.compute_regime(dict(args))
 
-
-# ---------------------------------------------------------------------------
-# Host integration (stubs for third-party deps, Phase-2 approach)
-# ---------------------------------------------------------------------------
-def _install_third_party_stubs():
-    class _Any:
-        def __init__(self, *a, **k): pass
-        def __call__(self, *a, **k): return _Any()
-        def __getattr__(self, name): return _Any()
-        def __mro_entries__(self, bases): return (object,)
-
-    for name in (
-        "uvicorn", "mcp", "lse_data",
-        "fastapi", "fastapi.responses",
-        "fastmcp", "fastmcp.client", "fastmcp.client.auth",
-        "fastmcp.server", "fastmcp.server.providers", "fastmcp.server.providers.openapi",
-        "fastmcp.utilities", "fastmcp.utilities.openapi",
-    ):
-        if name in sys.modules:
-            continue
-        try:
-            if importlib.util.find_spec(name) is not None:
-                continue
-        except (ModuleNotFoundError, ValueError, TypeError):
-            pass
-        module = types.ModuleType(name)
-        module.__getattr__ = lambda attr: _Any
-        sys.modules[name] = module
-
-
-def test_host_snapshot_feeds_regime_engine():
-    _install_third_party_stubs()
-    from tripity_experiment import public_company_host as host
-
-    assert hasattr(host.PublicCompanyApp, "_matrix_regime")
-    record = {
-        "mult": 100,
-        "opts": [
-            {"t": "C", "k": 100, "oi": 5000, "iv": 0.2, "g": 0.0, "d": 0.0, "exp": OPEX.isoformat(), "root": "SPY"},
-            {"t": "P", "k": 95, "oi": 8000, "iv": 0.25, "g": 0.0, "d": 0.0, "exp": OPEX.isoformat(), "root": "SPY"},
-        ],
-    }
-    snap = host._compute_matrix_gex_snapshot("SPY", record, SPOT, _ms(OPEX - timedelta(days=4)))
-    # Snapshot now carries the additive scale fields the engine consumes.
-    assert snap["gex_scale"] > 0 and snap["vex_scale"] >= 0 and snap["chex_scale"] >= 0
-    out = mr.compute_regime({**snap, "options": record["opts"], "valuation_ms": _ms(OPEX - timedelta(days=4))})
-    assert out["label"] in mr.LABELS
-    assert out["reasoning"]

@@ -89,10 +89,10 @@ python tools\backtest_regime.py --symbol SPY --start 2026-08-01 --end 2026-08-31
 
 Data sources (auto-detected; force with `--source db|history`):
 
-- `--db PATH`: the Railway snapshot DB. On the Railway service it lives at
-  `/data/matrix_flow.sqlite3` (override via env `TRIPITY_MATRIX_FLOW_DB`);
-  locally, copy it down or pass `--db`. Table: `matrix_gex_snapshot`
-  (1-minute spot + total_gex/dex/vex/chex + flip + walls per session).
+- `--db PATH`: a copy of the old Railway snapshot DB (`matrix_flow.sqlite3`,
+  table `matrix_gex_snapshot`: 1-minute spot + total_gex/dex/vex/chex + flip +
+  walls per session). The service stopped writing it and deleted it on
+  2026-10-26 (ADR 0001), so only a copy taken before then works here.
 - `--history-root DIR`: fallback `exposure_history/` JSON written by
   `tools/build_exposure_history.py` (GitHub Actions path; 30-min per-strike
   GEX/DEX only, so VEX/CHEX replay as zero there).
@@ -276,38 +276,6 @@ python tools\backfill_chain.py --store C:\path\chain.sqlite3 --start 2024-03-04 
   empty and asked again on the next run.
 - `--concurrency` caps requests in flight (default 4, the Standard tier's
   limit; 8 on Pro).
-
-## Regime Journal
-
-Daily workflow: write your regime call before the open in the dashboard's
-**Journal** view (label, key levels, notes). The server freezes the engine's
-verdict (label / agreement / reasoning / walls) next to it at save time. You
-can replace the call until it is graded; entries lock once graded. After the
-close (16:05 ET) the day is auto-graded — on the next `GET` — using the same
-outcome rules as the backtester (`tripity_experiment.matrix_outcome`), and
-both your label and the engine's frozen label are scored, so the stats answer
-"should I trust myself or the machine?".
-
-Storage: table `matrix_journal_entries` in the same flow DB
-(`/data/matrix_flow.sqlite3` on Railway, override via
-`TRIPITY_MATRIX_FLOW_DB`), one row per `(session_date, symbol)`. It is NOT
-covered by the snapshot retention deletes.
-
-Endpoints (same host as the other `/api/matrix/*` routes):
-
-- `POST /api/matrix/journal` `{symbol, user_label, user_levels, notes}` —
-  save/replace today's call; 409 once the entry is graded.
-- `GET /api/matrix/journal?days=60` — recent entries with grades; past
-  ungraded days are auto-graded on the way out.
-- `POST /api/matrix/journal/grade` `{date, symbol}` — grade explicitly (400
-  before the session completes, idempotent afterwards).
-- `GET /api/matrix/journal/stats?days=60` — hit rates: you overall, engine
-  overall, you-when-agreeing vs you-when-disagreeing, per-label breakdown,
-  with day counts and a small-sample caution (<30 scored days = noise).
-
-Grading needs the day's prices: the candles feed first, then the snapshot
-DB's own spot series (same fallback as the backtester). Days without price
-coverage stay ungraded until data exists.
 
 ## Data Source Notes
 
