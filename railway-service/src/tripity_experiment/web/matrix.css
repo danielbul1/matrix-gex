@@ -100,6 +100,39 @@
   .watermark{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
              font-size:72px;font-weight:800;color:rgba(255,255,255,.055);
              pointer-events:none;letter-spacing:2px;user-select:none}
+
+  /* Key Levels: price chart with the four levels, and the Forecast under it */
+  .kl-card{min-height:auto}
+  .kl-legend{flex-wrap:wrap;justify-content:flex-end;gap:12px}
+  .kl-legend span{display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+  .kl-legend i{display:inline-block;width:16px;height:0;border-top:2px solid}
+  .kl-legend i.dashed{border-top-style:dashed}
+  .forecast-card{margin-top:10px;padding:26px 34px 30px;background:#202020;border:0;border-radius:8px;
+                 color:#d6d6d6;font-size:15px;line-height:1.6}
+  .forecast-card:empty{display:none}
+  .forecast-card h3{margin:0 0 14px;font-size:24px;font-weight:800;
+                    background:linear-gradient(90deg,#22b8ff,#ab7df6);-webkit-background-clip:text;background-clip:text;color:transparent}
+  .forecast-card h4{margin:22px 0 8px;font-size:18px;font-weight:800;color:#fff}
+  .forecast-card h5{margin:14px 0 4px;font-size:15px;font-weight:800;
+                    background:linear-gradient(90deg,#ffc107,#ff8a3d);-webkit-background-clip:text;background-clip:text;color:transparent}
+  .forecast-card p{margin:0 0 8px}
+  .forecast-card ul{margin:0 0 8px;padding-left:20px}
+  .forecast-card .pos{color:#22aaf2;font-weight:800}
+  .forecast-card .neg{color:#ff3b2f;font-weight:800}
+  /* P/C Ratio screen */
+  .pc-card{margin-top:10px;background:#202020;border:0;padding:28px 30px}
+  .pc-title{margin:0 0 4px;color:#e2e2e2;font-size:24px}
+  .pc-note{margin:0 0 16px;color:var(--muted);font-size:13px}
+  .pc-table-wrap{overflow-x:auto}
+  .pc-table{font-size:14px;min-width:640px}
+  .pc-table th{font-size:12px;padding:10px 8px;border-bottom:1px solid #3a3a3a}
+  .pc-table td{padding:11px 8px}
+  .pc-table td.pc-ticker{font-weight:800;color:#f0f0f0}
+  .pc-table td.pc-ratio{font-weight:800}
+  .pc-table td.pc-missing{color:var(--muted)}
+  .pc-status{margin:12px 0 0;min-height:16px;color:#9da7af;font-size:12px;font-weight:700}
+  .pc-status.error{color:#ff8e86}
+  .pc-status:empty{display:none}
   @media(max-width:1200px){
     .price-charts{grid-template-columns:minmax(0,1fr)}
   }
@@ -132,8 +165,18 @@
     .symlabel{margin-left:0;font-size:16px}
     .chartlegend{margin-right:0;font-size:12px}
     .watermark{font-size:44px}
+    .kl-legend{justify-content:flex-start;gap:8px}
+    .forecast-card{padding:18px 14px 20px;font-size:14px}
+    .pc-card{padding:16px 10px}
   }
   @media(max-width:520px){
     .chartcard{padding-left:4px;padding-right:4px}
     .watermark{font-size:34px}
   }
+
+  /* OI Volume */
+  .pricecard{min-height:auto;margin-top:10px}
+  .price-empty{position:absolute;inset:0;display:none;align-items:center;justify-content:center;
+               color:var(--muted);font-size:15px;font-weight:700;text-align:center;padding:0 16px}
+  .price-empty.show{display:flex}
+  #oivExpiry{min-width:170px}

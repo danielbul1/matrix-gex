@@ -288,10 +288,14 @@ function bind(id,event,handler,opts){
 function hideAllHoverHelpers(){
   hideChartTooltip();
   hidePriceTooltips();
+  hideKeyLevelsTooltip();
+  hideOiVolumeTooltip();
 }
 // Single view -> renderer dispatch, shared by renderImpl, setView and the resize handler.
 const VIEW_RENDERERS = {
-  'gex': R=>drawChart(R),
+  'gex': R=>R && drawChart(R),
+  'oi-volume': ()=>renderOiVolume(),
+  'key-levels': ()=>renderKeyLevels(),
 };
 function renderImpl(R){
   window._lastR=R;
@@ -839,6 +843,17 @@ function applyLocation(){
   const urlTicker=SCREENS[view].ticker && validTicker(fromUrl) ? fromUrl : null;
   if(urlTicker && view!==HOME_VIEW) screenTickers[view]=urlTicker;
   setView(view);
+  if(view==='options-summary') loadPcRatio();
+  if(view===OIV_VIEW){
+    const symbol=screenTickers[OIV_VIEW];
+    if(symbol===oiv.symbol && REAL[symbol]) renderOiVolume();
+    else refreshOiVolume(symbol);
+    return;
+  }
+  if(view===KEY_LEVELS_VIEW){
+    showKeyLevels();
+    return;
+  }
   if(view!==HOME_VIEW) return;
   const symbol=urlTicker || currentSymbol();
   if(symbol===currentSymbol() && REAL[symbol]){
@@ -863,6 +878,14 @@ function search(view,raw){
   }
   if(view===HOME_VIEW){
     refreshHome(symbol);
+    return;
+  }
+  if(view===OIV_VIEW){
+    refreshOiVolume(symbol);
+    return;
+  }
+  if(view===KEY_LEVELS_VIEW){
+    loadKeyLevels(symbol);
     return;
   }
   screenTickers[view]=symbol;
@@ -893,7 +916,6 @@ function run(){
 // ---------- Data loading (only on Search or Enter) ----------
 const MATRIX_CBOE_DATA_URL = 'https://api.trytripity.site/api/matrix/cboe-data';
 const MATRIX_SYMBOL_DATA_URL = 'https://api.trytripity.site/api/matrix/symbol-data';
-const MATRIX_CANDLES_URL = 'https://api.trytripity.site/api/matrix/candles';
 let _homeRequest=0;
 function fetchLiveData(url){
   return fetch(url, {cache:'no-store'})
@@ -990,6 +1012,682 @@ async function refreshHome(symbol){
   setTickerStatus(HOME_VIEW,result.ok?'':`Refresh failed. Showing the last data for ${symbol}.`,result.ok?'':'error');
 }
 
+// ---------- Key Levels ----------
+// Price for the searched ticker with its four Key Levels, and the Forecast under it.
+// One Search loads both, the way his Key Levels page fills chart and text together.
+const KEY_LEVELS_VIEW = 'key-levels';
+// Guess: his bar size and time span are not public. 5-minute bars over five days
+// show where price sits against levels built from every open expiry.
+const KEY_LEVELS_CANDLES = {interval:'5m', range:'5d'};
+// The four Key Levels, in the colours Matrix already used for them.
+const KEY_LEVEL_STYLES = [
+  {key:'callWall',       label:'Call Wall',  color:'#22b8ff'},
+  {key:'putWall',        label:'Put Wall',   color:'#ff453a'},
+  {key:'flip',           label:'Zero Gamma', color:'#f5f5f5'},
+  {key:'maxGammaStrike', label:'Max Gamma',  color:'#8b5fe8'},
+];
+// Levels further than this from spot stay in the legend but off the chart,
+// so one far wall cannot squash the candles into a line.
+const KEY_LEVELS_MAX_DISTANCE = 0.08;
+let keyLevelsState = null;  // {symbol, R, candles}
+let _keyLevelsRequest = 0;
+
+function keyLevels(R){
+  return KEY_LEVEL_STYLES
+    .map(style=>({...style, price:R?.[style.key]==null ? NaN : Number(R[style.key])}))
+    .filter(level=>Number.isFinite(level.price) && level.price>0);
+}
+// No expiry choice on this screen: the GEX profile spans every open expiry (a guess;
+// his page has no expiry control).
+function keyLevelsGex(symbol){
+  const chain=buildChainReal(symbol);
+  const todayIso=new Date().toISOString().slice(0,10);
+  const open=chain.quotes.filter(q=>!q.exp || q.exp>=todayIso);
+  const R=calcGEX(open.length ? {...chain, quotes:open} : chain);
+  R.asof=REAL[symbol]?.asof;
+  return R;
+}
+
+// ----- Forecast -----
+// Placeholder text: the rule-based Market Read and Scenario Ladder Matrix had before,
+// laid out as his #market-forecast is (h3 title, h4 sections, h5 sub-heads).
+// Build 9 replaces the content.
+function levelDisplayPrice(value,R){
+  if(value == null || !Number.isFinite(Number(value))) return '--';
+  const base = fmtPrice(Number(value));
+  const linked = linkedMarketPrice(Number(value),R);
+  if(!linked || linked.price == null) return base;
+  return `${base} / ${linked.symbol} ${fmtLinkedMarketPrice(linked)}`;
+}
+function nearestKeyLevel(R,side){
+  return keyLevels(R)
+    .filter(level=>side==='above' ? level.price>R.spot : level.price<R.spot)
+    .sort((a,b)=>side==='above' ? a.price-b.price : b.price-a.price)[0] || null;
+}
+function buildForecast(R){
+  const gross = Math.abs(R.totalCallGex)+Math.abs(R.totalPutGex)||1;
+  const gexRatio = R.totalGex/gross;
+  let bias = 'Neutral';
+  let biasClass = 'neutral';
+  if(R.regime === 'positive_gamma'){
+    bias = 'Range / Mean Reversion';
+    biasClass = 'range';
+  } else if(R.regime === 'negative_gamma'){
+    bias = 'Trend Risk / Momentum';
+    biasClass = 'trend';
+  }
+  if(Math.abs(gexRatio) < 0.04){
+    bias = 'Chop / Low Signal';
+    biasClass = 'neutral';
+  }
+  const confidence = Math.min(100,Math.round(Math.abs(gexRatio)*260 + Math.min(35,Math.abs(R.distPct)*7)));
+  const summary = biasClass === 'range'
+    ? 'Dealers are more likely to dampen moves near current levels. Favor level-to-level reads until a wall breaks.'
+    : biasClass === 'trend'
+      ? 'Dealer hedging can amplify direction. Watch breaks above resistance or below support for acceleration.'
+      : 'Current gamma signal is weak. Treat levels as reference zones and wait for confirmation.';
+  const below = nearestKeyLevel(R,'below');
+  const above = nearestKeyLevel(R,'above');
+  const negative = R.regime === 'negative_gamma';
+  return {
+    bias, confidence, summary,
+    scenarios:[
+      {label:'Below', level:below, text:below
+        ? `Below ${below.label} ${levelDisplayPrice(below.price,R)}: ${negative ? 'sell pressure can accelerate' : 'support hedge may appear'}.`
+        : 'No Key Level below the current price.'},
+      {label:'Now', level:{label:'Price', price:R.spot}, text:`At ${levelDisplayPrice(R.spot,R)}: ${bias}. Confidence ${confidence}%.`},
+      {label:'Above', level:above, text:above
+        ? `Above ${above.label} ${levelDisplayPrice(above.price,R)}: ${negative ? 'buy pressure can chase' : 'resistance hedge may cap'}.`
+        : 'No Key Level above the current price.'},
+    ],
+  };
+}
+function forecastHtml(R){
+  const f = buildForecast(R);
+  const regime = String(R.regime||'').replace('_',' ');
+  const scenarios = f.scenarios.map(s=>{
+    const head = s.level ? `${s.label}: ${s.level.label} ${levelDisplayPrice(s.level.price,R)}` : s.label;
+    return `<h5>${esc(head)}</h5><p>${esc(s.text)}</p>`;
+  }).join('');
+  return `
+    <h3>Forecast for ${esc(R.symbol)}</h3>
+    <h4>Market Read</h4>
+    <h5>${esc(f.bias)}</h5>
+    <p>${esc(f.summary)}</p>
+    <ul>
+      <li>Confidence: <b>${f.confidence}%</b></li>
+      <li>Regime: <b>${esc(regime)}</b></li>
+      <li>Net GEX: <b class="${R.totalGex>=0?'pos':'neg'}">${fmtNum(R.totalGex)}</b></li>
+      <li>PCR: <b>${R.pcr.toFixed(2)}</b></li>
+    </ul>
+    <h4>Scenario Ladder</h4>
+    ${scenarios}
+  `;
+}
+
+// ----- Price chart -----
+function keyLevelsTimeLabel(time,withDay){
+  const opts = withDay
+    ? {timeZone:'America/New_York',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',hour12:false}
+    : {timeZone:'America/New_York',hour:'2-digit',minute:'2-digit',hour12:false};
+  return new Date(time*1000).toLocaleString('en-US',opts);
+}
+function drawKeyLevelsChart(state){
+  const cv = byId('keyLevelsChart');
+  if(!cv || !state) return;
+  const {R, candles} = state;
+  const dpr = window.devicePixelRatio||1;
+  const W = cv.clientWidth;
+  if(!W) return;
+  const mobile = W < 640;
+  const H = mobile ? Math.max(380, Math.min(520, window.innerHeight - 240)) : Math.max(520, Math.min(720, window.innerHeight - 260));
+  cv.width=W*dpr; cv.height=H*dpr; cv.style.height=H+"px";
+  const ctx = cv.getContext('2d'); ctx.setTransform(dpr,0,0,dpr,0,0);
+  ctx.clearRect(0,0,W,H);
+
+  const levels = keyLevels(R);
+  const onChart = levels.filter(level=>Math.abs(level.price-R.spot)/R.spot<=KEY_LEVELS_MAX_DISTANCE);
+  const symLabel = byId('klSymLabel');
+  if(symLabel) symLabel.textContent = R.symbol;
+  const legend = byId('klLegend');
+  if(legend) legend.innerHTML = levels.map(level=>
+    `<span><i class="dashed" style="border-color:${level.color}"></i>${esc(level.label)} ${fmtPrice(level.price)}${onChart.includes(level)?'':' (off chart)'}</span>`
+  ).join('') || '<span style="color:#7d8799">No Key Levels for this ticker</span>';
+
+  const padL = mobile ? 50 : 72;
+  const padR = mobile ? 70 : 132;
+  const padT = mobile ? 20 : 26;
+  const padB = mobile ? 44 : 50;
+  const plotW = W-padL-padR, plotH = H-padT-padB;
+  const top = padT, bottom = padT+plotH;
+
+  const prices = [R.spot, ...candles.flatMap(c=>[c.low,c.high]), ...onChart.map(l=>l.price)].filter(Number.isFinite);
+  let minPrice = Math.min(...prices), maxPrice = Math.max(...prices);
+  const pad = Math.max((maxPrice-minPrice)*.06, R.spot*.002, .01);
+  minPrice -= pad; maxPrice += pad;
+  const y = price=>top+(maxPrice-price)/(maxPrice-minPrice)*plotH;
+
+  // grid + price axis
+  ctx.font = mobile ? "bold 10px Segoe UI" : "bold 12px Segoe UI";
+  ctx.textBaseline = "middle";
+  for(let t=0;t<=6;t++){
+    const yy = top+plotH*t/6, price = maxPrice-(maxPrice-minPrice)*t/6;
+    ctx.strokeStyle = "rgba(255,255,255,.04)"; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(padL,yy); ctx.lineTo(padL+plotW,yy); ctx.stroke();
+    ctx.fillStyle = "#c4c4c4"; ctx.textAlign = "right";
+    ctx.fillText(fmtPrice(price), padL-8, yy);
+  }
+
+  // candles, one slot each so nights and weekends leave no gaps
+  const slot = plotW/Math.max(candles.length,1);
+  const xAt = i=>padL+slot*(i+.5);
+  if(candles.length){
+    // several days: a divider and the date at each day's first bar; one day: times
+    const days = candles.map(c=>keyLevelsTimeLabel(c.time,true).split(',')[0]);
+    const multiDay = days[0]!==days[days.length-1];
+    const labelEvery = Math.max(1, Math.ceil(candles.length/(mobile?4:8)));
+    ctx.textBaseline = "top"; ctx.textAlign = "left";
+    ctx.fillStyle = "#b9c0c5";
+    candles.forEach((c,i)=>{
+      const newDay = i>0 && days[i]!==days[i-1];
+      if(newDay){
+        ctx.strokeStyle = "rgba(255,255,255,.08)"; ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(padL+slot*i,top); ctx.lineTo(padL+slot*i,bottom); ctx.stroke();
+      }
+      if(multiDay ? (i===0 || newDay) : i%labelEvery===0){
+        ctx.fillText(multiDay ? days[i] : keyLevelsTimeLabel(c.time,false), padL+slot*i+3, bottom+8);
+      }
+    });
+    const bodyW = Math.max(1, Math.min(9, slot*.65));
+    candles.forEach((c,i)=>{
+      const x = xAt(i), color = c.close>=c.open ? '#26a69a' : '#ef5350';
+      ctx.strokeStyle = color; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(x,y(c.high)); ctx.lineTo(x,y(c.low)); ctx.stroke();
+      const bodyTop = Math.min(y(c.open),y(c.close));
+      ctx.fillStyle = color;
+      ctx.fillRect(x-bodyW/2, bodyTop, bodyW, Math.max(1, Math.abs(y(c.close)-y(c.open))));
+    });
+  } else {
+    ctx.fillStyle = "#8d969c"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.font = mobile ? "bold 12px Segoe UI" : "bold 14px Segoe UI";
+    ctx.fillText(`No price data for ${R.symbol}`, padL+plotW/2, top+plotH/2);
+  }
+
+  // the four Key Levels across the chart, labelled on the right
+  ctx.font = mobile ? "bold 10px Segoe UI" : "bold 12px Segoe UI";
+  ctx.textAlign = "left"; ctx.textBaseline = "middle";
+  const labelYs = [];
+  [...onChart].sort((a,b)=>b.price-a.price).forEach(level=>{
+    const yy = y(level.price);
+    ctx.save(); ctx.setLineDash([7,5]); ctx.strokeStyle = level.color; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(padL,yy); ctx.lineTo(padL+plotW,yy); ctx.stroke(); ctx.restore();
+    // nudge labels apart when two levels sit close together
+    let ly = yy;
+    while(labelYs.some(other=>Math.abs(other-ly)<14)) ly += 14;
+    labelYs.push(ly);
+    ctx.fillStyle = level.color;
+    // on narrow screens the name alone; the legend above carries the prices
+    ctx.fillText(mobile ? level.label : `${level.label} ${fmtPrice(level.price)}`, padL+plotW+5, ly);
+  });
+
+  // current price
+  const py = y(R.spot);
+  ctx.save(); ctx.setLineDash([3,4]); ctx.strokeStyle = "#d58b16"; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.moveTo(padL,py); ctx.lineTo(padL+plotW,py); ctx.stroke(); ctx.restore();
+  ctx.fillStyle = "#d58b16"; ctx.textAlign = "left"; ctx.textBaseline = "bottom";
+  ctx.fillText(`Price ${fmtPrice(R.spot)}`, padL+4, py-3);
+
+  cv._klPlot = {padL, plotW, top, bottom, slot, candles, symbol:R.symbol};
+}
+function showKeyLevelsTooltip(ev){
+  const cv = byId('keyLevelsChart'), tt = byId('klTooltip'), cross = byId('klCrosshairX');
+  const plot = cv?._klPlot;
+  if(!tt || !cross || !plot || !plot.candles.length) return;
+  const rect = cv.getBoundingClientRect();
+  const point = ev.touches && ev.touches[0] ? ev.touches[0] : ev;
+  const x = point.clientX-rect.left, y = point.clientY-rect.top;
+  if(x<plot.padL || x>plot.padL+plot.plotW || y<plot.top || y>plot.bottom){ hideKeyLevelsTooltip(); return; }
+  const i = Math.max(0, Math.min(plot.candles.length-1, Math.floor((x-plot.padL)/plot.slot)));
+  const c = plot.candles[i];
+  const row = (label,value) => `<div class="tt-row"><span>${label}</span><span>${value}</span></div>`;
+  tt.innerHTML = `
+    <div class="tt-title">${esc(plot.symbol)} · ${esc(keyLevelsTimeLabel(c.time,true))}</div>
+    ${row('Open',fmtPrice(c.open))}${row('High',fmtPrice(c.high))}${row('Low',fmtPrice(c.low))}${row('Close',fmtPrice(c.close))}
+  `;
+  tt.style.display = 'block';
+  cross.style.display = 'block';
+  cross.style.left = (plot.padL+plot.slot*(i+.5))+'px';
+  const tw = tt.offsetWidth, th = tt.offsetHeight;
+  let left = x+14, topPx = y+14;
+  if(left+tw>rect.width) left = x-tw-14;
+  if(topPx+th>rect.height) topPx = y-th-14;
+  tt.style.left = Math.max(6,left)+'px';
+  tt.style.top = Math.max(6,topPx)+'px';
+}
+function hideKeyLevelsTooltip(){
+  ['klTooltip','klCrosshairX'].forEach(id=>{const el=byId(id); if(el) el.style.display='none';});
+}
+
+// ----- Loading (Search, Enter, or opening the screen with nothing loaded) -----
+async function fetchKeyLevelsCandles(symbol){
+  const {interval, range} = KEY_LEVELS_CANDLES;
+  const data = await fetchLiveData(`${MATRIX_CANDLES_URL}?symbol=${encodeURIComponent(symbol)}&interval=${interval}&range=${range}&t=${Date.now()}`);
+  if(!data?.ok || !Array.isArray(data.candles)) return null;
+  return data.candles.filter(c=>[c.time,c.open,c.high,c.low,c.close].every(Number.isFinite));
+}
+function renderKeyLevels(){
+  if(activeView!==KEY_LEVELS_VIEW || !keyLevelsState) return;
+  drawKeyLevelsChart(keyLevelsState);
+  const host = byId('forecast');
+  if(host) host.innerHTML = forecastHtml(keyLevelsState.R);
+}
+async function loadKeyLevels(symbol){
+  const request = ++_keyLevelsRequest;
+  syncTickerInput(KEY_LEVELS_VIEW,symbol);
+  setTickerStatus(KEY_LEVELS_VIEW,`Loading ${symbol}…`);
+  const [result, candles] = await Promise.all([
+    isCoreSymbol(symbol) ? loadCoreData() : loadDynamicSymbol(symbol),
+    fetchKeyLevelsCandles(symbol),
+  ]);
+  if(request!==_keyLevelsRequest) return;  // a newer Search took over
+  if(!REAL[symbol]){
+    // Nothing to show: keep the ticker that is on screen.
+    if(keyLevelsState) screenTickers[KEY_LEVELS_VIEW] = keyLevelsState.symbol;
+    syncTickerInput(KEY_LEVELS_VIEW);
+    setTickerStatus(KEY_LEVELS_VIEW,result.detail || `${symbol}: no data.`,'error');
+    return;
+  }
+  keyLevelsState = {symbol, R:keyLevelsGex(symbol), candles:candles || []};
+  screenTickers[KEY_LEVELS_VIEW] = symbol;
+  if(activeView===KEY_LEVELS_VIEW){
+    syncTickerInput(KEY_LEVELS_VIEW);
+    history.replaceState(null,'',screenUrl(KEY_LEVELS_VIEW));
+  }
+  renderKeyLevels();
+  if(!result.ok) setTickerStatus(KEY_LEVELS_VIEW,`Refresh failed. Showing the last data for ${symbol}.`,'error');
+  else if(!candles) setTickerStatus(KEY_LEVELS_VIEW,`${symbol}: price chart is unavailable right now.`,'error');
+  else setTickerStatus(KEY_LEVELS_VIEW,'');
+}
+function showKeyLevels(){
+  const symbol = screenTickers[KEY_LEVELS_VIEW];
+  if(keyLevelsState?.symbol===symbol) renderKeyLevels();
+  else loadKeyLevels(symbol);
+}
+
+// ---------- OI Volume ----------
+// His OI Volume page: ticker + Search, one expiration date, five multi-select
+// buttons over a per-strike chart, and a price chart with OI/volume strike lines.
+const OIV_VIEW = 'oi-volume';
+// Volume Spread = call volume minus put volume per strike, for the session so far
+// (map #21, #24). It is our guess: no public source defines it. Bars in Net GEX colours.
+const OIV_METRICS = {
+  volume_spread: {label:'Volume Spread', color:'#22b8ff', kind:'bar',  val:s=>s.volumeSpread},
+  call_oi:       {label:'Call OI',       color:'#26c281', kind:'area', val:s=>s.callOI},
+  put_oi:        {label:'Put OI',        color:'#ef5350', kind:'area', val:s=>s.putOI},
+  call_vol:      {label:'Call Vol',      color:'#2f73ff', kind:'area', val:s=>s.callVol},
+  put_vol:       {label:'Put Vol',       color:'#ff8a3d', kind:'area', val:s=>s.putVol},
+};
+const OIV_ACTIVE = new Set(['volume_spread']);
+const MATRIX_CANDLES_URL = 'https://api.trytripity.site/api/matrix/candles';
+// The candles proxy serves these tickers only.
+const CANDLE_SYMBOLS = new Set(['SPX','NDX','SPY','QQQ']);
+const oiv = {symbol:null, expiry:null, candles:null, candlesError:''};
+let _oivRequest = 0;
+
+// One expiration's chain summed per strike. No OI floor here: a strike that
+// trades today but has little open interest still counts for volume.
+function aggregateOiVolume(quotes){
+  const byStrike = new Map();
+  for(const q of quotes){
+    if(!byStrike.has(q.K)) byStrike.set(q.K,{strike:q.K, callOI:0, putOI:0, callVol:0, putVol:0});
+    const s = byStrike.get(q.K);
+    const oi = Number(q.oi)||0, vol = Number(q.vol)||0;
+    if(q.isCall){ s.callOI += oi; s.callVol += vol; }
+    else { s.putOI += oi; s.putVol += vol; }
+  }
+  return [...byStrike.values()]
+    .filter(s=>s.callOI||s.putOI||s.callVol||s.putVol)
+    .map(s=>({...s, volumeSpread:s.callVol-s.putVol}))
+    .sort((a,b)=>a.strike-b.strike);
+}
+function oiVolumeExpiries(chain){
+  const todayIso = new Date().toISOString().slice(0,10);
+  return [...new Set(chain.quotes.map(q=>q.exp).filter(exp=>exp && exp>=todayIso))].sort();
+}
+function computeOiVolume(symbol, expiry){
+  const chain = buildChainReal(symbol);
+  const quotes = chain.quotes.filter(q=>q.exp===expiry);
+  const scoped = {...chain, quotes};
+  return {symbol, spot:chain.spot, expiry, strikes:aggregateOiVolume(quotes), expectedMove:calcExpectedMove(scoped)};
+}
+// The strike of the largest value for each OI/volume series: these are the
+// lines on his price chart. Which lines he draws is not public, so this is our guess.
+function oiVolumePriceLines(strikes){
+  const top = key=>strikes.reduce((best,s)=>s[key]>0 && (!best || s[key]>best[key]) ? s : best, null);
+  return [
+    ['Call OI','callOI',OIV_METRICS.call_oi.color],
+    ['Put OI','putOI',OIV_METRICS.put_oi.color],
+    ['Call Vol','callVol',OIV_METRICS.call_vol.color],
+    ['Put Vol','putVol',OIV_METRICS.put_vol.color],
+  ].map(([label,key,color])=>{ const s=top(key); return s && {label, color, price:s.strike}; }).filter(Boolean);
+}
+function populateOiVolumeExpiries(symbol){
+  const select = byId('oivExpiry');
+  const expiries = oiVolumeExpiries(buildChainReal(symbol));
+  if(!expiries.includes(oiv.expiry)) oiv.expiry = expiries[0] || null;
+  if(select){
+    select.innerHTML = expiries.length
+      ? expiries.map(exp=>`<option value="${esc(exp)}"${exp===oiv.expiry?' selected':''}>${esc(exp)}</option>`).join('')
+      : '<option value="">No expirations</option>';
+    select.disabled = !expiries.length;
+  }
+}
+function renderOiVolume(){
+  const symbol = oiv.symbol;
+  if(!symbol || !REAL[symbol] || !oiv.expiry) return;
+  const R = computeOiVolume(symbol, oiv.expiry);
+  window._oivR = R;
+  drawOiVolumeChart(R);
+  drawOiVolumePriceChart(R);
+}
+
+function drawOiVolumeChart(R){
+  const cv = byId('oiVolumeChart');
+  if(!cv) return;
+  const dpr = window.devicePixelRatio||1;
+  const W = cv.clientWidth;
+  const mobile = W < 640;
+  const H = mobile ? Math.max(380, Math.min(520, window.innerHeight - 260)) : Math.max(520, Math.min(720, window.innerHeight - 230));
+  cv.width=W*dpr; cv.height=H*dpr; cv.style.height=H+'px';
+  const ctx = cv.getContext('2d'); ctx.setTransform(dpr,0,0,dpr,0,0);
+  ctx.clearRect(0,0,W,H);
+  cv._matrixBars = [];
+
+  const active = Object.keys(OIV_METRICS).filter(m=>OIV_ACTIVE.has(m));
+  const hasBar = OIV_ACTIVE.has('volume_spread');
+  const barMetric = OIV_METRICS.volume_spread;
+  const areas = active.filter(m=>OIV_METRICS[m].kind==='area');
+  const symLabel = byId('oivSymLabel');
+  const legend = byId('oivChartLegend');
+  if(symLabel) symLabel.textContent = `${R.symbol} · ${R.expiry}`;
+  if(legend) legend.innerHTML = active.map(m=>{
+    const M=OIV_METRICS[m];
+    return (M.kind==='bar'
+      ? `<span class="sq" style="background:${M.color}"></span>`
+      : `<span class="sq" style="background:${hexA(M.color,.5)};border-top:2px solid ${M.color}"></span>`)+M.label;
+  }).join('&nbsp;&nbsp;') || '<span style="color:#7d8799">Choose a parameter</span>';
+
+  const data = R.strikes.length ? visibleStrikeData(R) : [];
+  if(!data.length) return;
+
+  const padL=mobile?48:70, padR=mobile?(areas.length?42:18):(areas.length?62:42);
+  const padT=mobile?28:36, padB=mobile?72:88;
+  const plotW=W-padL-padR, plotH=H-padT-padB;
+  const slot=plotW/data.length;
+  const xCenter=i=>padL+slot*(i+0.5);
+  const top=padT, bottom=padT+plotH;
+
+  let lMin=0,lMax=1,yL=()=>bottom,y0=bottom;
+  if(hasBar){
+    const maxAbs=Math.max(...data.map(s=>Math.abs(barMetric.val(s))),1)*1.08;
+    lMin=-maxAbs; lMax=maxAbs;
+    yL=v=>top+(lMax-v)/(lMax-lMin)*plotH; y0=yL(0);
+  }
+  const ownMax={}; areas.forEach(m=>ownMax[m]=Math.max(...data.map(OIV_METRICS[m].val),1));
+  const dom = areas.length ? areas.reduce((a,b)=>ownMax[b]>ownMax[a]?b:a,areas[0]) : null;
+  const rMax = dom ? ownMax[dom]*1.08 : 1;
+
+  ctx.font=(mobile?'bold 10px Segoe UI':'bold 13px Segoe UI'); ctx.textBaseline='middle';
+  for(let t=0;t<=6;t++){
+    const f=t/6, yy=bottom-f*plotH;
+    ctx.strokeStyle='rgba(255,255,255,.025)'; ctx.lineWidth=1;
+    ctx.beginPath(); ctx.moveTo(padL,yy); ctx.lineTo(W-padR,yy); ctx.stroke();
+    ctx.fillStyle='#c4c4c4';
+    if(hasBar){ ctx.textAlign='right'; ctx.fillText(fmtAxis(lMin+(lMax-lMin)*f), padL-8, yy); }
+    if(dom){ ctx.textAlign='left'; ctx.fillText(fmtAxis(rMax*f), W-padR+8, yy); }
+  }
+
+  areas.forEach(m=>{
+    const M=OIV_METRICS[m], own=ownMax[m];
+    const yA=v=>bottom-(v/own)*0.92*plotH;
+    ctx.beginPath(); ctx.moveTo(xCenter(0),bottom);
+    data.forEach((s,i)=>ctx.lineTo(xCenter(i),yA(M.val(s))));
+    ctx.lineTo(xCenter(data.length-1),bottom); ctx.closePath();
+    ctx.fillStyle=hexA(M.color,.33); ctx.fill();
+    ctx.beginPath();
+    data.forEach((s,i)=>{const x=xCenter(i),y=yA(M.val(s)); i?ctx.lineTo(x,y):ctx.moveTo(x,y);});
+    ctx.strokeStyle=M.color; ctx.lineWidth=1.6; ctx.stroke();
+  });
+
+  const hitBars = data.map((s,i)=>({x:padL+slot*i,y:top,w:slot,h:plotH,s}));
+  if(hasBar){
+    const bw=Math.max(2,Math.min(slot*0.70,32));
+    data.forEach((s,i)=>{
+      const v=barMetric.val(s), yy=yL(v);
+      const x=xCenter(i)-bw/2;
+      ctx.fillStyle = v>=0 ? '#22aaf2' : '#ff2417';
+      ctx.fillRect(x, Math.min(yy,y0), bw, Math.max(1,Math.abs(yy-y0)));
+    });
+    ctx.strokeStyle='rgba(255,255,255,.18)'; ctx.lineWidth=1;
+    ctx.beginPath(); ctx.moveTo(padL,y0); ctx.lineTo(W-padR,y0); ctx.stroke();
+  }
+  cv._matrixBars = hitBars;
+
+  ctx.fillStyle='#c4c4c4'; ctx.font=(mobile?'bold 9px Segoe UI':'bold 11px Segoe UI');
+  data.forEach((s,i)=>{
+    ctx.save(); ctx.translate(xCenter(i),bottom+7); ctx.rotate(-Math.PI/2);
+    ctx.textAlign='right'; ctx.textBaseline='middle'; ctx.fillText(fmtPrice(s.strike),0,0);
+    ctx.restore();
+  });
+
+  // spot line
+  const first=data[0].strike, last=data[data.length-1].strike;
+  let px=padL+plotW/2;
+  if(R.spot<=first) px=padL; else if(R.spot>=last) px=padL+plotW;
+  else for(let i=0;i<data.length-1;i++){
+    if(R.spot>=data[i].strike && R.spot<=data[i+1].strike){
+      px=xCenter(i)+(R.spot-data[i].strike)/(data[i+1].strike-data[i].strike)*slot; break;
+    }
+  }
+  ctx.strokeStyle='#d58b16'; ctx.lineWidth=2;
+  ctx.beginPath(); ctx.moveTo(px,padT-6); ctx.lineTo(px,bottom); ctx.stroke();
+  ctx.fillStyle='#d58b16'; ctx.font=(mobile?'bold 10px Segoe UI':'bold 12px Segoe UI'); ctx.textBaseline='alphabetic';
+  const priceLabel='Price: '+fmtPrice(R.spot);
+  const alignRight=px>W-ctx.measureText(priceLabel).width-12;
+  ctx.textAlign=alignRight?'right':'left';
+  ctx.fillText(priceLabel, px+(alignRight?-6:6), padT-9);
+
+  ctx.fillStyle='#d0d0d0'; ctx.font=(mobile?'bold 11px Segoe UI':'bold 13px Segoe UI'); ctx.textAlign='center';
+  if(hasBar){ ctx.save(); ctx.translate(14,padT+plotH/2); ctx.rotate(-Math.PI/2); ctx.fillText(barMetric.label,0,0); ctx.restore(); }
+  if(dom){ ctx.save(); ctx.translate(W-12,padT+plotH/2); ctx.rotate(Math.PI/2); ctx.fillText(OIV_METRICS[dom].label,0,0); ctx.restore(); }
+  ctx.textBaseline='bottom'; ctx.fillText('Strike',padL+plotW/2,H-4);
+}
+
+function showOiVolumeTooltip(ev){
+  const cv=byId('oiVolumeChart'), tt=byId('oivTooltip'), cross=byId('oivCrosshairX');
+  const bars=cv?._matrixBars||[];
+  if(!tt || !cross || !bars.length) return;
+  const rect=cv.getBoundingClientRect();
+  const point=ev.touches && ev.touches[0] ? ev.touches[0] : ev;
+  const x=point.clientX-rect.left, y=point.clientY-rect.top;
+  const hit=bars.find(b=>x>=b.x && x<b.x+b.w);
+  if(!hit){ hideOiVolumeTooltip(); return; }
+  const s=hit.s;
+  const row=(label,value,cls='')=>`<div class="tt-row"><span>${label}</span><span class="${cls}">${value}</span></div>`;
+  const rows=Object.keys(OIV_METRICS).filter(m=>OIV_ACTIVE.has(m)).map(m=>{
+    const v=OIV_METRICS[m].val(s);
+    const cls=m==='volume_spread' ? (v>=0?'pos':'neg') : (m.startsWith('call')?'pos':'neg');
+    return row(OIV_METRICS[m].label, fmtNum(v), cls);
+  }).join('');
+  tt.innerHTML=`<div class="tt-title">${esc(window._oivR?.symbol||'')} Strike ${fmtPrice(s.strike)}</div>${rows || row('No metric selected','')}`;
+  tt.style.display='block';
+  cross.style.display='block';
+  cross.style.left=Math.max(0,Math.min(rect.width,hit.x+hit.w/2))+'px';
+  const tw=tt.offsetWidth, th=tt.offsetHeight;
+  let left=x+14, top=y+14;
+  if(left+tw>rect.width) left=x-tw-14;
+  if(top+th>rect.height) top=y-th-14;
+  tt.style.left=Math.max(6,left)+'px';
+  tt.style.top=Math.max(6,top)+'px';
+}
+function hideOiVolumeTooltip(){
+  ['oivTooltip','oivCrosshairX'].forEach(id=>{const el=byId(id); if(el) el.style.display='none';});
+}
+
+// Intraday candles for the ticker, with the OI/volume strike lines of the chosen date.
+function drawOiVolumePriceChart(R){
+  const cv=byId('oiVolumePriceChart');
+  if(!cv) return;
+  const empty=byId('oivPriceEmpty');
+  const label=byId('oivPriceLabel');
+  const legend=byId('oivPriceLegend');
+  const lines=oiVolumePriceLines(R.strikes);
+  if(label) label.textContent=`${R.symbol} Price`;
+  if(legend) legend.innerHTML=lines.map(l=>`<span class="sq" style="background:${l.color}"></span>${esc(l.label)} ${fmtPrice(l.price)}`).join('&nbsp;&nbsp;');
+  const dpr=window.devicePixelRatio||1;
+  const W=cv.clientWidth;
+  const mobile=W<640;
+  const H=mobile?320:420;
+  cv.width=W*dpr; cv.height=H*dpr; cv.style.height=H+'px';
+  const ctx=cv.getContext('2d'); ctx.setTransform(dpr,0,0,dpr,0,0);
+  ctx.clearRect(0,0,W,H);
+  const candles=oiv.candles||[];
+  if(empty){
+    empty.textContent=candles.length ? '' : (oiv.candlesError || `No price data for ${R.symbol}`);
+    empty.classList.toggle('show',!candles.length);
+  }
+  if(!candles.length) return;
+
+  // Lines widen the price range so every one stays on the chart.
+  const lo=Math.min(...candles.map(c=>c.low), ...lines.map(l=>l.price));
+  const hi=Math.max(...candles.map(c=>c.high), ...lines.map(l=>l.price));
+  const pad=Math.max((hi-lo)*0.04, hi*0.0005);
+  const yMin=lo-pad, yMax=hi+pad;
+  const padL=mobile?8:16, padR=mobile?58:74, padT=16, padB=30;
+  const plotW=W-padL-padR, plotH=H-padT-padB;
+  const y=v=>padT+(yMax-v)/(yMax-yMin)*plotH;
+  const step=plotW/candles.length;
+  const x=i=>padL+step*(i+0.5);
+
+  ctx.font=(mobile?'bold 10px Segoe UI':'bold 12px Segoe UI'); ctx.textBaseline='middle'; ctx.textAlign='left';
+  for(let t=0;t<=5;t++){
+    const v=yMin+(yMax-yMin)*t/5, yy=y(v);
+    ctx.strokeStyle='rgba(255,255,255,.035)'; ctx.lineWidth=1;
+    ctx.beginPath(); ctx.moveTo(padL,yy); ctx.lineTo(W-padR,yy); ctx.stroke();
+    ctx.fillStyle='#c4c4c4'; ctx.fillText(fmtPrice(v), W-padR+6, yy);
+  }
+  const bw=Math.max(1,Math.min(step*0.7,9));
+  candles.forEach((c,i)=>{
+    const color=c.close>=c.open ? '#17b65f' : '#ff2a17';
+    ctx.strokeStyle=color; ctx.fillStyle=color; ctx.lineWidth=1;
+    ctx.beginPath(); ctx.moveTo(x(i),y(c.high)); ctx.lineTo(x(i),y(c.low)); ctx.stroke();
+    ctx.fillRect(x(i)-bw/2, Math.min(y(c.open),y(c.close)), bw, Math.max(1,Math.abs(y(c.open)-y(c.close))));
+  });
+  lines.forEach(l=>{
+    const yy=y(l.price);
+    ctx.strokeStyle=l.color; ctx.lineWidth=1.5; ctx.setLineDash([6,4]);
+    ctx.beginPath(); ctx.moveTo(padL,yy); ctx.lineTo(W-padR,yy); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle=l.color; ctx.textAlign='left'; ctx.textBaseline='bottom';
+    ctx.fillText(`${l.label} ${fmtPrice(l.price)}`, padL+4, yy-2);
+  });
+  // time axis: New York clock, about six labels
+  const fmtTime=new Intl.DateTimeFormat('en-US',{timeZone:'America/New_York',hour:'2-digit',minute:'2-digit',hourCycle:'h23'});
+  ctx.fillStyle='#c4c4c4'; ctx.textAlign='center'; ctx.textBaseline='top';
+  const every=Math.max(1,Math.ceil(candles.length/6));
+  for(let i=0;i<candles.length;i+=every){
+    ctx.textAlign=i===0?'left':'center';
+    ctx.fillText(fmtTime.format(new Date(candles[i].time*1000)), i===0?padL:x(i), H-padB+8);
+  }
+}
+
+async function loadOiVolumeCandles(symbol){
+  if(!CANDLE_SYMBOLS.has(symbol)) return {candles:null, error:`No price chart for ${symbol}`};
+  const data=await fetchLiveData(`${MATRIX_CANDLES_URL}?symbol=${encodeURIComponent(symbol)}&interval=1m&range=1d`);
+  const candles=Array.isArray(data?.candles) ? data.candles : null;
+  if(!candles?.length) return {candles:null, error:`Could not load the ${symbol} price chart`};
+  // Today's session only: the last trading day in the feed.
+  const day=t=>new Intl.DateTimeFormat('en-CA',{timeZone:'America/New_York'}).format(new Date(t*1000));
+  const lastDay=day(candles[candles.length-1].time);
+  return {candles:candles.filter(c=>day(c.time)===lastDay), error:''};
+}
+// Refresh of OI Volume: Search, Enter, or opening it with no data yet.
+async function refreshOiVolume(symbol){
+  const request=++_oivRequest;
+  const previous=oiv.symbol;
+  syncTickerInput(OIV_VIEW,symbol);
+  setTickerStatus(OIV_VIEW,`Loading ${symbol}…`);
+  const [result,price]=await Promise.all([
+    isCoreSymbol(symbol) ? loadCoreData() : loadDynamicSymbol(symbol),
+    loadOiVolumeCandles(symbol),
+  ]);
+  if(request!==_oivRequest) return;  // a newer Search took over
+  if(!REAL[symbol]){
+    setTickerStatus(OIV_VIEW,result.detail,'error');
+    if(previous) syncTickerInput(OIV_VIEW,previous);
+    return;
+  }
+  if(symbol!==previous) oiv.expiry=null;
+  oiv.symbol=symbol;
+  oiv.candles=price.candles;
+  oiv.candlesError=price.error;
+  screenTickers[OIV_VIEW]=symbol;
+  if(activeView===OIV_VIEW) history.replaceState(null,'',screenUrl(OIV_VIEW));
+  populateOiVolumeExpiries(symbol);
+  renderOiVolume();
+  setTickerStatus(OIV_VIEW,result.ok?'':`Refresh failed. Showing the last data for ${symbol}.`,result.ok?'':'error');
+}
+
+// ---------- P/C Ratio ----------
+// Like his options-summary table: loads every time the screen opens, no ticker or
+// expiry input, one row per core ticker. Totals span all expiries and strikes and
+// come from the server, so they are not cut by the Strike Chart's strike range.
+const PC_TICKERS = ['SPX','NDX','SPY','QQQ'];
+let _pcRequest=0;
+function pcRatio(put,call){
+  return call>0 ? put/call : null;
+}
+function pcRow(symbol,rec){
+  const t=rec && rec.totals;
+  const spot=Number(rec?.spot);
+  const count=v=>Number.isFinite(Number(v)) ? Number(v).toLocaleString('en-US') : '—';
+  const ratio=v=>v===null ? '—' : v.toFixed(2);
+  const cells=t ? [
+    ratio(pcRatio(Number(t.put_oi),Number(t.call_oi))),
+    ratio(pcRatio(Number(t.put_vol),Number(t.call_vol))),
+    count(t.call_oi), count(t.put_oi), count(t.call_vol), count(t.put_vol),
+  ] : Array(6).fill('—');
+  cells.unshift(Number.isFinite(spot)&&spot>0 ? fmtSpyConvertedPrice(spot) : '—');
+  // Column 0 is Spot, columns 1-2 are the two ratios.
+  const cls=(c,i)=>c==='—' ? 'pc-missing' : (i===1||i===2 ? 'pc-ratio' : 'pc-num');
+  return `<tr><td class="pc-ticker">${esc(symbol)}</td>`
+    + cells.map((c,i)=>`<td class="${cls(c,i)}">${esc(c)}</td>`).join('')
+    + '</tr>';
+}
+function setPcStatus(text='',state=''){
+  const status=byId('pcStatus');
+  if(!status) return;
+  status.textContent=text;
+  status.className=`pc-status${state?' '+state:''}`;
+}
+function renderPcTable(data){
+  const body=byId('pcTableBody');
+  if(body) body.innerHTML=PC_TICKERS.map(symbol=>pcRow(symbol,data?.[symbol])).join('');
+}
+async function loadPcRatio(){
+  const request=++_pcRequest;
+  setPcStatus('Loading…');
+  const data=await fetchLiveData(MATRIX_CBOE_DATA_URL + '?t=' + Date.now());
+  if(request!==_pcRequest) return;
+  if(!data || !PC_TICKERS.some(symbol=>data[symbol]?.totals)){
+    setPcStatus('Could not load market data. Open the screen again to retry.','error');
+    return;
+  }
+  renderPcTable(data);
+  const asof=PC_TICKERS.map(symbol=>data[symbol]?.asof).find(Boolean);
+  setPcStatus(asof ? `As of ${String(asof).replace('T',' ')}` : '');
+}
+
 // ---------- Wiring ----------
 document.querySelectorAll('a[data-view]').forEach(link=>{
   link.addEventListener('click',event=>{
@@ -1024,10 +1722,27 @@ document.querySelectorAll('.pbtn').forEach(btn=>{
 });
 window.addEventListener('resize',()=>{
   if(activeView===HOME_VIEW && PRICE[currentSymbol()]) drawPriceCharts();
-  if(!window._lastR) return;
   const viewRenderer=VIEW_RENDERERS[activeView];
   if(viewRenderer) viewRenderer(window._lastR);
 });
+// OI Volume: the date and the buttons redraw from the loaded chain; only Search reloads.
+bind('oivExpiry','change',event=>{
+  oiv.expiry=event.target.value || null;
+  renderOiVolume();
+});
+document.querySelectorAll('[data-oiv-metric]').forEach(btn=>{
+  btn.addEventListener('click',()=>{
+    const m=btn.dataset.oivMetric;
+    if(OIV_ACTIVE.has(m)) OIV_ACTIVE.delete(m); else OIV_ACTIVE.add(m);
+    btn.classList.toggle('active',OIV_ACTIVE.has(m));
+    if(window._oivR && activeView===OIV_VIEW) drawOiVolumeChart(window._oivR);
+  });
+});
+bind('oiVolumeChart','mousemove',showOiVolumeTooltip);
+bind('oiVolumeChart','mouseleave',hideOiVolumeTooltip);
+bind('oiVolumeChart','touchstart',showOiVolumeTooltip,{passive:true});
+bind('oiVolumeChart','touchmove',showOiVolumeTooltip,{passive:true});
+bind('oiVolumeChart','touchend',()=>setTimeout(hideOiVolumeTooltip,1200),{passive:true});
 ['gexChart'].forEach(id=>{
   bind(id,'mousemove',showChartTooltip);
   bind(id,'mouseleave',hideChartTooltip);
@@ -1042,5 +1757,10 @@ Object.keys(PRICE_CHARTS).forEach(id=>{
   bind(id,'touchmove',showPriceTooltip,{passive:true});
   bind(id,'touchend',()=>setTimeout(hidePriceTooltips,1200),{passive:true});
 });
+bind('keyLevelsChart','mousemove',showKeyLevelsTooltip);
+bind('keyLevelsChart','mouseleave',hideKeyLevelsTooltip);
+bind('keyLevelsChart','touchstart',showKeyLevelsTooltip,{passive:true});
+bind('keyLevelsChart','touchmove',showKeyLevelsTooltip,{passive:true});
+bind('keyLevelsChart','touchend',()=>setTimeout(hideKeyLevelsTooltip,1200),{passive:true});
 
 applyLocation();

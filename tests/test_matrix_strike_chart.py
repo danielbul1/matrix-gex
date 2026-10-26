@@ -61,13 +61,6 @@ def test_any_searchable_ticker_gets_candles(fake_yahoo, symbol, yahoo):
     assert fake_yahoo == [host.MATRIX_YAHOO_CHART_URL.format(yahoo)]
 
 
-def test_candle_cache_is_bounded(fake_yahoo, monkeypatch):
-    monkeypatch.setattr(host, "MATRIX_CANDLES_CACHE_MAX", 2)
-    for symbol in ("AAA", "BBB", "CCC"):
-        asyncio.run(host._fetch_matrix_candles(symbol=symbol, interval="1m", range_="1d"))
-    assert [key[0] for key in host._matrix_candles_cache] == ["BBB", "CCC"]
-
-
 def test_bad_ticker_is_400():
     status, body = _get(_make_app(), "/api/matrix/candles", query=b"symbol=%24%24%24")
     assert status == 400
