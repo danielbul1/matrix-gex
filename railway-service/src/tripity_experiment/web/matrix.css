@@ -100,6 +100,20 @@
   .watermark{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
              font-size:72px;font-weight:800;color:rgba(255,255,255,.055);
              pointer-events:none;letter-spacing:2px;user-select:none}
+  /* P/C Ratio screen */
+  .pc-card{margin-top:10px;background:#202020;border:0;padding:28px 30px}
+  .pc-title{margin:0 0 4px;color:#e2e2e2;font-size:24px}
+  .pc-note{margin:0 0 16px;color:var(--muted);font-size:13px}
+  .pc-table-wrap{overflow-x:auto}
+  .pc-table{font-size:14px;min-width:640px}
+  .pc-table th{font-size:12px;padding:10px 8px;border-bottom:1px solid #3a3a3a}
+  .pc-table td{padding:11px 8px}
+  .pc-table td.pc-ticker{font-weight:800;color:#f0f0f0}
+  .pc-table td.pc-ratio{font-weight:800}
+  .pc-table td.pc-missing{color:var(--muted)}
+  .pc-status{margin:12px 0 0;min-height:16px;color:#9da7af;font-size:12px;font-weight:700}
+  .pc-status.error{color:#ff8e86}
+  .pc-status:empty{display:none}
   @media(max-width:900px){
     body{overflow-x:hidden}
     header{position:sticky;top:0;width:auto;padding:12px 16px;border-right:0;border-bottom:1px solid #252525;z-index:30}
@@ -127,6 +141,7 @@
     .symlabel{margin-left:0;font-size:16px}
     .chartlegend{margin-right:0;font-size:12px}
     .watermark{font-size:44px}
+    .pc-card{padding:16px 10px}
   }
   @media(max-width:520px){
     .chartcard{padding-left:4px;padding-right:4px}

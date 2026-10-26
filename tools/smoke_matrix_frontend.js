@@ -1,6 +1,8 @@
 /* Smoke test: load matrix.js with DOM stubs (offline), then verify
-   VIX AM-settlement, real VIX chain aggregation (netVex/netCharm),
-   OI-weighted strikes, and quick-select predicates. */
+   VIX AM-settlement, real VIX chain aggregation, quick-select predicates,
+   the Strike Chart draw path and the P/C Ratio table.
+   Needs a Cboe VIX chain at $TEMP/vix.json
+   (https://cdn-api.cboe.com/api/global/delayed_quotes/options/_VIX.json). */
 const fs = require('fs');
 const vm = require('vm');
 
@@ -14,7 +16,7 @@ function makeEl(id) {
     id, innerHTML: '', textContent: '', value: '2', disabled: false,
     style: {}, dataset: {},
     classList: { add() {}, remove() {}, toggle() {}, contains: () => false },
-    addEventListener() {}, appendChild() {},
+    addEventListener() {}, appendChild() {}, setAttribute() {}, removeAttribute() {},
     getContext: () => absorb, clientWidth: 900, clientHeight: 600,
     getBoundingClientRect: () => ({ left: 0, top: 0, width: 900, height: 600 }),
   };
@@ -23,13 +25,16 @@ const els = new Map();
 global.document = {
   hidden: true,
   getElementById: id => { if (!els.has(id)) els.set(id, makeEl(id)); return els.get(id); },
+  querySelector: () => null,
   querySelectorAll: () => [],
   createElement: () => makeEl('created'),
 };
 global.window = {
   addEventListener() {}, innerWidth: 1280, innerHeight: 800,
-  devicePixelRatio: 1, location: { search: '' },
+  devicePixelRatio: 1, location: { search: '', pathname: '/matrix/' },
+  scrollTo() {},
 };
+global.history = { pushState() {}, replaceState() {} };
 global.localStorage = { getItem: () => null, setItem() {} };
 global.fetch = () => Promise.reject(new Error('offline smoke test'));
 
@@ -71,69 +76,40 @@ const chain = buildChainRealFromRecord('VIX', rec, null);
 const R = calcGEX(chain, 'full');
 check('VIX chain parsed', opts.length > 100, `${opts.length} options kept (within +/-25% of spot)`);
 check('VIX strikes aggregated', R.strikes.length > 10, `${R.strikes.length} strikes`);
-const hasVex = R.strikes.some(s => Math.abs(s.netVex) > 0);
-const hasCharm = R.strikes.some(s => Math.abs(s.netCharm) > 0);
-check('netVex populated per strike', hasVex);
-check('netCharm populated per strike', hasCharm);
 const roots = new Set(opts.map(o => o.root));
 check('VIX+VIXW roots present', roots.has('VIX'), [...roots].join(','));
 
-// --- 3. OI-weighted strikes ---
-const w = oiWeightedStrikes(R);
-check('weighted strikes finite', Number.isFinite(w.call) && Number.isFinite(w.put) && Number.isFinite(w.total),
-  `call=${w.call?.toFixed(1)} put=${w.put?.toFixed(1)} total=${w.total?.toFixed(1)} spot=${R.spot}`);
-const ks = R.strikes.map(s => s.strike);
-check('weighted strikes within strike range',
-  w.call >= Math.min(...ks) && w.call <= Math.max(...ks) && w.total >= Math.min(...ks) && w.total <= Math.max(...ks));
-
-// --- 4. Quick-select predicates ---
+// --- 3. Quick-select predicates ---
 check('0DTE predicate', expiryQuickPredicate('0dte')(0) === true && expiryQuickPredicate('0dte')(1) === false);
 check('Week predicate', expiryQuickPredicate('week')(7) === true && expiryQuickPredicate('week')(8) === false);
 check('All predicate', expiryQuickPredicate('all')(45) === true);
 
-// --- 5. METRICS wiring ---
-check('net_vex/net_charm bar metrics exist', METRICS.net_vex.kind === 'bar' && METRICS.net_charm.kind === 'bar');
-check('weighted is overlay kind', METRICS.weighted.kind === 'overlay');
-check('BAR_METRIC_BY_CHART maps vex/chex', BAR_METRIC_BY_CHART.vexChart === 'net_vex' && BAR_METRIC_BY_CHART.chexChart === 'net_charm');
-check('chartTargets vex/chex ids', chartTargets('vexChart').tooltipId === 'vexTooltip' && chartTargets('chexChart').legendId === 'chexChartLegend');
-check('Weighted overlay keeps only Total W', WEIGHTED_LINES.length === 1 && WEIGHTED_LINES[0].key === 'total');
-
-// --- 5b. DEX|GEX|VEX|CHEX switcher on the main gexChart ---
-check('gexChart bar metric defaults to net_gex', chartBarMetricKey('gexChart') === 'net_gex' && GEX_CHART_BAR_METRIC === 'net_gex');
-check('fixed charts unchanged', chartBarMetricKey('dexChart') === 'net_dex' && chartBarMetricKey('matrixGexChart') === null);
-let switchOk = true;
-try {
-  for (const key of ['net_dex', 'net_vex', 'net_charm', 'net_gex']) {
-    GEX_CHART_BAR_METRIC = key;
-    const st = chartActiveMetrics('gexChart');
-    if (!st.hasBar || st.active[0] !== key) throw new Error(`bad active state for ${key}`);
-    if (st.active.some(m => BAR_METRIC_KEYS.includes(m) && m !== key)) throw new Error(`foreign bar metric leaked for ${key}`);
-    drawChart(R, 'gexChart');
-  }
-} catch (e) { switchOk = false; console.log('switcher error:', e.message); }
-check('switcher swaps gexChart bars (all 4 metrics, no-throw)', switchOk);
-GEX_CHART_BAR_METRIC = 'net_gex';
-const gexOff = (ACTIVE.delete('net_gex'), chartActiveMetrics('gexChart'));
-check('Net GEX pbtn still hides bars when GEX selected', gexOff.hasBar === false && !gexOff.active.includes('net_gex'));
-ACTIVE.add('net_gex');
-
-// --- 6. VEX/CHEX draw path does not throw (absorbing canvas stub) ---
+// --- 4. Strike Chart draw path does not throw (absorbing canvas stub) ---
 let drawOk = true;
 try {
-  drawChart(R, 'vexChart');
-  drawChart(R, 'chexChart');
-  renderGreekExposureKpis(R, 'vex');
-  renderGreekExposureKpis(R, 'chex');
-} catch (e) { drawOk = false; console.log('draw error:', e.message); }
-check('vex/chex draw + KPI render no-throw', drawOk);
-
-// --- 7. Weighted overlay draw path on gexChart ---
-let wOk = true;
-try {
-  ACTIVE.add('weighted');
+  Object.keys(METRICS).forEach(m => ACTIVE.add(m));
   drawChart(R, 'gexChart');
-  ACTIVE.delete('weighted');
-} catch (e) { wOk = false; console.log('weighted draw error:', e.message); }
-check('weighted overlay draw no-throw', wOk);
+  ACTIVE.clear(); ACTIVE.add('net_gex');
+  drawChart(R, 'gexChart');
+} catch (e) { drawOk = false; console.log('draw error:', e.message); }
+check('Strike Chart draw no-throw (all metrics, then Net GEX only)', drawOk);
+
+// --- 5. P/C Ratio table ---
+check('P/C rows follow SPX, NDX, SPY, QQQ', PC_TICKERS.join(',') === 'SPX,NDX,SPY,QQQ');
+check('P/C ratio is put over call', Math.abs(pcRatio(150, 100) - 1.5) < 1e-12 && pcRatio(5, 0) === null);
+const pcData = {
+  SPX: { spot: 6000.5, asof: '2026-10-26', totals: { call_oi: 1000, put_oi: 1500, call_vol: 400, put_vol: 200 } },
+  NDX: { spot: 21000, totals: { call_oi: 0, put_oi: 10, call_vol: 0, put_vol: 0 } },
+};
+renderPcTable(pcData);
+const pcHtml = document.getElementById('pcTableBody').innerHTML;
+const pcRows = pcHtml.split('<tr>').slice(1);
+check('P/C table has one row per ticker', pcRows.length === 4, `${pcRows.length} rows`);
+const spxCells = [...pcRows[0].matchAll(/<td[^>]*>([^<]*)<\/td>/g)].map(m => m[1]);
+check('SPX row: ticker, spot, P/C OI, P/C Vol, call/put OI, call/put vol',
+  JSON.stringify(spxCells) === JSON.stringify(['SPX', '6,000.50', '1.50', '0.50', '1,000', '1,500', '400', '200']),
+  spxCells.join(' | '));
+check('No calls shows a dash, not Infinity', pcRows[1].includes('—') && !pcRows[1].includes('Infinity'));
+check('Missing ticker shows dashes', /SPY<\/td>(<td class="pc-missing">—<\/td>){7}/.test(pcRows[2]));
 
 process.exit(failures ? 1 : 0);

@@ -704,6 +704,7 @@ function applyLocation(){
   const urlTicker=SCREENS[view].ticker && validTicker(fromUrl) ? fromUrl : null;
   if(urlTicker && view!==HOME_VIEW) screenTickers[view]=urlTicker;
   setView(view);
+  if(view==='options-summary') loadPcRatio();
   if(view!==HOME_VIEW) return;
   const symbol=urlTicker || currentSymbol();
   if(symbol===currentSymbol() && REAL[symbol]) run();
@@ -830,6 +831,56 @@ async function refreshHome(symbol){
   }
   run();
   setTickerStatus(HOME_VIEW,result.ok?'':`Refresh failed. Showing the last data for ${symbol}.`,result.ok?'':'error');
+}
+
+// ---------- P/C Ratio ----------
+// Like his options-summary table: loads every time the screen opens, no ticker or
+// expiry input, one row per core ticker. Totals span all expiries and strikes and
+// come from the server, so they are not cut by the Strike Chart's strike range.
+const PC_TICKERS = ['SPX','NDX','SPY','QQQ'];
+let _pcRequest=0;
+function pcRatio(put,call){
+  return call>0 ? put/call : null;
+}
+function pcRow(symbol,rec){
+  const t=rec && rec.totals;
+  const spot=Number(rec?.spot);
+  const count=v=>Number.isFinite(Number(v)) ? Number(v).toLocaleString('en-US') : '—';
+  const ratio=v=>v===null ? '—' : v.toFixed(2);
+  const cells=t ? [
+    ratio(pcRatio(Number(t.put_oi),Number(t.call_oi))),
+    ratio(pcRatio(Number(t.put_vol),Number(t.call_vol))),
+    count(t.call_oi), count(t.put_oi), count(t.call_vol), count(t.put_vol),
+  ] : Array(6).fill('—');
+  cells.unshift(Number.isFinite(spot)&&spot>0 ? fmtSpyConvertedPrice(spot) : '—');
+  // Column 0 is Spot, columns 1-2 are the two ratios.
+  const cls=(c,i)=>c==='—' ? 'pc-missing' : (i===1||i===2 ? 'pc-ratio' : 'pc-num');
+  return `<tr><td class="pc-ticker">${esc(symbol)}</td>`
+    + cells.map((c,i)=>`<td class="${cls(c,i)}">${esc(c)}</td>`).join('')
+    + '</tr>';
+}
+function setPcStatus(text='',state=''){
+  const status=byId('pcStatus');
+  if(!status) return;
+  status.textContent=text;
+  status.className=`pc-status${state?' '+state:''}`;
+}
+function renderPcTable(data){
+  const body=byId('pcTableBody');
+  if(body) body.innerHTML=PC_TICKERS.map(symbol=>pcRow(symbol,data?.[symbol])).join('');
+}
+async function loadPcRatio(){
+  const request=++_pcRequest;
+  setPcStatus('Loading…');
+  const data=await fetchLiveData(MATRIX_CBOE_DATA_URL + '?t=' + Date.now());
+  if(request!==_pcRequest) return;
+  if(!data || !PC_TICKERS.some(symbol=>data[symbol]?.totals)){
+    setPcStatus('Could not load market data. Open the screen again to retry.','error');
+    return;
+  }
+  renderPcTable(data);
+  const asof=PC_TICKERS.map(symbol=>data[symbol]?.asof).find(Boolean);
+  setPcStatus(asof ? `As of ${String(asof).replace('T',' ')}` : '');
 }
 
 // ---------- Wiring ----------
