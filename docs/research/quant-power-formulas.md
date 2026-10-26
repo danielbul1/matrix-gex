@@ -280,3 +280,20 @@ We compared the public files of `151212aa.pythonanywhere.com` (Max Power) and `m
 - The Wayback Machine has no capture of the old site, and web search finds nothing else about it.
 
 So the old site is the same app, still running under its earlier Russian brand. Everything it does beyond these files sits behind the login, which this effort does not bypass.
+
+## Addendum 4: how his GEX board is wired (public files, checked 2026-10-26)
+
+Source: the public `/_dash-dependencies` of both sites (the same 24 callbacks, in a different order) and the inline scripts on the old site's `/`. No callback was called.
+
+- **No ticker box.** The board callback's inputs are only the ticker buttons (`gex-ticker-btn`), the expiry buttons (`gex-expiry-btn`), Select all and Clear all. It writes the table (`gex-options-board.data`, a DataTable), the spot line, both button rows, the selected dates and ticker, and `gex-board-data-store`. Its inputs are buttons, so it also runs when the page opens.
+- **The three charts all follow the selected dates.**
+  - `gamma-total-chart` reads `gex-board-data-store`, which the board callback rewrites on every expiry click.
+  - `gamma-split-chart` and `gex-price-chart` read `gex-selected-dates` and the ticker directly, so they load their own data instead of reusing the table's. For the split this hints at data the summed table lacks, such as a breakdown by expiry (a guess).
+- **Layout** (`adjustGEXLayout()`):
+  - The board (`gex-board-container`) takes the free width, and the charts column (`gex-charts-container`) is 480px wide with a 16px gap.
+  - Below 1000px window width they stack.
+  - Each chart is 420px tall.
+- **Full screen.** Three clientside functions turn a chart's wrapper into a fixed, full-viewport panel. The ⛶ button becomes ✕, and the page stops scrolling.
+- **Table scrollbar.** Inline CSS gives `#gex-options-board` a thin 5px scrollbar.
+
+The table's columns, the strike window and the content of the three charts are still not public.

@@ -227,4 +227,50 @@ const etSec = (h, m) => Date.UTC(2026, 9, 23, h + 4, m) / 1000;  // 2026-10-23, 
 const sess = latestSessionCandles([[9, 29], [9, 30], [15, 59], [16, 0]].map(([h, m]) => ({ time: etSec(h, m), open: 1, high: 2, low: 0.5, close: 1.5 })));
 check('price chart keeps 09:30-16:00 ET only', sess.length === 2 && fmtMarketTime(sess[0].time) === '09:30' && fmtMarketTime(sess[1].time) === '15:59');
 
+// --- 7. GEX Board (two expirations, per-strike rows over the selected ones) ---
+REAL.SPX = synthRecord(6000, [exp0, exp1]);
+gb.symbol = 'SPX'; gb.record = REAL.SPX; gb.expiries = [exp0, exp1];
+gb.selected = new Set([exp0]);
+const B1 = computeGexBoard('SPX');
+gb.selected = new Set([exp0, exp1]);
+const B2 = computeGexBoard('SPX');
+check('GEX Board has the agreed columns in order',
+  GB_COLUMNS.map(c => c.label).join() === 'Strike,Net GEX,AG,Notional Delta,Total OI,Call OI,Put OI,Total Vol,Call Vol,Put Vol,%');
+check('GEX Board has his four ticker buttons', GB_TICKERS.join() === 'SPX,NDX,SPY,QQQ');
+check('GEX Board keeps strikes within 5% of spot', B2.rows.length > 0 && B2.rows.every(s => Math.abs(s.strike - 6000) / 6000 <= 0.05));
+const s1 = B1.rows.find(s => s.strike === 6000), s2 = B2.rows.find(s => s.strike === 6000);
+check('rows sum over the selected expiries', Math.abs(s2.callOI - 2 * s1.callOI) < 1e-9 && Math.abs(s2.netGex - (s2.byExpiry[exp0] + s2.byExpiry[exp1])) < 1e-6,
+  `${s1.callOI} -> ${s2.callOI}`);
+check('Net GEX, AG and totals add up', Math.abs(s2.netGex - (s2.callGex + s2.putGex)) < 1e-6
+  && Math.abs(s2.ag - (Math.abs(s2.callGex) + Math.abs(s2.putGex))) < 1e-6 && s2.totalOI === s2.callOI + s2.putOI);
+check('Notional Delta counts calls and puts as positive', s2.notionalDelta > 0
+  && Math.abs(s2.notionalDelta - (0.5 * s2.callOI + 0.5 * s2.putOI) * 100 * 6000) < 1e-3, `${s2.notionalDelta}`);
+const totalAg = gexBoardStrikes({ ...buildChainReal('SPX'), quotes: buildChainReal('SPX').quotes.filter(q => gb.selected.has(q.exp)) }).reduce((a, s) => a + s.ag, 0);
+check('% is Net GEX over the total AG', Math.abs(s2.pct - s2.netGex / totalAg * 100) < 1e-9);
+check('Total Gamma is the Net GEX of the selected expiries', Math.abs(B2.R.totalGex - 2 * B1.R.totalGex) < Math.abs(B1.R.totalGex) * 1e-9 + 1e-6);
+check('price lines are the six Price Lines (or fewer)', B2.lines.every(l => ['P1', 'N1', 'Call Vol', 'Put Vol', 'Matrix', 'AG Strike'].includes(l.label)));
+check('Matrix sits within 1% of spot', B2.lines.filter(l => l.label === 'Matrix').every(l => Math.abs(l.price - 6000) / 6000 <= 0.01));
+gb.sort = { key: 'strike', dir: 'desc' };
+check('table runs from the highest strike down', sortedBoardRows(B2.rows)[0].strike === Math.max(...B2.rows.map(s => s.strike)));
+gb.sort = { key: 'netGex', dir: 'asc' };
+const byNet = sortedBoardRows(B2.rows);
+check('a column header sorts by that column', byNet.every((s, i) => i === 0 || byNet[i - 1].netGex <= s.netGex));
+gb.sort = { key: 'strike', dir: 'desc' };
+gb.selected = new Set();
+const B0 = computeGexBoard('SPX');
+check('Clear all leaves no rows', B0.rows.length === 0 && B0.expiries.length === 0);
+let gbOk = true;
+try {
+  activeView = GB_VIEW;
+  gb.candles = [{ time: 1761573000, open: 5990, high: 6010, low: 5985, close: 6005 }, { time: 1761573060, open: 6005, high: 6012, low: 6000, close: 6001 }];
+  gb.selected = new Set([exp0, exp1]); renderGexBoard(true);
+  gb.candles = null; renderGexBoard();
+  gb.selected = new Set(); renderGexBoard();
+} catch (e) { gbOk = false; console.log('gex board draw error:', e.stack); }
+check('GEX Board table and charts draw (no-throw)', gbOk);
+gb.record = REAL.SPX;
+REAL.SPX = synthRecord(5000, [exp0]);
+gb.selected = new Set([exp0]);
+check('GEX Board reads its own copy of the chain', computeGexBoard('SPX').spot === 6000);
+
 process.exit(failures ? 1 : 0);

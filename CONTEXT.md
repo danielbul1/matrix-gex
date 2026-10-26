@@ -96,21 +96,23 @@ _Avoid_: OI page, volume view
 
 **GEX Board**:
 The screen for one ticker over a set of selected expiries: a strike table beside a Gamma Total, a Gamma Split and a price chart. Its menu label is "GEX Analysis".
+- It has no ticker box. The ticker comes from a row of ticker buttons, and the expiries from one button per expiry with Select all and Clear all.
 - The table has one row per strike, summed over the selected expiries. Its columns are Strike, Net GEX, AG, Notional Delta, Total OI, Call OI, Put OI, Total Vol, Call Vol, Put Vol and %, where % is the strike's Net GEX as a share of the total AG.
 - It covers strikes within 5% of spot, the same window as the Gamma Split. It runs from the highest strike down, scrolls, and sorts by any column.
 - It highlights the spot row, the rows of the Key Levels and of P1, N1 and AG Strike, and each column's largest value.
 - A line above it gives spot, Total Gamma (Net GEX summed over the selected expiries), its sign as the regime, the number of strikes and the ticker.
-- The price chart carries the Price Lines, computed over the selected expiries.
+- The price chart carries the Price Lines, computed over the selected expiries. Lines more than 1.5% from spot stay in its legend only.
+- Each chart has a full-screen button.
 
 _Avoid_: GEX Analysis page, heat map
 
 **Gamma Total**:
-The GEX Board chart of Net GEX summed per expiry: one bar for each of the ticker's expiries, whichever expiries are selected.
-_Avoid_: total GEX, gamma by strike
+The GEX Board chart of each strike's Net GEX, summed over the selected expiries and drawn for strikes within 5% of spot.
+_Avoid_: total GEX, gamma by expiry
 
 **Gamma Split**:
-The GEX Board chart of each strike's call GEX and put GEX, over the selected expiries and strikes within 5% of spot, drawn on opposite sides of zero.
-_Avoid_: AG, split by expiry
+The GEX Board chart of each strike's Net GEX broken down by selected expiry: one stacked bar per strike, one colour per expiry, for strikes within 5% of spot.
+_Avoid_: AG, call/put split
 
 **Notional Delta**:
 A strike's delta in dollars with calls and puts both counted as positive: the delta of each contract, taken as a magnitude, times its open interest, 100 and spot, summed over the selected expiries. It is a GEX Board column only.

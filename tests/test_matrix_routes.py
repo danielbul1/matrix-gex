@@ -194,3 +194,18 @@ def test_oi_volume_screen_is_built():
     ]
     assert 'id="oiVolumeChart"' in section
     assert 'id="oiVolumePriceChart"' in section
+
+
+def test_gex_board_is_built_like_his():
+    """Build 6 (#36): his GEX board has no ticker box, only ticker and expiry
+    buttons with Select all / Clear all, a spot line, the strike table and three
+    charts, each with a full-screen button."""
+    page = (host.MATRIX_WEB_DIR / "matrix.html").read_text(encoding="utf-8")
+    start = page.index('id="view-gex-analysis"')
+    section = page[start:page.index("</section>", start)]
+    assert "ticker-form" not in section
+    assert "Coming soon" not in section
+    for element in ('id="gbTickers"', 'id="gbExpiries"', 'id="gbSelectAll"', 'id="gbClearAll"',
+                    'id="gbSpot"', 'id="gbTable"', 'id="gbTotalChart"', 'id="gbSplitChart"', 'id="gbPriceChart"'):
+        assert element in section
+    assert section.count('class="gb-expand"') == 3
