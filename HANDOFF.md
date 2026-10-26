@@ -124,6 +124,38 @@ Gotchas learned the hard way (2026-07-19):
   found 2,532 clusters in 8 min, far too loose to be a signal: a real classifier needs
   whale-options' stricter rules. Greeks update every 75-110 s.
 
+### 2026-10-26 — Like his: shell, multi-date Strike Chart, GEX board from his screenshot
+- **Evidence:** three frames from his videos (sent by the owner) show the Strike Chart's
+  multi-date Expiration dropdown and his whole GEX board. Written up in
+  `docs/research/quant-power-design.md`, with his design system and similar projects.
+- **Shell:** his sidebar (10% wide, min 170px, plain white links, Disclaimer at the bottom),
+  #1a1a1a page, #3a3a3a inputs, cyan-to-blue Search button and heading gradient, his card
+  surfaces. Phones keep the fold-out menu.
+- **Strike Chart:** several expirations at once (chips; × removes, the menu adds, × clears),
+  summed per strike, starting on the current week through Friday. The candle chart's Price
+  Lines and Power Zone profile now follow the chosen dates (they used the nearest expiry).
+  Strike Window 1% for SPX/NDX, 3% otherwise; Power Zone still 1%. No gridlines. Buttons
+  read "Call Volume" / "Put Volume".
+- **GEX board:** "Select Ticker:" card with SPX, SPY, QQQ (NDX dropped here only);
+  "Options Chain Board" with his summary line; expiry buttons with each date's share of
+  AG (sums to 100%), starting on the current week; columns Abs GEX / cVol / pVol; a dot on
+  each column's largest value with its row shaded (Net GEX by size), no spot/key rows;
+  Net Gamma and call/put Gamma Split charts with an Abs GEX line, gridlines, $ billions
+  axis and ±10% strikes.
+- **Not done:** his TradingView levels (P2, P3, N2, N3, AG2) and a level export, deferred by
+  the owner. His Strike Chart seems to use a smaller Net GEX scale than his board (open).
+- **Tests:** strike chart and board tests updated; checked in headless Chromium against
+  live data (desktop and 390px), no page errors. Not deployed.
+
+### 2026-10-26 — Glossary: Strike Window (grilling session, no code change)
+- **Docs:** `CONTEXT.md` gains "Strike Window": the Strike Chart draws about 1% of spot for
+  an index (SPX, NDX) and about 3% for anything else, like his 2026 thumbnails
+  (SPY about ±3%, SPX about ±1.1%). Power Zone is still computed within 1%.
+- **Agreed, not built yet:** his sidebar look (plain white links, 10% wide, our fold-out
+  menu kept on phones), his cyan-to-blue Search button and heading gradient, no chart
+  gridlines, the per-ticker Strike Window, and a research note on his design system.
+  Price Lines and Key Levels keep following the chosen expiry.
+
 ### 2026-10-26 — Shell, menu and a path per screen (map #21, task #32)
 - **Frontend:** sidebar in Quant Power's order (the "Matrix" brand link is home = Strike
   Chart, then OI Volume, GEX Analysis, Key Levels, P/C Ratio, How to use GEX, and

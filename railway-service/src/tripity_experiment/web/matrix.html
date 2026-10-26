@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Matrix</title>
-<link rel="stylesheet" href="/matrix/matrix.css?v=20261026-kl-merged">
+<link rel="stylesheet" href="/matrix/matrix.css?v=20261026-like-his-2">
 </head>
 <body>
 <header id="sidebar">
@@ -34,21 +34,29 @@
         <button type="submit">Search</button>
         <span class="ticker-status" aria-live="polite"></span>
       </form>
-      <div class="ctrl">
-        <label for="expirationSelect">Expiration</label>
-        <select id="expirationSelect" aria-label="Expiration date"></select>
+      <div class="ctrl exp-ctrl">
+        <span class="ctrl-label" id="expirationLabel">Expiration</span>
+        <!-- Like his Expiration dropdown: several dates, shown as removable chips. -->
+        <div class="multi-select" id="expirationSelect" role="group" aria-labelledby="expirationLabel">
+          <div class="ms-control">
+            <div class="ms-values" id="expirationChips"></div>
+            <button type="button" class="ms-clear" id="expirationClear" aria-label="Clear all expirations" title="Clear all" hidden>×</button>
+            <button type="button" class="ms-toggle" id="expirationToggle" aria-expanded="false" aria-controls="expirationMenu" aria-label="Choose expirations">▾</button>
+          </div>
+          <ul class="ms-menu" id="expirationMenu" hidden></ul>
+        </div>
       </div>
     </div>
 
     <div class="params">
       <span class="plabel">Parameters:</span>
-      <button class="pbtn active" data-metric="net_gex"  style="--c:#22b8ff">Net GEX</button>
-      <button class="pbtn active" data-metric="ag"       style="--c:#ab7df6">AG</button>
-      <button class="pbtn"        data-metric="call_oi"  style="--c:#26c281">Call OI</button>
-      <button class="pbtn"        data-metric="put_oi"   style="--c:#ef5350">Put OI</button>
-      <button class="pbtn"        data-metric="call_vol" style="--c:#2f73ff">Call Vol</button>
-      <button class="pbtn"        data-metric="put_vol"  style="--c:#ff8a3d">Put Vol</button>
-      <button class="pbtn"        data-metric="power"    style="--c:#ffc107">Power Zone</button>
+      <button class="pbtn active" data-metric="net_gex"  style="--c:#22b5ff">Net GEX</button>
+      <button class="pbtn active" data-metric="ag"       style="--c:#915bf8">AG</button>
+      <button class="pbtn"        data-metric="call_oi"  style="--c:#02d432">Call OI</button>
+      <button class="pbtn"        data-metric="put_oi"   style="--c:#f32d35">Put OI</button>
+      <button class="pbtn"        data-metric="call_vol" style="--c:#003cfe">Call Volume</button>
+      <button class="pbtn"        data-metric="put_vol"  style="--c:#e55f04">Put Volume</button>
+      <button class="pbtn"        data-metric="power"    style="--c:#e8ca01;--t:#000">Power Zone</button>
     </div>
 
     <div class="card chartcard">
@@ -68,7 +76,7 @@
       <div class="card chartcard price-card">
         <div class="charttop">
           <span class="symlabel" id="priceSymLabel"></span>
-          <span class="chartlegend">Price</span>
+          <span class="chartlegend price-legend" id="priceLegend">Price</span>
         </div>
         <div class="chartwrap">
           <div class="watermark">Matrix</div>
@@ -81,7 +89,7 @@
       <div class="card chartcard price-card">
         <div class="charttop">
           <span class="symlabel" id="priceSimpleSymLabel"></span>
-          <span class="chartlegend">Simplified price</span>
+          <span class="chartlegend" id="priceSimpleLegend">Simplified price</span>
         </div>
         <div class="chartwrap">
           <div class="watermark">Matrix</div>
@@ -111,11 +119,11 @@
 
     <div class="params" id="oivParams">
       <span class="plabel">Parameters:</span>
-      <button class="pbtn active" data-oiv-metric="volume_spread" style="--c:#22b8ff">Volume Spread</button>
-      <button class="pbtn"        data-oiv-metric="call_oi"       style="--c:#26c281">Call OI</button>
-      <button class="pbtn"        data-oiv-metric="put_oi"        style="--c:#ef5350">Put OI</button>
-      <button class="pbtn"        data-oiv-metric="call_vol"      style="--c:#2f73ff">Call Vol</button>
-      <button class="pbtn"        data-oiv-metric="put_vol"       style="--c:#ff8a3d">Put Vol</button>
+      <button class="pbtn active" data-oiv-metric="volume_spread" style="--c:#22b5ff">Volume Spread</button>
+      <button class="pbtn"        data-oiv-metric="call_oi"       style="--c:#02d432">Call OI</button>
+      <button class="pbtn"        data-oiv-metric="put_oi"        style="--c:#f32d35">Put OI</button>
+      <button class="pbtn"        data-oiv-metric="call_vol"      style="--c:#003cfe">Call Vol</button>
+      <button class="pbtn"        data-oiv-metric="put_vol"       style="--c:#e55f04">Put Vol</button>
     </div>
 
     <div class="card chartcard">
@@ -147,16 +155,74 @@
   </section>
 
   <section class="app-view" id="view-gex-analysis" data-title="GEX Analysis">
-    <div class="screen-bar">
-      <form class="ticker-form" data-screen="gex-analysis" autocomplete="off">
-        <label>Ticker
-          <input name="ticker" type="text" placeholder="e.g. SPX" spellcheck="false" autocapitalize="characters" aria-label="Ticker">
-        </label>
-        <button type="submit">Search</button>
-        <span class="ticker-status" aria-live="polite"></span>
-      </form>
+    <!-- Like his GEX board: no ticker box. A "Select Ticker:" card, then the Options
+         Chain Board with its expiry buttons, table and three charts. -->
+    <div class="gb-card gb-ticker-card">
+      <h3 class="gb-label">Select Ticker:</h3>
+      <div class="gb-buttons" id="gbTickers" role="group" aria-label="Ticker"></div>
+      <p class="gb-status" id="gbStatus" aria-live="polite"></p>
     </div>
-    <div class="coming-soon"><h2>GEX Analysis</h2><p>Coming soon.</p></div>
+
+    <div class="gb-card">
+      <div class="gex-main">
+        <div class="gb-board">
+          <h2 class="gb-title">Options Chain Board</h2>
+          <div class="gb-spot" id="gbSpot"></div>
+          <div class="gb-expiries" id="gbExpiries" role="group" aria-label="Expirations"></div>
+          <div class="gb-select-row">
+            <button type="button" class="gb-small-btn" id="gbSelectAll">Select All</button>
+            <button type="button" class="gb-small-btn" id="gbClearAll">Clear All</button>
+          </div>
+          <div class="gb-table-wrap" id="gbTableWrap">
+            <table class="gb-table" id="gbTable">
+              <thead><tr id="gbTableHead"></tr></thead>
+              <tbody id="gbTableBody"></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="gb-charts">
+          <div class="gb-chart" id="gbTotalWrap">
+            <div class="charttop">
+              <span class="symlabel" id="gbTotalTitle">Net Gamma</span>
+              <span class="chartlegend" id="gbTotalLegend"></span>
+            </div>
+            <button type="button" class="gb-expand" data-expand="gbTotalWrap" aria-label="Full screen" title="Full screen">⛶</button>
+            <div class="chartwrap">
+              <div class="price-empty" id="gbTotalEmpty"></div>
+              <div class="chart-crosshair-x" id="gbTotalCrosshairX"></div>
+              <div class="chart-tooltip" id="gbTotalTooltip"></div>
+              <canvas id="gbTotalChart" height="380"></canvas>
+            </div>
+          </div>
+          <div class="gb-chart" id="gbSplitWrap">
+            <div class="charttop">
+              <span class="symlabel" id="gbSplitTitle">Gamma Split</span>
+              <span class="chartlegend" id="gbSplitLegend"></span>
+            </div>
+            <button type="button" class="gb-expand" data-expand="gbSplitWrap" aria-label="Full screen" title="Full screen">⛶</button>
+            <div class="chartwrap">
+              <div class="price-empty" id="gbSplitEmpty"></div>
+              <div class="chart-crosshair-x" id="gbSplitCrosshairX"></div>
+              <div class="chart-tooltip" id="gbSplitTooltip"></div>
+              <canvas id="gbSplitChart" height="380"></canvas>
+            </div>
+          </div>
+          <div class="gb-chart" id="gbPriceWrap">
+            <div class="charttop">
+              <span class="symlabel" id="gbPriceTitle">Price</span>
+              <span class="chartlegend" id="gbPriceLegend"></span>
+            </div>
+            <button type="button" class="gb-expand" data-expand="gbPriceWrap" aria-label="Full screen" title="Full screen">⛶</button>
+            <div class="chartwrap">
+              <div class="price-empty" id="gbPriceEmpty"></div>
+              <div class="chart-crosshair-x" id="gbPriceCrosshairX"></div>
+              <div class="chart-tooltip" id="gbPriceTooltip"></div>
+              <canvas id="gbPriceChart" height="380"></canvas>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
   </section>
 
   <section class="app-view" id="view-key-levels" data-title="Key Levels">
@@ -210,14 +276,104 @@
   </section>
 
   <section class="app-view" id="view-how-to-use-gex" data-title="How to use GEX">
-    <div class="coming-soon"><h2>How to use GEX</h2><p>Coming soon.</p></div>
+    <!-- Laid out like his guide page (h1, h2, h3, lists, a table, highlighted terms).
+         The words are ours; his text is behind his login (map #21, #30). -->
+    <article class="card guide-page">
+      <h1>How to use GEX</h1>
+      <p>Matrix shows where options dealers are likely to buy or sell to stay hedged, strike by strike. This page explains what the numbers mean, what each screen shows, and how traders commonly read them.</p>
+
+      <h2>What GEX is</h2>
+      <p>Market makers sell most of the options that traders buy. To stay neutral they hedge with the underlying, and how much they must buy or sell when price moves depends on the options' <strong>gamma</strong>.</p>
+      <p><strong>GEX</strong> (gamma exposure) estimates that hedging in dollars at each strike: gamma × open interest × 100 × spot² × 1%. Matrix assumes dealers are long the calls and short the puts, so calls count as positive and puts as negative.</p>
+      <h3>Positive and negative gamma</h3>
+      <ul>
+        <li><strong>Positive gamma</strong> (Net GEX above zero): dealers sell into rallies and buy into dips. Moves tend to be damped and price tends to stay in a range.</li>
+        <li><strong>Negative gamma</strong> (Net GEX below zero): dealers sell into drops and buy into rallies. Moves tend to be faster and can run further.</li>
+      </ul>
+      <p>GEX is built from open interest known at the open, so it describes how the day starts. Volume during the day shows where new positions are being added.</p>
+
+      <h2>The screens</h2>
+      <h3>Strike Chart (home)</h3>
+      <p>One ticker and one or more expirations, added together. Type a ticker and press <strong>Search</strong> or Enter. The expirations of the current week are chosen at first; × removes a date and the menu adds one. The chart shows strikes within about 1% of spot for SPX and NDX, and about 3% for other tickers. The buttons turn layers on and off: <strong>Net GEX</strong> as bars, and <strong>AG</strong>, OI, volume and <strong>Power Zone</strong> as areas. Beside it are the day's 1-minute candles and a simplified price line. The candle chart carries the Price Lines of the chosen expirations.</p>
+      <h3>OI Volume</h3>
+      <p>Open interest and today's volume per strike for one expiration. <strong>Volume Spread</strong> is call volume minus put volume: blue where calls traded more, red where puts did. The price chart marks the strikes with the most call OI, put OI, call volume and put volume.</p>
+      <h3>GEX Analysis</h3>
+      <p>The board for SPX, SPY or QQQ over several expirations at once. Pick a ticker button, then click expiration buttons, or use <strong>Select All</strong> and <strong>Clear All</strong>. Each expiration button shows its share of the ticker's gamma. The line above them gives spot, Total Gamma and the regime. It shows:</p>
+      <ul>
+        <li>A table of every strike within 5% of spot. Click a column header to sort. A green dot marks each column's largest value, and its row is shaded.</li>
+        <li><strong>Net Gamma</strong>: Net GEX per strike, with an Abs GEX line.</li>
+        <li><strong>Gamma Split</strong>: call gamma above zero and put gamma below it, with an Abs GEX line.</li>
+        <li>A price chart with the Price Lines.</li>
+      </ul>
+      <p>The ⛶ button opens a chart full screen. ✕ or Esc closes it.</p>
+      <h3>Key Levels</h3>
+      <p>The four Key Levels of a ticker, drawn on five days of price, from every open expiration. Under the chart, the <strong>Forecast</strong> reads the same data as text.</p>
+      <h3>P/C Ratio</h3>
+      <p>Puts over calls for SPX, NDX, SPY and QQQ, across all expirations, by open interest and by volume. A ratio above 1 means more puts than calls.</p>
+
+      <h2>What the numbers mean</h2>
+      <div class="guide-table-wrap">
+        <table>
+          <thead><tr><th>Term</th><th>What it is</th><th>How it is read</th></tr></thead>
+          <tbody>
+            <tr><td><strong>Net GEX</strong></td><td>Call GEX plus put GEX at a strike (puts negative)</td><td>Large positive bars tend to hold price; large negative bars tend to speed it up</td></tr>
+            <tr><td><strong>AG</strong></td><td>Call GEX and put GEX both counted as positive</td><td>Where the most hedging sits, whichever side it comes from</td></tr>
+            <tr><td><strong>Call OI / Put OI</strong></td><td>Open contracts at a strike</td><td>Where positions are held</td></tr>
+            <tr><td><strong>Call Vol / Put Vol</strong></td><td>Contracts traded today</td><td>Where new activity is</td></tr>
+            <tr><td><strong>Power Zone</strong></td><td>AG plus a share of today's volume, near spot only</td><td>The zone where hedging is heaviest right now</td></tr>
+            <tr><td><strong>Volume Spread</strong></td><td>Call volume minus put volume</td><td>Which side is more active at each strike today</td></tr>
+            <tr><td><strong>Notional Delta</strong></td><td>|Delta| × OI × 100 × spot, calls and puts both positive</td><td>How much underlying the hedges at a strike stand for</td></tr>
+            <tr><td><strong>Zero Gamma</strong></td><td>Where Net GEX changes sign between two strikes, the crossing nearest the price</td><td>The line between the negative-gamma side and the positive-gamma side</td></tr>
+            <tr><td><strong>Max Gamma</strong></td><td>The strike with the largest Net GEX, either sign</td><td>The strongest single strike</td></tr>
+            <tr><td><strong>Call Wall / Put Wall</strong></td><td>The largest positive / most negative Net GEX</td><td>Often act as resistance / support</td></tr>
+            <tr><td><strong>P1 / N1</strong></td><td>Price Lines at the largest positive / most negative Net GEX</td><td>Usually the same strikes as the walls, drawn on price</td></tr>
+            <tr><td><strong>Matrix</strong></td><td>The strike with the highest Power Zone</td><td>The level price is drawn to</td></tr>
+            <tr><td><strong>AG Strike</strong></td><td>The strike with the largest AG</td><td>Often acts as a target</td></tr>
+            <tr><td><strong>P/C Ratio</strong></td><td>Puts over calls, by OI or by volume</td><td>Above 1 leans to puts, below 1 to calls</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2>Using it when trading</h2>
+      <h3>Direction for the day</h3>
+      <ul>
+        <li>Start with the regime: is the total Net GEX positive or negative, and which side of <strong>Zero Gamma</strong> is spot on?</li>
+        <li>In positive gamma, expect ranges: fades toward the Call Wall and Put Wall tend to work better than breakouts.</li>
+        <li>In negative gamma, expect larger moves: a break of a wall can keep going.</li>
+      </ul>
+      <h3>Supply and demand zones</h3>
+      <ul>
+        <li>Large positive Net GEX and large AG strikes above price often act as supply (resistance); below price, as demand (support).</li>
+        <li>Mark them on your own chart and watch how price reacts when it reaches them.</li>
+        <li>Check OI Volume to see whether today's volume is adding to a level or moving away from it.</li>
+      </ul>
+      <h3>0DTE</h3>
+      <ul>
+        <li>Pick today's expiration on the Strike Chart. Same-day options carry the most gamma, so their levels matter most during the session.</li>
+        <li>Turn on <strong>Power Zone</strong> and watch the <strong>Matrix</strong> level: price often gravitates toward it into the afternoon.</li>
+        <li>Data reloads only when you press Search or a button, so refresh before you act.</li>
+      </ul>
+
+      <h2>Limits</h2>
+      <ul>
+        <li>Matrix assumes dealers are long calls and short puts. Real positioning can differ.</li>
+        <li>Open interest updates once a day, and prices may be delayed.</li>
+        <li>Levels describe where hedging is likely, not where price must go. Use them with your own analysis and risk management.</li>
+      </ul>
+    </article>
   </section>
 
   <section class="app-view" id="view-disclaimer" data-title="Disclaimer">
-    <div class="coming-soon"><h2>Disclaimer</h2><p>Coming soon.</p></div>
+    <article class="card guide-page disclaimer-page">
+      <h1>Disclaimer</h1>
+      <p>Everything on Matrix is for learning only. Nothing here is investment, financial, legal or tax advice, or a recommendation to buy or sell any security or option.</p>
+      <p>Market data may be delayed, incomplete or wrong. Power Zone, the Matrix level, the Price Lines, the Key Levels and the Forecast are our own estimates built from that data, not facts about what dealers hold.</p>
+      <p>Trading options involves substantial risk and is not suitable for everyone. You can lose more than you invest. Past behaviour of any level or signal does not predict future results.</p>
+      <p>You are solely responsible for your trading decisions. We accept no liability for any loss arising from use of this site.</p>
+    </article>
   </section>
 </main>
 
-<script src="/matrix/matrix.js?v=20261026-kl-merged"></script>
+<script src="/matrix/matrix.js?v=20261026-like-his-2"></script>
 </body>
 </html>

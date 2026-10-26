@@ -1,4 +1,4 @@
-"""The Strike Chart (home screen) works like his: one expiration from a
+"""The Strike Chart (home screen) works like his: several expirations from a
 dropdown, seven parameter buttons, and two price charts of the searched
 ticker that load with it. Any ticker that can be searched gets candles."""
 import asyncio
@@ -73,17 +73,31 @@ def _home_section():
     return page[start:page.index("</section>", start)]
 
 
-def test_one_expiration_from_a_dropdown():
+def test_several_expirations_from_one_dropdown():
+    """His Expiration dropdown holds several dates as chips (a whole week in his
+    screenshot); the old checkbox picker and its quick buttons stay gone."""
     home = _home_section()
-    assert '<select id="expirationSelect"' in home
+    assert 'id="expirationSelect"' in home
+    assert 'id="expirationChips"' in home and 'id="expirationMenu"' in home
+    assert "<select" not in home
     assert 'type="checkbox"' not in home
     assert "expirationPicker" not in home
     assert "data-expquick" not in home
+    script = (host.MATRIX_WEB_DIR / "matrix.js").read_text(encoding="utf-8")
+    run = script[script.index("function run(){"):script.index("// ---------- Data loading")]
+    assert "selectedExpirations.has(q.exp)" in run
+
+
+def test_a_ticker_starts_on_its_week():
+    """Both of his screenshots show the current week through Friday chosen."""
+    script = (host.MATRIX_WEB_DIR / "matrix.js").read_text(encoding="utf-8")
+    assert "new Set(weekExpirations(homeExpiries))" in script
+    assert "gb.selected = new Set(changed || !kept.length ? weekExpirations(gb.expiries) : kept);" in script
 
 
 def test_his_seven_buttons_in_his_order():
     labels = re.findall(r'<button class="pbtn[^"]*"[^>]*>([^<]+)</button>', _home_section())
-    assert labels == ["Net GEX", "AG", "Call OI", "Put OI", "Call Vol", "Put Vol", "Power Zone"]
+    assert labels == ["Net GEX", "AG", "Call OI", "Put OI", "Call Volume", "Put Volume", "Power Zone"]
 
 
 def test_two_price_charts_beside_the_strike_chart():
@@ -93,12 +107,28 @@ def test_two_price_charts_beside_the_strike_chart():
     assert 'id="priceSimpleChart"' in home
 
 
-def test_expiration_change_redraws_only_the_strike_chart():
+def test_expiration_change_redraws_from_the_loaded_chain():
+    """A date change redraws the strike chart and the Price Lines, which follow the
+    chosen dates; it never reloads data."""
     script = (host.MATRIX_WEB_DIR / "matrix.js").read_text(encoding="utf-8")
-    start = script.index("bind('expirationSelect','change'")
-    handler = script[start:script.index("});", start)]
-    assert "run()" in handler
-    assert "Price" not in handler and "refreshHome" not in handler
+    start = script.index("function changeExpirations(")
+    handler = script[start:script.index("\n}\n", start)]
+    assert "run();" in handler and "drawPriceCharts(" in handler
+    assert "refreshHome" not in handler and "fetch" not in handler
+    levels = script[script.index("function homePriceLevels("):script.index("function powerZoneProfile(")]
+    assert "selectedExpirations.has(q.exp)" in levels
+
+
+def test_strike_window_by_ticker():
+    """His screenshots: about 1% of spot on SPX and about 3% on SPY. Power Zone
+    still looks within 1%, and the chart draws no gridlines."""
+    script = (host.MATRIX_WEB_DIR / "matrix.js").read_text(encoding="utf-8")
+    assert "const INDEX_SYMBOLS = new Set(['SPX','NDX']);" in script
+    assert "return INDEX_SYMBOLS.has(symbol) ? 0.01 : 0.03;" in script
+    assert "const POWER_ZONE_WINDOW = 0.01;" in script
+    draw = script[script.index("function drawChart("):script.index("\nfunction fmtAxis")]
+    assert "visibleStrikeData(R,strikeWindow(R.symbol))" in draw
+    assert "ctx.lineTo(W-padR,yy)" not in draw
 
 
 def test_strike_chart_labels_like_his():
@@ -107,7 +137,7 @@ def test_strike_chart_labels_like_his():
     script = (host.MATRIX_WEB_DIR / "matrix.js").read_text(encoding="utf-8")
     start = script.index("function drawChart(")
     draw = script[start:script.index("\nfunction fmtAxis", start)]
-    assert 'const priceLabel = "Price: "+fmtPrice(R.spot);' in draw
+    assert 'const priceLabel = "Price: "+R.spot.toFixed(2);' in draw
     assert "linkedMarketPrice" not in draw
     assert 'ctx.fillText("STRIKE"' in draw
     assert "splineTo(ctx,pts,top,bottom)" in draw
@@ -118,7 +148,7 @@ def test_strike_chart_labels_like_his():
 def test_power_zone_one_color_and_his_default_buttons():
     page = (host.MATRIX_WEB_DIR / "matrix.html").read_text(encoding="utf-8")
     script = (host.MATRIX_WEB_DIR / "matrix.js").read_text(encoding="utf-8")
-    button = re.search(r'data-metric="power"\s+style="--c:(#[0-9a-f]{6})"', page).group(1)
+    button = re.search(r'data-metric="power"\s+style="--c:(#[0-9a-f]{6})', page).group(1)
     line = re.search(r'power:\s*\{label:"Power Zone",\s*color:"(#[0-9a-f]{6})"', script).group(1)
     assert button == line
     active = re.findall(r'<button class="pbtn active"[^>]*data-metric="([a-z_]+)"', page)
