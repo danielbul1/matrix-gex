@@ -290,6 +290,7 @@ function hideAllHoverHelpers(){
   hidePriceTooltips();
   hideKeyLevelsTooltip();
   hideOiVolumeTooltip();
+  hideOiVolumePriceTooltip();
 }
 // Single view -> renderer dispatch, shared by renderImpl, setView and the resize handler.
 const VIEW_RENDERERS = {
@@ -1329,8 +1330,6 @@ const OIV_METRICS = {
 };
 const OIV_ACTIVE = new Set(['volume_spread']);
 const MATRIX_CANDLES_URL = 'https://api.trytripity.site/api/matrix/candles';
-// The candles proxy serves these tickers only.
-const CANDLE_SYMBOLS = new Set(['SPX','NDX','SPY','QQQ']);
 const oiv = {symbol:null, expiry:null, candles:null, candlesError:''};
 let _oivRequest = 0;
 
@@ -1384,7 +1383,11 @@ function populateOiVolumeExpiries(symbol){
 }
 function renderOiVolume(){
   const symbol = oiv.symbol;
-  if(!symbol || !REAL[symbol] || !oiv.expiry) return;
+  if(!symbol || !REAL[symbol]) return;
+  // The chain may have changed since the list was built: refill it, and fall
+  // back to the nearest expiration when the chosen one is gone.
+  populateOiVolumeExpiries(symbol);
+  if(!oiv.expiry) return;
   const R = computeOiVolume(symbol, oiv.expiry);
   window._oivR = R;
   drawOiVolumeChart(R);
@@ -1457,6 +1460,8 @@ function drawOiVolumeChart(R){
     ctx.beginPath();
     data.forEach((s,i)=>{const x=xCenter(i),y=yA(M.val(s)); i?ctx.lineTo(x,y):ctx.moveTo(x,y);});
     ctx.strokeStyle=M.color; ctx.lineWidth=1.6; ctx.stroke();
+    ctx.fillStyle=M.color;
+    data.forEach((s,i)=>{ctx.beginPath(); ctx.arc(xCenter(i),yA(M.val(s)),1.8,0,7); ctx.fill();});
   });
 
   const hitBars = data.map((s,i)=>({x:padL+slot*i,y:top,w:slot,h:plotH,s}));
@@ -1551,6 +1556,7 @@ function drawOiVolumePriceChart(R){
   cv.width=W*dpr; cv.height=H*dpr; cv.style.height=H+'px';
   const ctx=cv.getContext('2d'); ctx.setTransform(dpr,0,0,dpr,0,0);
   ctx.clearRect(0,0,W,H);
+  cv._oivPrice=null;
   const candles=oiv.candles||[];
   if(empty){
     empty.textContent=candles.length ? '' : (oiv.candlesError || `No price data for ${R.symbol}`);
@@ -1576,6 +1582,7 @@ function drawOiVolumePriceChart(R){
     ctx.beginPath(); ctx.moveTo(padL,yy); ctx.lineTo(W-padR,yy); ctx.stroke();
     ctx.fillStyle='#c4c4c4'; ctx.fillText(fmtPrice(v), W-padR+6, yy);
   }
+  cv._oivPrice={candles, padL, slot:step, top:padT, bottom:padT+plotH, plotW, symbol:R.symbol};
   const bw=Math.max(1,Math.min(step*0.7,9));
   candles.forEach((c,i)=>{
     const color=c.close>=c.open ? '#17b65f' : '#ff2a17';
@@ -1601,15 +1608,40 @@ function drawOiVolumePriceChart(R){
   }
 }
 
+// Hover on the price chart: the candle under the cursor, like the other screens' price charts.
+function showOiVolumePriceTooltip(ev){
+  const cv=byId('oiVolumePriceChart'), tt=byId('oivPriceTooltip'), cross=byId('oivPriceCrosshairX');
+  const plot=cv?._oivPrice;
+  if(!tt || !cross || !plot) return;
+  const rect=cv.getBoundingClientRect();
+  const point=ev.touches && ev.touches[0] ? ev.touches[0] : ev;
+  const x=point.clientX-rect.left, y=point.clientY-rect.top;
+  if(x<plot.padL || x>plot.padL+plot.plotW || y<plot.top || y>plot.bottom){ hideOiVolumePriceTooltip(); return; }
+  const i=Math.max(0,Math.min(plot.candles.length-1,Math.floor((x-plot.padL)/plot.slot)));
+  const c=plot.candles[i];
+  const row=(label,value)=>`<div class="tt-row"><span>${label}</span><span>${value}</span></div>`;
+  tt.innerHTML=`<div class="tt-title">${esc(plot.symbol)} ${fmtMarketTime(c.time)} ET</div>`
+    +row('Open',fmtPrice(c.open))+row('High',fmtPrice(c.high))+row('Low',fmtPrice(c.low))+row('Close',fmtPrice(c.close));
+  tt.style.display='block';
+  cross.style.display='block';
+  cross.style.left=(plot.padL+plot.slot*(i+0.5))+'px';
+  const tw=tt.offsetWidth, th=tt.offsetHeight;
+  let left=x+14, top=y+14;
+  if(left+tw>rect.width) left=x-tw-14;
+  if(top+th>rect.height) top=y-th-14;
+  tt.style.left=Math.max(6,left)+'px';
+  tt.style.top=Math.max(6,top)+'px';
+}
+function hideOiVolumePriceTooltip(){
+  ['oivPriceTooltip','oivPriceCrosshairX'].forEach(id=>{const el=byId(id); if(el) el.style.display='none';});
+}
+
 async function loadOiVolumeCandles(symbol){
-  if(!CANDLE_SYMBOLS.has(symbol)) return {candles:null, error:`No price chart for ${symbol}`};
   const data=await fetchLiveData(`${MATRIX_CANDLES_URL}?symbol=${encodeURIComponent(symbol)}&interval=1m&range=1d`);
-  const candles=Array.isArray(data?.candles) ? data.candles : null;
-  if(!candles?.length) return {candles:null, error:`Could not load the ${symbol} price chart`};
-  // Today's session only: the last trading day in the feed.
-  const day=t=>new Intl.DateTimeFormat('en-CA',{timeZone:'America/New_York'}).format(new Date(t*1000));
-  const lastDay=day(candles[candles.length-1].time);
-  return {candles:candles.filter(c=>day(c.time)===lastDay), error:''};
+  // Regular session (09:30-16:00 ET) of the last trading day, as on the Strike Chart.
+  const candles=latestSessionCandles(Array.isArray(data?.candles) ? data.candles : []);
+  if(!candles.length) return {candles:null, error:`No intraday prices for ${symbol}`};
+  return {candles, error:''};
 }
 // Refresh of OI Volume: Search, Enter, or opening it with no data yet.
 async function refreshOiVolume(symbol){
@@ -1743,6 +1775,11 @@ bind('oiVolumeChart','mouseleave',hideOiVolumeTooltip);
 bind('oiVolumeChart','touchstart',showOiVolumeTooltip,{passive:true});
 bind('oiVolumeChart','touchmove',showOiVolumeTooltip,{passive:true});
 bind('oiVolumeChart','touchend',()=>setTimeout(hideOiVolumeTooltip,1200),{passive:true});
+bind('oiVolumePriceChart','mousemove',showOiVolumePriceTooltip);
+bind('oiVolumePriceChart','mouseleave',hideOiVolumePriceTooltip);
+bind('oiVolumePriceChart','touchstart',showOiVolumePriceTooltip,{passive:true});
+bind('oiVolumePriceChart','touchmove',showOiVolumePriceTooltip,{passive:true});
+bind('oiVolumePriceChart','touchend',()=>setTimeout(hideOiVolumePriceTooltip,1200),{passive:true});
 ['gexChart'].forEach(id=>{
   bind(id,'mousemove',showChartTooltip);
   bind(id,'mouseleave',hideChartTooltip);

@@ -201,5 +201,12 @@ try {
   OIV_ACTIVE.clear(); renderOiVolume(); OIV_ACTIVE.add('volume_spread');
 } catch (e) { oivOk = false; console.log('oi volume draw error:', e.stack); }
 check('OI Volume strike and price charts draw (no-throw)', oivOk);
+oiv.symbol = 'SPX'; oiv.expiry = '2000-01-01';
+renderOiVolume();
+check('a gone expiration falls back to the nearest one', oiv.expiry === exp0, oiv.expiry);
+check('every ticker may have a price chart (no ticker list)', typeof CANDLE_SYMBOLS === 'undefined');
+const etSec = (h, m) => Date.UTC(2026, 9, 23, h + 4, m) / 1000;  // 2026-10-23, EDT = UTC-4
+const sess = latestSessionCandles([[9, 29], [9, 30], [15, 59], [16, 0]].map(([h, m]) => ({ time: etSec(h, m), open: 1, high: 2, low: 0.5, close: 1.5 })));
+check('price chart keeps 09:30-16:00 ET only', sess.length === 2 && fmtMarketTime(sess[0].time) === '09:30' && fmtMarketTime(sess[1].time) === '15:59');
 
 process.exit(failures ? 1 : 0);
