@@ -270,3 +270,13 @@ Same GitHub author (Aleksey Vlasenko). Read 2026-10-26: https://github.com/vlase
 - The yellow, red, cyan and dashed lines in `4Q_qDKgtspE` fit the six price-chart levels.
 
 Nothing in either repo covers Volume Spread, the P/C table, the Forecast text or the GEX board columns.
+
+## Addendum 3: the old "Max Power" site holds nothing extra in public (checked 2026-10-26)
+
+We compared the public files of `151212aa.pythonanywhere.com` (Max Power) and `maxpowertrading.pythonanywhere.com` (Quant Power): `/`, `/_dash-layout`, `/_dash-dependencies`, `/assets/styles.css` and `robots.txt`.
+- `styles.css` is **byte-identical** on both sites.
+- The callback graph has the same 24 callbacks; only their order differs.
+- The layouts differ only in **language and brand**. Max Power is in Russian, logs in by Telegram username or ID, and links a different Telegram invite.
+- The Wayback Machine has no capture of the old site, and web search finds nothing else about it.
+
+So the old site is the same app, still running under its earlier Russian brand. Everything it does beyond these files sits behind the login, which this effort does not bypass.
