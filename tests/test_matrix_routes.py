@@ -194,3 +194,51 @@ def test_oi_volume_screen_is_built():
     ]
     assert 'id="oiVolumeChart"' in section
     assert 'id="oiVolumePriceChart"' in section
+
+
+def test_gex_board_is_built_like_his():
+    """Build 6 (#36): his GEX board has no ticker box, only ticker and expiry
+    buttons with Select all / Clear all, a spot line, the strike table and three
+    charts, each with a full-screen button."""
+    page = (host.MATRIX_WEB_DIR / "matrix.html").read_text(encoding="utf-8")
+    start = page.index('id="view-gex-analysis"')
+    section = page[start:page.index("</section>", start)]
+    assert "ticker-form" not in section
+    assert "Coming soon" not in section
+    for element in ('id="gbTickers"', 'id="gbExpiries"', 'id="gbSelectAll"', 'id="gbClearAll"',
+                    'id="gbSpot"', 'id="gbTable"', 'id="gbTotalChart"', 'id="gbSplitChart"', 'id="gbPriceChart"'):
+        assert element in section
+    assert section.count('class="gb-expand"') == 3
+
+
+@pytest.mark.parametrize("view, title", [("how-to-use-gex", "How to use GEX"), ("disclaimer", "Disclaimer")])
+def test_guide_pages_have_content(view, title):
+    """Build 8 (#38): both pages carry our own text, laid out like his guide page."""
+    page = (host.MATRIX_WEB_DIR / "matrix.html").read_text(encoding="utf-8")
+    start = page.index(f'id="view-{view}"')
+    section = page[start:page.index("</section>", start)]
+    assert "Coming soon" not in section
+    assert f"<h1>{title}</h1>" in section
+    assert "for learning only" in page
+    # Our own wording: his login page line must not be copied (map #21).
+    assert "educational purposes only" not in page
+
+
+def test_guide_has_his_structure():
+    page = (host.MATRIX_WEB_DIR / "matrix.html").read_text(encoding="utf-8")
+    start = page.index('id="view-how-to-use-gex"')
+    section = page[start:page.index("</section>", start)]
+    for tag in ("<h2>", "<h3>", "<ul>", "<table>", "<strong>"):
+        assert tag in section
+
+
+def test_power_zone_is_the_new_definition_everywhere():
+    """Build 9 (#39): Power Zone = AG/8 + volume x S^2/20000, near spot only; the
+    old score, AVG Power Zone and Power Range exist nowhere."""
+    script = (host.MATRIX_WEB_DIR / "matrix.js").read_text(encoding="utf-8")
+    page = (host.MATRIX_WEB_DIR / "matrix.html").read_text(encoding="utf-8")
+    assert "s.ag/8 + s.totalVol*spot*spot/20000" in script
+    assert "0.58*agScore" not in script
+    for gone in ("AVG Power Zone", "avgPowerZone", "Power Range", "power-range"):
+        assert gone not in script
+        assert gone not in page
