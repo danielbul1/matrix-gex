@@ -4,8 +4,10 @@ Options GEX dashboard for NDX, SPX, SPY, and QQQ.
 
 The live dashboard is at https://api.trytripity.site/matrix/ (served by the Railway backend). GitHub Pages now only redirects there.
 
-Options chains (open interest, IV, greeks) come from **Cboe's free delayed snapshot**; prices, candles,
-options flow and the live WebSocket come from **London Strategic Edge (LSE) Data 3.0**. The published data
+Options chains (open interest, IV, greeks) come from **Cboe's free delayed snapshot**; prices, candles
+and the chain's live volume come from **London Strategic Edge (LSE) Data 3.0**. The dashboard copies the
+screens of Quant Power (ADR `docs/adr/0001-matrix-mirrors-quant-power-screens.md`) and reloads data only
+when the trader asks (Refresh), never on a timer. The published data
 files are refreshed by `.github/workflows/update-cboe.yml`.
 Operational status is published in `data_status.json` for lightweight external monitoring.
 When using the Flask server, the same status is available at `/status`; it returns HTTP 200 for `fresh`/`off_hours` and HTTP 503 for `stale`, `future`, `unknown`, or missing status data.
@@ -57,15 +59,10 @@ load symbols such as `MSFT` or `AVGO` on demand. These symbols use a delayed
 Cboe option-chain snapshot and do not consume LSE historical-download quota.
 Search results are cached for 24 hours and each option chain for the current
 ET calendar day; new uncached chains are also capped at 12 upstream fetches
-per minute. Intraday spot updates use one dynamic LSE WebSocket subscription
-for the currently selected stock, and the browser recalculates the Greeks
-locally against the daily Cboe OI/IV snapshot. Switching to another dynamic
-stock unsubscribes the previous one; favorites do not consume stream slots.
+per minute. Their spot is Cboe's delayed quote, and the browser recalculates
+the Greeks locally against the daily Cboe OI/IV snapshot.
 
-Favorites are stored only in the browser. On-demand symbols are intentionally
-excluded from Net Drift/Flow collection and GEX history snapshots; current
-GEX, DEX, VEX, CHEX, Max Pain, and the other snapshot-derived views are still
-calculated in the browser.
+Favorites are stored only in the browser.
 
 ## API key
 
