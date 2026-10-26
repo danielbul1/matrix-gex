@@ -297,3 +297,30 @@ Source: the public `/_dash-dependencies` of both sites (the same 24 callbacks, i
 - **Table scrollbar.** Inline CSS gives `#gex-options-board` a thin 5px scrollbar.
 
 The table's columns, the strike window and the content of the three charts are still not public.
+
+## Addendum 6: where the new Power Zone peaks on July data (build 9, #39)
+
+Power Zone(K) = AG(K)/8 + (call volume + put volume)(K) × S²/20000, as Matrix now computes it (Addendum 2).
+
+**Method.** We ran it over every `cboe_data.json` snapshot on the `data` branch: 590 ticker snapshots of SPX, SPY, QQQ and NDX from 2026-07-08 to 2026-07-15. Each snapshot has volume.
+- Each run used the nearest expiry on or after the snapshot date, through Matrix's own engine (`calcGEX`), with no strike window.
+- We took the strike with the highest Power Zone (the peak) and compared it with spot, with the Call Wall and Put Wall (largest positive and most negative Net GEX of that expiry), and with the AG Strike.
+- We ran the old weighted score (0.58·AG + 0.28·OI + 0.14·Vol, normalised) the same way, for comparison.
+
+| | snapshots | median peak distance from spot | peak within 1% of spot | peak on a wall | peak on the AG Strike | old score: median distance | old score: on a wall |
+|---|---|---|---|---|---|---|---|
+| SPX | 149 | 0.08% | 100% | 55% | 87% | 0.08% | 53% |
+| SPY | 146 | 0.07% | 100% | 50% | 97% | 0.08% | 47% |
+| QQQ | 146 | 0.18% | 99% | 74% | 97% | 0.23% | 65% |
+| NDX | 149 | 0.19% | 99% | 64% | 77% | 0.17% | 81% |
+| All | 590 | 0.11% | 99% | 61% | 89% | 0.12% | 62% |
+
+**What it shows.**
+- **Near spot: yes.** The peak sits close to spot, which is where his thumbnails show it (Q1).
+- **"Not at the walls" holds only in part.**
+  - In 61% of snapshots the peak shares its strike with a wall.
+  - On the nearest expiry the largest Net GEX strikes are usually at the money themselves. So "near spot" and "on a wall" often overlap here, unlike the far walls of a multi-expiry chain.
+- **The peak mostly follows AG.** It lands on the AG Strike 89% of the time. The volume term moves it off the AG Strike in the rest, mainly on SPX and NDX.
+- **The new formula barely moves the peak compared with the old score** (median 0.11% against 0.12%). What changes is the curve's shape and scale: it now sits in AG's units, on the same axis.
+
+No profit test was run (#24).

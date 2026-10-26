@@ -129,15 +129,12 @@ function calcGEX(chain){
     s.netGex = s.callGex + s.putGex;
   }
   let strikes = Object.values(byStrike).sort((a,b)=>a.strike-b.strike);
-  strikes.forEach(s=>{ s.totalOI=s.callOI+s.putOI; s.totalVol=s.callVol+s.putVol; });
-  const maxAG = Math.max(...strikes.map(s=>Math.abs(s.callGex)+Math.abs(s.putGex)), 1);
-  const maxOI = Math.max(...strikes.map(s=>s.totalOI), 1);
-  const maxVol = Math.max(...strikes.map(s=>s.totalVol), 1);
+  // Power Zone (#24, #39): AG/8 plus today's volume at the strike times S²/20000,
+  // the fit a follower reports holding on every strike of his app (research Addendum 2).
   strikes.forEach(s=>{
-    const agScore = (Math.abs(s.callGex)+Math.abs(s.putGex)) / maxAG;
-    const oiScore = s.totalOI / maxOI;
-    const volScore = s.totalVol / maxVol;
-    s.powerZone = (0.58*agScore + 0.28*oiScore + 0.14*volScore) * maxAG;
+    s.totalOI=s.callOI+s.putOI; s.totalVol=s.callVol+s.putVol;
+    s.ag=Math.abs(s.callGex)+Math.abs(s.putGex);
+    s.powerZone=s.ag/8 + s.totalVol*spot*spot/20000;
   });
 
   // 3. totals
@@ -272,6 +269,13 @@ function renderImpl(R){
 let ACTIVE = new Set(["net_gex","ag"]);
 // Strikes shown: spot +/- 2 expected moves.
 const DISPLAY_SIGMA = 2;
+// The Strike Chart shows, Power Zone is drawn on, and the Matrix level is found among,
+// only strikes within 1% of spot (#24, #39).
+const POWER_ZONE_WINDOW = 0.01;
+// The strikes an area layer is drawn on: all of them, or only those near spot.
+function layerPoints(M,data,spot){
+  return data.map((s,i)=>({s,i})).filter(({s})=>!M.window || Math.abs(s.strike-spot)/spot<=M.window);
+}
 const METRICS = {
   net_gex:  {label:"Net GEX",     color:"#22b8ff", kind:"bar",  signed:true,  val:s=>s.netGex},
   ag:       {label:"AG",          color:"#ab7df6", kind:"area", axis:"gex", val:s=>Math.abs(s.callGex)+Math.abs(s.putGex)},
@@ -279,7 +283,7 @@ const METRICS = {
   put_oi:   {label:"Put OI",      color:"#ef5350", kind:"area", axis:"count", val:s=>s.putOI},
   call_vol: {label:"Call Volume", color:"#2f73ff", kind:"area", axis:"count", val:s=>s.callVol},
   put_vol:  {label:"Put Volume",  color:"#ff8a3d", kind:"area", axis:"count", val:s=>s.putVol},
-  power:    {label:"Power Zone",  color:"#ffc107", kind:"area", axis:"gex", val:s=>s.powerZone || 0},
+  power:    {label:"Power Zone",  color:"#ffc107", kind:"area", axis:"gex", val:s=>s.powerZone || 0, window:POWER_ZONE_WINDOW},
 };
 // Active metrics in button order; the Net GEX bars draw only while its button is on.
 function chartActiveMetrics(){
@@ -294,9 +298,12 @@ function chartTargets(chartId){
   };
   return {canvasId:chartId, ...(map[chartId] || map.gexChart)};
 }
-function visibleStrikeData(R){
+// window: a fixed share of spot (the Strike Chart's ±1%); otherwise spot ± 2 expected moves.
+function visibleStrikeData(R,window=null){
   let visibleStrikes=[...R.strikes];
-  if(R.expectedMove>0){
+  if(window){
+    visibleStrikes=visibleStrikes.filter(s=>Math.abs(s.strike-R.spot)/R.spot<=window);
+  } else if(R.expectedMove>0){
     const radius=DISPLAY_SIGMA*R.expectedMove;
     visibleStrikes=visibleStrikes.filter(s=>Math.abs(s.strike-R.spot)<=radius);
   }
@@ -318,7 +325,8 @@ function drawChart(R,chartId='gexChart'){
   const ctx = cv.getContext('2d'); ctx.setTransform(dpr,0,0,dpr,0,0);
   ctx.clearRect(0,0,W,H);
 
-  const data=visibleStrikeData(R);
+  // Like his strike chart: only strikes within 1% of spot (about 27 SPX strikes, #39).
+  const data=visibleStrikeData(R,POWER_ZONE_WINDOW);
   if(!data.length) return;
 
   const metricsState=chartActiveMetrics();
@@ -363,7 +371,7 @@ function drawChart(R,chartId='gexChart'){
   const axisMax={}, axisTitle={};
   rightAxes.forEach(ax=>{
     const layers=areas.filter(m=>METRICS[m].axis===ax);
-    axisMax[ax]=Math.max(...layers.flatMap(m=>data.map(METRICS[m].val)),1)*1.08;
+    axisMax[ax]=Math.max(...layers.flatMap(m=>layerPoints(METRICS[m],data,R.spot).map(p=>METRICS[m].val(p.s))),1)*1.08;
     axisTitle[ax]=layers.map(m=>METRICS[m].label.toUpperCase()).join(' - ');
   });
 
@@ -384,7 +392,8 @@ function drawChart(R,chartId='gexChart'){
   areas.forEach(m=>{
     const M=METRICS[m];
     const yA=v=>bottom-(v/axisMax[M.axis])*plotH;
-    const pts=data.map((s,i)=>[xCenter(i),yA(M.val(s))]);
+    const pts=layerPoints(M,data,R.spot).map(({s,i})=>[xCenter(i),yA(M.val(s))]);
+    if(!pts.length) return;
     ctx.beginPath(); ctx.moveTo(pts[0][0],bottom); ctx.lineTo(pts[0][0],pts[0][1]);
     splineTo(ctx,pts,top,bottom);
     ctx.lineTo(pts[pts.length-1][0],bottom); ctx.closePath();
@@ -393,7 +402,7 @@ function drawChart(R,chartId='gexChart'){
     splineTo(ctx,pts,top,bottom);
     ctx.strokeStyle=M.color; ctx.lineWidth=1.6; ctx.stroke();
     ctx.fillStyle=M.color;
-    data.forEach((s,i)=>{ctx.beginPath();ctx.arc(xCenter(i),yA(M.val(s)),1.8,0,7);ctx.fill();});
+    pts.forEach(([x,y])=>{ctx.beginPath();ctx.arc(x,y,1.8,0,7);ctx.fill();});
   });
 
   // ----- Net GEX vertical bars -----
@@ -461,8 +470,8 @@ function drawChart(R,chartId='gexChart'){
 // Draws a smoothed curve through pts (the pen already sits on pts[0]).
 // Catmull-Rom segments as Bezier curves, kept inside the plot so the fill never dips below zero.
 const SPLINE_SMOOTHING = 0.7;
-function splineTo(ctx,pts,top,bottom){
-  const k=SPLINE_SMOOTHING/6;
+function splineTo(ctx,pts,top,bottom,smoothing=SPLINE_SMOOTHING){
+  const k=smoothing/6;
   const clampY=y=>Math.max(top,Math.min(bottom,y));
   for(let i=0;i<pts.length-1;i++){
     const p0=pts[Math.max(0,i-1)], p1=pts[i], p2=pts[i+1], p3=pts[Math.min(pts.length-1,i+2)];
@@ -514,7 +523,7 @@ function showChartTooltip(ev){
     if(m==='put_oi') return row('Put OI',fmtNum(s.putOI),'neg');
     if(m==='call_vol') return row('Call Volume',fmtNum(s.callVol),'pos');
     if(m==='put_vol') return row('Put Volume',fmtNum(s.putVol),'neg');
-    if(m==='power') return row('Power Zone',fmtNum(s.powerZone || 0));
+    if(m==='power') return row('Power Zone', Math.abs(s.strike-R.spot)/R.spot<=POWER_ZONE_WINDOW ? fmtNum(s.powerZone || 0) : '—');
     return '';
   }).join('');
   tt.innerHTML = `
@@ -534,19 +543,77 @@ function showChartTooltip(ev){
 function hideChartTooltip(){
   ['chartTooltip','chartCrosshairX'].forEach(id=>{const el=byId(id); if(el) el.style.display='none';});
 }
+// ---------- Price Lines ----------
+// The six strikes drawn across a price chart (CONTEXT "Price Line"). Each strike needs
+// netGex, callVol, putVol, ag and powerZone. Matrix looks only within 1% of spot.
+// chartLabel is how his price chart names each line (research Addendum 5); his magnet
+// label is the product name, so ours reads "Matrix" (#26).
+const PRICE_LINE_STYLES = [
+  {label:'P1',        chartLabel:'P1 Strike',       color:'#22b8ff'},
+  {label:'N1',        chartLabel:'N1 Strike',       color:'#ff453a'},
+  {label:'Call Vol',  chartLabel:'Call Vol Strike', color:'#2f73ff'},
+  {label:'Put Vol',   chartLabel:'Put Vol Strike',  color:'#ff8a3d'},
+  {label:'Matrix',    chartLabel:'Matrix',          color:'#ffc107'},
+  {label:'AG Strike', chartLabel:'AG Strike',       color:'#ab7df6'},
+];
+// His line values carry two decimals ("6800.00").
+function fmtLineValue(v){ return Number(v).toFixed(2); }
+function priceLines(strikes, spot){
+  const top = (list,val)=>list.reduce((best,s)=>!best || val(s)>val(best) ? s : best, null);
+  const near = strikes.filter(s=>Math.abs(s.strike-spot)/spot<=POWER_ZONE_WINDOW);
+  const picks = {
+    'P1':        [top(strikes,s=>s.netGex),  s=>s.netGex>0],
+    'N1':        [top(strikes,s=>-s.netGex), s=>s.netGex<0],
+    'Call Vol':  [top(strikes,s=>s.callVol), s=>s.callVol>0],
+    'Put Vol':   [top(strikes,s=>s.putVol),  s=>s.putVol>0],
+    'Matrix':    [top(near,s=>s.powerZone),  s=>s.powerZone>0],
+    'AG Strike': [top(strikes,s=>s.ag),      s=>s.ag>0],
+  };
+  return PRICE_LINE_STYLES.map(style=>{
+    const [s, ok] = picks[style.label];
+    return s && ok(s) ? {...style, price:s.strike} : null;
+  }).filter(Boolean);
+}
+
 // ---------- Price charts (Strike Chart) ----------
 // Two charts of the searched ticker's latest session, beside the strike chart:
 // 1-minute candles, and a "simplified" close-price line. What his simplified
 // chart holds is not public; a close line is our guess. Neither chart reads the
 // expiration, so only Search or Enter reloads them.
 const PRICE_CHARTS = {
-  priceChart:       {kind:'candles', symbolId:'priceSymLabel',       tooltipId:'priceTooltip',       crosshairId:'priceCrosshairX',       emptyId:'priceEmpty'},
-  priceSimpleChart: {kind:'line',    symbolId:'priceSimpleSymLabel', tooltipId:'priceSimpleTooltip', crosshairId:'priceSimpleCrosshairX', emptyId:'priceSimpleEmpty'},
+  priceChart:       {kind:'candles', symbolId:'priceSymLabel',       tooltipId:'priceTooltip',       crosshairId:'priceCrosshairX',       emptyId:'priceEmpty',       legendId:'priceLegend',       legend:'Price'},
+  priceSimpleChart: {kind:'line',    symbolId:'priceSimpleSymLabel', tooltipId:'priceSimpleTooltip', crosshairId:'priceSimpleCrosshairX', emptyId:'priceSimpleEmpty', legendId:'priceSimpleLegend', legend:'Simplified price'},
 };
 const PRICE_UP = '#3d9970', PRICE_DOWN = '#ff4136', PRICE_LINE = '#22b8ff';
 const MARKET_TZ = 'America/New_York';
 // Per ticker: {candles:[...]} or {error:'...'}.
 let PRICE = {};
+// Lines more than this from spot stay in the legend only, so one far strike cannot
+// squash a day of candles into a line.
+const PRICE_LINE_DISTANCE = 0.015;
+// His price chart does not read the chosen date, so its lines and Power Zone profile
+// come from the nearest expiry (a guess, #39).
+function homePriceLevels(){
+  if(!homeRecord) return null;
+  const chain=buildChainRealFromRecord(currentSymbol(),homeRecord);
+  const nearest=chainExpirations(chain)[0];
+  if(!nearest) return null;
+  const R=calcGEX({...chain, quotes:chain.quotes.filter(q=>q.exp===nearest)});
+  return {spot:R.spot, expiry:nearest, lines:priceLines(R.strikes,R.spot),
+    profile:R.strikes.filter(s=>Math.abs(s.strike-R.spot)/R.spot<=POWER_ZONE_WINDOW && s.powerZone>0)};
+}
+// Power Zone between strikes, sampled every $2.50 like his profile (research Addendum 5).
+function powerZoneProfile(strikes){
+  if(strikes.length<2) return strikes.map(s=>({price:s.strike, value:s.powerZone}));
+  const out=[];
+  for(let i=0;i<strikes.length-1;i++){
+    const a=strikes[i], b=strikes[i+1];
+    for(let p=a.strike; p<b.strike; p+=2.5) out.push({price:p, value:a.powerZone+(b.powerZone-a.powerZone)*(p-a.strike)/(b.strike-a.strike)});
+  }
+  const last=strikes[strikes.length-1];
+  out.push({price:last.strike, value:last.powerZone});
+  return out;
+}
 function marketParts(sec){
   const parts=new Intl.DateTimeFormat('en-US',{timeZone:MARKET_TZ,year:'numeric',month:'2-digit',day:'2-digit',
     hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).formatToParts(new Date(sec*1000));
@@ -605,12 +672,26 @@ function drawPriceChart(chartId,symbol){
   if(empty){
     empty.textContent = candles.length ? '' : (state ? (state.error || `No intraday prices for ${symbol}`) : `Loading ${symbol}…`);
   }
+  // The candle chart carries the six Price Lines and the Power Zone profile.
+  const levels=cfg.kind==='candles' && symbol===currentSymbol() ? homePriceLevels() : null;
+  const onChart=l=>Math.abs(l.price-levels.spot)/levels.spot<=PRICE_LINE_DISTANCE;
+  const legend=byId(cfg.legendId);
+  if(legend) legend.innerHTML=levels
+    ? levels.lines.map(l=>`<span><span class="sq" style="background:${l.color}"></span>${esc(l.chartLabel)} ${esc(fmtLineValue(l.price))}${onChart(l)?'':' (off chart)'}</span>`).join('')
+    : esc(cfg.legend);
   if(!candles.length) return;
 
   const padL=mobile?50:66, padR=mobile?10:18, padT=mobile?14:18, padB=mobile?30:36;
   const plotW=W-padL-padR, plotH=H-padT-padB;
   const top=padT, bottom=padT+plotH;
-  const {lo,hi}=priceRange(candles,cfg.kind);
+  let {lo,hi}=priceRange(candles,cfg.kind);
+  const shownLines=levels ? levels.lines.filter(onChart) : [];
+  if(shownLines.length){
+    // Widen the range so every line near spot stays on the chart.
+    const prices=shownLines.map(l=>l.price);
+    const lo2=Math.min(lo,...prices), hi2=Math.max(hi,...prices);
+    if(lo2<lo || hi2>hi){ const pad=(hi2-lo2)*0.03; lo=lo2-pad; hi=hi2+pad; }
+  }
   const y=v=>top+(hi-v)/(hi-lo)*plotH;
   const slot=plotW/candles.length;
   const xCenter=i=>padL+slot*(i+0.5);
@@ -654,6 +735,41 @@ function drawPriceChart(chartId,symbol){
     ctx.beginPath();
     candles.forEach((c,i)=>{ const xx=xCenter(i), yy=y(c.close); i?ctx.lineTo(xx,yy):ctx.moveTo(xx,yy); });
     ctx.stroke();
+  }
+  if(levels){
+    // Power Zone drawn sideways along the price axis from the left edge, translucent yellow.
+    const prof=powerZoneProfile(levels.profile).filter(p=>p.price>=lo && p.price<=hi);
+    const maxV=Math.max(...prof.map(p=>p.value),0);
+    if(prof.length>1 && maxV>0){
+      // A smoothed line (0.8, like his) of width 2 with a translucent fill to the left edge.
+      const width=plotW*0.25;
+      const pts=prof.map(p=>[padL+p.value/maxV*width, y(p.price)]);
+      ctx.beginPath(); ctx.moveTo(padL,pts[0][1]); ctx.lineTo(pts[0][0],pts[0][1]);
+      splineTo(ctx,pts,top,bottom,0.8);
+      ctx.lineTo(padL,pts[pts.length-1][1]); ctx.closePath();
+      ctx.fillStyle='rgba(255,193,7,0.2)'; ctx.fill();
+      ctx.beginPath(); ctx.moveTo(pts[0][0],pts[0][1]);
+      splineTo(ctx,pts,top,bottom,0.8);
+      ctx.strokeStyle='#ffc107'; ctx.lineWidth=2; ctx.stroke();
+    }
+    // The Price Lines; lines on the same strike share one line and one label.
+    const groups=[];
+    shownLines.forEach(l=>{
+      const g=groups.find(o=>o.price===l.price);
+      if(g) g.labels.push(l.chartLabel); else groups.push({price:l.price, color:l.color, labels:[l.chartLabel]});
+    });
+    ctx.font=mobile?'bold 10px Segoe UI':'bold 11px Segoe UI'; ctx.textAlign='right'; ctx.textBaseline='bottom';
+    const labelYs=[];
+    groups.sort((a,b)=>b.price-a.price).forEach(g=>{
+      const yy=y(g.price);
+      ctx.save(); ctx.setLineDash([6,4]); ctx.strokeStyle=g.color; ctx.lineWidth=1.5;
+      ctx.beginPath(); ctx.moveTo(padL,yy); ctx.lineTo(W-padR,yy); ctx.stroke(); ctx.restore();
+      let ly=yy-2;
+      while(labelYs.some(o=>Math.abs(o-ly)<12)) ly+=12;
+      labelYs.push(ly);
+      ctx.fillStyle=g.color;
+      ctx.fillText(`${g.labels.join(' · ')} ${fmtLineValue(g.price)}`, W-padR-4, ly);
+    });
   }
   ctx.strokeStyle='rgba(255,255,255,.18)'; ctx.lineWidth=1;
   ctx.beginPath(); ctx.moveTo(padL,bottom); ctx.lineTo(W-padR,bottom); ctx.stroke();
@@ -1020,9 +1136,9 @@ function keyLevelsGex(symbol){
 }
 
 // ----- Forecast -----
-// Placeholder text: the rule-based Market Read and Scenario Ladder Matrix had before,
-// laid out as his #market-forecast is (h3 title, h4 sections, h5 sub-heads).
-// Build 9 replaces the content.
+// Rule-based English text built from the same GEX profile as the chart, laid out as his
+// #market-forecast is: an h3 title (ticker and date), h4 sections and h5 sub-heads
+// (#39). It names the levels themselves and no other price target.
 function levelDisplayPrice(value,R){
   if(value == null || !Number.isFinite(Number(value))) return '--';
   const base = fmtPrice(Number(value));
@@ -1035,64 +1151,62 @@ function nearestKeyLevel(R,side){
     .filter(level=>side==='above' ? level.price>R.spot : level.price<R.spot)
     .sort((a,b)=>side==='above' ? a.price-b.price : b.price-a.price)[0] || null;
 }
-function buildForecast(R){
-  const gross = Math.abs(R.totalCallGex)+Math.abs(R.totalPutGex)||1;
-  const gexRatio = R.totalGex/gross;
-  let bias = 'Neutral';
-  let biasClass = 'neutral';
-  if(R.regime === 'positive_gamma'){
-    bias = 'Range / Mean Reversion';
-    biasClass = 'range';
-  } else if(R.regime === 'negative_gamma'){
-    bias = 'Trend Risk / Momentum';
-    biasClass = 'trend';
-  }
-  if(Math.abs(gexRatio) < 0.04){
-    bias = 'Chop / Low Signal';
-    biasClass = 'neutral';
-  }
-  const confidence = Math.min(100,Math.round(Math.abs(gexRatio)*260 + Math.min(35,Math.abs(R.distPct)*7)));
-  const summary = biasClass === 'range'
-    ? 'Dealers are more likely to dampen moves near current levels. Favor level-to-level reads until a wall breaks.'
-    : biasClass === 'trend'
-      ? 'Dealer hedging can amplify direction. Watch breaks above resistance or below support for acceleration.'
-      : 'Current gamma signal is weak. Treat levels as reference zones and wait for confirmation.';
-  const below = nearestKeyLevel(R,'below');
-  const above = nearestKeyLevel(R,'above');
-  const negative = R.regime === 'negative_gamma';
-  return {
-    bias, confidence, summary,
-    scenarios:[
-      {label:'Below', level:below, text:below
-        ? `Below ${below.label} ${levelDisplayPrice(below.price,R)}: ${negative ? 'sell pressure can accelerate' : 'support hedge may appear'}.`
-        : 'No Key Level below the current price.'},
-      {label:'Now', level:{label:'Price', price:R.spot}, text:`At ${levelDisplayPrice(R.spot,R)}: ${bias}. Confidence ${confidence}%.`},
-      {label:'Above', level:above, text:above
-        ? `Above ${above.label} ${levelDisplayPrice(above.price,R)}: ${negative ? 'buy pressure can chase' : 'resistance hedge may cap'}.`
-        : 'No Key Level above the current price.'},
-    ],
-  };
+function pctFromSpot(price,spot){
+  const d=(price-spot)/spot*100;
+  return `${d>=0?'+':''}${d.toFixed(2)}%`;
+}
+function forecastDate(){
+  return new Intl.DateTimeFormat('en-US',{timeZone:'America/New_York',year:'numeric',month:'short',day:'numeric'}).format(new Date());
+}
+// The AG Strike: where the most hedging sits, read as the target.
+function agStrike(R){
+  return R.strikes.reduce((best,s)=>!best || s.ag>best.ag ? s : best, null);
+}
+function forecastScenarios(R){
+  const level = key=>keyLevels(R).find(l=>l.key===key);
+  const callWall = level('callWall'), putWall = level('putWall'), flip = level('flip');
+  const positive = R.totalGex>=0;
+  const p = v=>levelDisplayPrice(v,R);
+  const out = [];
+  if(callWall) out.push({head:`Above the Call Wall ${p(callWall.price)}`, text: positive
+    ? 'Price leaves the largest positive Net GEX behind. In positive gamma dealer selling tends to pull it back toward the wall; a hold above it means the range has moved up.'
+    : 'Price leaves the largest positive Net GEX behind. In negative gamma dealer buying can add to the move, so a break can run.'});
+  if(callWall && putWall) out.push({head:`Between the Put Wall ${p(putWall.price)} and the Call Wall ${p(callWall.price)}`, text: positive
+    ? 'Inside the walls positive gamma damps moves: rallies tend to stall near the Call Wall and dips tend to hold near the Put Wall.'
+    : 'Inside the walls negative gamma lets price swing further between them; expect wider moves than usual.'});
+  // Only supports still under the price; the Put Wall stays even if price already broke it.
+  const floor = [putWall && `the Put Wall ${p(putWall.price)}`, flip && flip.price<R.spot && `Zero Gamma ${p(flip.price)}`].filter(Boolean);
+  if(floor.length) out.push({head:`Below ${floor.join(' or ')}`, text:
+    'Below the support levels gamma turns more negative: dealer selling can speed a drop up, and moves tend to get larger.'});
+  return out;
 }
 function forecastHtml(R){
-  const f = buildForecast(R);
-  const regime = String(R.regime||'').replace('_',' ');
-  const scenarios = f.scenarios.map(s=>{
-    const head = s.level ? `${s.label}: ${s.level.label} ${levelDisplayPrice(s.level.price,R)}` : s.label;
-    return `<h5>${esc(head)}</h5><p>${esc(s.text)}</p>`;
-  }).join('');
+  const spot = R.spot, sym = esc(R.symbol);
+  const levels = keyLevels(R);
+  const flip = levels.find(l=>l.key==='flip');
+  const positive = R.totalGex>=0;
+  const position = flip
+    ? `${sym} at ${esc(levelDisplayPrice(spot,R))} is ${spot>=flip.price?'above':'below'} Zero Gamma ${esc(levelDisplayPrice(flip.price,R))} (${esc(pctFromSpot(flip.price,spot))} from spot).`
+    : `${sym} at ${esc(levelDisplayPrice(spot,R))}. Net GEX does not change sign across the chain, so there is no Zero Gamma.`;
+  const regime = positive
+    ? 'Gamma regime: <b class="pos">positive</b>. Dealer hedging tends to damp moves, so ranges are more likely than trends.'
+    : 'Gamma regime: <b class="neg">negative</b>. Dealer hedging tends to add to moves, so breaks can run further.';
+  const levelItems = levels.map(l=>`<li>${esc(l.label)}: <b>${esc(levelDisplayPrice(l.price,R))}</b> (${esc(pctFromSpot(l.price,spot))})</li>`).join('');
+  const target = agStrike(R);
+  const scenarios = forecastScenarios(R).map(s=>`<h5>${esc(s.head)}</h5><p>${esc(s.text)}</p>`).join('');
   return `
-    <h3>Forecast for ${esc(R.symbol)}</h3>
-    <h4>Market Read</h4>
-    <h5>${esc(f.bias)}</h5>
-    <p>${esc(f.summary)}</p>
-    <ul>
-      <li>Confidence: <b>${f.confidence}%</b></li>
-      <li>Regime: <b>${esc(regime)}</b></li>
-      <li>Net GEX: <b class="${R.totalGex>=0?'pos':'neg'}">${fmtNum(R.totalGex)}</b></li>
-      <li>PCR: <b>${R.pcr.toFixed(2)}</b></li>
-    </ul>
-    <h4>Scenario Ladder</h4>
-    ${scenarios}
+    <h3>${sym} · ${esc(forecastDate())}</h3>
+    <h4>Current position</h4>
+    <p>${position}</p>
+    <p>${regime}</p>
+    <h4>Key levels</h4>
+    <ul>${levelItems || '<li>No Key Levels for this ticker</li>'}</ul>
+    <h4>Target</h4>
+    <p>${target
+      ? `AG Strike <b>${esc(levelDisplayPrice(target.strike,R))}</b> (${esc(pctFromSpot(target.strike,spot))}): the strike with the most hedging, which price is often drawn toward.`
+      : 'No AG Strike for this ticker.'}</p>
+    <h4>Scenarios</h4>
+    ${scenarios || '<p>Not enough levels for scenarios.</p>'}
   `;
 }
 
@@ -1647,7 +1761,6 @@ const GB_VIEW = 'gex-analysis';
 const GB_TICKERS = ['SPX','NDX','SPY','QQQ'];
 screenTickers[GB_VIEW] = GB_TICKERS[0];
 const GB_WINDOW = 0.05;         // table, Gamma Total and Gamma Split: strikes within 5% of spot
-const GB_MATRIX_WINDOW = 0.01;  // the Matrix level looks within 1% of spot (#24)
 // Price Lines further than this from spot stay in the legend but off the price chart,
 // so one far strike cannot squash a day of candles into a line.
 const GB_PRICE_LINE_DISTANCE = 0.015;
@@ -1706,20 +1819,9 @@ function gexBoardStrikes(chain){
   rows.forEach(s=>{ s.pct = totalAg ? s.netGex/totalAg*100 : 0; });
   return rows.sort((a,b)=>a.strike-b.strike);
 }
-// The six Price Lines over the board's strikes. Matrix uses the Power Zone the Strike
-// Chart uses today; build 9 (#39) swaps in the new formula.
+// The six Price Lines over the board's strikes, with the GEX engine's Power Zone.
 function gexBoardPriceLines(rows, powerZone, spot){
-  const top = (list,val)=>list.reduce((best,s)=>!best || val(s)>val(best) ? s : best, null);
-  const near = rows.filter(s=>Math.abs(s.strike-spot)/spot<=GB_MATRIX_WINDOW);
-  const pz = s=>powerZone.get(s.strike)||0;
-  return [
-    ['P1',        top(rows,s=>s.netGex),  s=>s.netGex>0,  '#22b8ff'],
-    ['N1',        top(rows,s=>-s.netGex), s=>s.netGex<0,  '#ff453a'],
-    ['Call Vol',  top(rows,s=>s.callVol), s=>s.callVol>0, '#2f73ff'],
-    ['Put Vol',   top(rows,s=>s.putVol),  s=>s.putVol>0,  '#ff8a3d'],
-    ['Matrix',    top(near,pz),           s=>pz(s)>0,     '#ffc107'],
-    ['AG Strike', top(rows,s=>s.ag),      s=>s.ag>0,      '#ab7df6'],
-  ].filter(([,s,ok])=>s && ok(s)).map(([label,s,,color])=>({label, price:s.strike, color}));
+  return priceLines(rows.map(s=>({...s, powerZone:powerZone.get(s.strike)||0})), spot);
 }
 function computeGexBoard(symbol, record=gb.record, selected=gb.selected){
   const full = buildChainRealFromRecord(symbol, record);
@@ -1945,12 +2047,12 @@ function drawGexBoardPrice(B){
   const {cv, ctx, W, H, mobile} = c;
   const legend = byId('gbPriceLegend');
   const onChart = l=>Math.abs(l.price-B.spot)/B.spot<=GB_PRICE_LINE_DISTANCE;
-  if(legend) legend.innerHTML = B.lines.map(l=>`<span><span class="sq" style="background:${l.color}"></span>${esc(l.label)} ${esc(fmtStrike(l.price))}${onChart(l)?'':' (off chart)'}</span>`).join('');
+  if(legend) legend.innerHTML = B.lines.map(l=>`<span><span class="sq" style="background:${l.color}"></span>${esc(l.chartLabel)} ${esc(fmtLineValue(l.price))}${onChart(l)?'':' (off chart)'}</span>`).join('');
   // Lines on the same strike share one dashed line and one label.
   const groups = [];
   B.lines.filter(onChart).forEach(l=>{
     const g = groups.find(o=>o.price===l.price);
-    if(g) g.labels.push(l.label); else groups.push({price:l.price, color:l.color, labels:[l.label]});
+    if(g) g.labels.push(l.chartLabel); else groups.push({price:l.price, color:l.color, labels:[l.chartLabel]});
   });
   const candles = gb.candles || [];
   setGbEmpty('Price', candles.length ? '' : (gb.candlesError || `No intraday prices for ${B.symbol}`));
@@ -1991,7 +2093,7 @@ function drawGexBoardPrice(B){
     while(labelYs.some(o=>Math.abs(o-ly)<11)) ly += 11;
     labelYs.push(ly);
     ctx.fillStyle = g.color; ctx.textAlign = 'left'; ctx.textBaseline = 'bottom';
-    ctx.fillText(`${g.labels.join(' · ')} ${fmtStrike(g.price)}`, padL+4, ly);
+    ctx.fillText(`${g.labels.join(' · ')} ${fmtLineValue(g.price)}`, padL+4, ly);
   });
   ctx.fillStyle = '#c4c4c4'; ctx.textBaseline = 'top';
   const every = Math.max(1, Math.ceil(candles.length/(mobile?4:5)));
