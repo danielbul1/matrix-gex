@@ -24,7 +24,7 @@ SYMBOLS = [
     ("NVDA", "NVDA"),
     ("TSLA", "TSLA"),
 ]
-URL = "https://cdn.cboe.com/api/global/delayed_quotes/options/{}.json"
+URL = "https://cdn-api.cboe.com/api/global/delayed_quotes/options/{}.json"
 OCC = re.compile(r"([A-Z]+)(\d{6})([CP])(\d{8})")
 RANGE = 0.25  # keep strikes within +/-25% of spot
 OPEN_DATA_PATH = Path("cboe_open_data.json")
