@@ -100,3 +100,13 @@ def test_no_max_pain_anywhere():
     assert "max pain" not in page.lower()
     assert "max pain" not in script.lower()
     assert "maxpain" not in script.lower()
+
+
+def test_key_levels_chart_has_no_price_line():
+    """Only the four levels cross the chart: no current-price line or "Price" label."""
+    script = (host.MATRIX_WEB_DIR / "matrix.js").read_text(encoding="utf-8")
+    start = script.index("function drawKeyLevelsChart")
+    body = script[start:script.index("\nfunction ", start + 1)]
+    assert "R.spot" in body  # the price still sets the y range
+    assert "y(R.spot)" not in body
+    assert "Price ${" not in body
