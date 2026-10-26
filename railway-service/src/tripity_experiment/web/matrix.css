@@ -223,3 +223,28 @@
     .gb-bar .ctrl{width:100%}
     .gb-table-wrap{max-height:70vh}
   }
+
+  /* How to use GEX and Disclaimer: laid out like his guide page (h1, h2, h3, lists,
+     a table, highlighted terms), in our colours. */
+  .guide-page{max-width:980px;margin:10px auto 0;padding:34px 40px 38px;background:#202020;border:0;border-radius:12px;
+              color:#d6d6d6;font-size:15px;line-height:1.65}
+  .guide-page h1{margin:0 0 18px;text-align:center;font-size:34px;font-weight:800;
+                 background:linear-gradient(90deg,#22b8ff,#ab7df6);-webkit-background-clip:text;background-clip:text;color:transparent}
+  .guide-page h2{margin:32px 0 12px;font-size:23px;font-weight:700;
+                 background:linear-gradient(90deg,#22b8ff,#ab7df6);-webkit-background-clip:text;background-clip:text;color:transparent}
+  .guide-page h3{margin:22px 0 8px;font-size:17px;font-weight:700;color:#7ec8ff}
+  .guide-page p{margin:0 0 12px}
+  .guide-page ul{margin:8px 0 14px;padding-left:22px}
+  .guide-page li{margin-bottom:6px}
+  .guide-page strong{color:#fff;font-weight:700}
+  .guide-table-wrap{overflow-x:auto;margin:14px 0 6px}
+  .guide-page table{min-width:640px;font-size:14px}
+  .guide-page th,.guide-page td{text-align:left;padding:10px 12px;border-bottom:1px solid #3a3a3a;vertical-align:top}
+  .guide-page th{color:#7ec8ff;font-size:12px}
+  .disclaimer-page{max-width:820px}
+  .disclaimer-page h1{font-size:30px}
+  @media(max-width:900px){
+    .guide-page{padding:20px 14px 24px;font-size:14px}
+    .guide-page h1{font-size:26px}
+    .guide-page h2{font-size:20px}
+  }

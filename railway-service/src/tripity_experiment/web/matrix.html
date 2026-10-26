@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Matrix</title>
-<link rel="stylesheet" href="/matrix/matrix.css?v=20261026-gex-board">
+<link rel="stylesheet" href="/matrix/matrix.css?v=20261026-guide">
 </head>
 <body>
 <header id="sidebar">
@@ -268,14 +268,104 @@
   </section>
 
   <section class="app-view" id="view-how-to-use-gex" data-title="How to use GEX">
-    <div class="coming-soon"><h2>How to use GEX</h2><p>Coming soon.</p></div>
+    <!-- Laid out like his guide page (h1, h2, h3, lists, a table, highlighted terms).
+         The words are ours; his text is behind his login (map #21, #30). -->
+    <article class="card guide-page">
+      <h1>How to use GEX</h1>
+      <p>Matrix shows where options dealers are likely to buy or sell to stay hedged, strike by strike. This page explains what the numbers mean, what each screen shows, and how traders commonly read them.</p>
+
+      <h2>What GEX is</h2>
+      <p>Market makers sell most of the options that traders buy. To stay neutral they hedge with the underlying, and how much they must buy or sell when price moves depends on the options' <strong>gamma</strong>.</p>
+      <p><strong>GEX</strong> (gamma exposure) estimates that hedging in dollars at each strike: gamma × open interest × 100 × spot² × 1%. Matrix assumes dealers are long the calls and short the puts, so calls count as positive and puts as negative.</p>
+      <h3>Positive and negative gamma</h3>
+      <ul>
+        <li><strong>Positive gamma</strong> (Net GEX above zero): dealers sell into rallies and buy into dips. Moves tend to be damped and price tends to stay in a range.</li>
+        <li><strong>Negative gamma</strong> (Net GEX below zero): dealers sell into drops and buy into rallies. Moves tend to be faster and can run further.</li>
+      </ul>
+      <p>GEX is built from open interest known at the open, so it describes how the day starts. Volume during the day shows where new positions are being added.</p>
+
+      <h2>The screens</h2>
+      <h3>Strike Chart (home)</h3>
+      <p>One ticker and one expiration. Type a ticker and press <strong>Search</strong> or Enter, then pick a date. The buttons turn layers on and off: <strong>Net GEX</strong> as bars, and <strong>AG</strong>, OI, volume and <strong>Power Zone</strong> as areas. Beside it are the day's 1-minute candles and a simplified price line. They follow the ticker, not the expiration.</p>
+      <h3>OI Volume</h3>
+      <p>Open interest and today's volume per strike for one expiration. <strong>Volume Spread</strong> is call volume minus put volume: blue where calls traded more, red where puts did. The price chart marks the strikes with the most call OI, put OI, call volume and put volume.</p>
+      <h3>GEX Analysis</h3>
+      <p>The board for SPX, NDX, SPY or QQQ over several expirations at once. Pick a ticker button, then click expiration buttons, or use <strong>Select all</strong> and <strong>Clear all</strong>. It shows:</p>
+      <ul>
+        <li>A table of every strike within 5% of spot. Click a column header to sort.</li>
+        <li><strong>Gamma Total</strong>: Net GEX per strike.</li>
+        <li><strong>Gamma Split</strong>: the same, broken down by expiration.</li>
+        <li>A price chart with the Price Lines.</li>
+      </ul>
+      <p>The ⛶ button opens a chart full screen. ✕ or Esc closes it.</p>
+      <h3>Key Levels</h3>
+      <p>The four Key Levels of a ticker, drawn on five days of price, from every open expiration. Under the chart, the <strong>Forecast</strong> reads the same data as text.</p>
+      <h3>P/C Ratio</h3>
+      <p>Puts over calls for SPX, NDX, SPY and QQQ, across all expirations, by open interest and by volume. A ratio above 1 means more puts than calls.</p>
+
+      <h2>What the numbers mean</h2>
+      <div class="guide-table-wrap">
+        <table>
+          <thead><tr><th>Term</th><th>What it is</th><th>How it is read</th></tr></thead>
+          <tbody>
+            <tr><td><strong>Net GEX</strong></td><td>Call GEX plus put GEX at a strike (puts negative)</td><td>Large positive bars tend to hold price; large negative bars tend to speed it up</td></tr>
+            <tr><td><strong>AG</strong></td><td>Call GEX and put GEX both counted as positive</td><td>Where the most hedging sits, whichever side it comes from</td></tr>
+            <tr><td><strong>Call OI / Put OI</strong></td><td>Open contracts at a strike</td><td>Where positions are held</td></tr>
+            <tr><td><strong>Call Vol / Put Vol</strong></td><td>Contracts traded today</td><td>Where new activity is</td></tr>
+            <tr><td><strong>Power Zone</strong></td><td>AG plus a share of today's volume, near spot only</td><td>The zone where hedging is heaviest right now</td></tr>
+            <tr><td><strong>Volume Spread</strong></td><td>Call volume minus put volume</td><td>Which side is more active at each strike today</td></tr>
+            <tr><td><strong>Notional Delta</strong></td><td>|Delta| × OI × 100 × spot, calls and puts both positive</td><td>How much underlying the hedges at a strike stand for</td></tr>
+            <tr><td><strong>Zero Gamma</strong></td><td>Where Net GEX, summed from the lowest strike up, changes sign</td><td>The line between the positive- and negative-gamma sides of the chain</td></tr>
+            <tr><td><strong>Max Gamma</strong></td><td>The strike with the largest Net GEX, either sign</td><td>The strongest single strike</td></tr>
+            <tr><td><strong>Call Wall / Put Wall</strong></td><td>The largest positive / most negative Net GEX</td><td>Often act as resistance / support</td></tr>
+            <tr><td><strong>P1 / N1</strong></td><td>Price Lines at the largest positive / most negative Net GEX</td><td>Usually the same strikes as the walls, drawn on price</td></tr>
+            <tr><td><strong>Matrix</strong></td><td>The strike with the highest Power Zone</td><td>The level price is drawn to</td></tr>
+            <tr><td><strong>AG Strike</strong></td><td>The strike with the largest AG</td><td>Often acts as a target</td></tr>
+            <tr><td><strong>P/C Ratio</strong></td><td>Puts over calls, by OI or by volume</td><td>Above 1 leans to puts, below 1 to calls</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2>Using it when trading</h2>
+      <h3>Direction for the day</h3>
+      <ul>
+        <li>Start with the regime: is the total Net GEX positive or negative, and which side of <strong>Zero Gamma</strong> is spot on?</li>
+        <li>In positive gamma, expect ranges: fades toward the Call Wall and Put Wall tend to work better than breakouts.</li>
+        <li>In negative gamma, expect larger moves: a break of a wall can keep going.</li>
+      </ul>
+      <h3>Supply and demand zones</h3>
+      <ul>
+        <li>Large positive Net GEX and large AG strikes above price often act as supply (resistance); below price, as demand (support).</li>
+        <li>Mark them on your own chart and watch how price reacts when it reaches them.</li>
+        <li>Check OI Volume to see whether today's volume is adding to a level or moving away from it.</li>
+      </ul>
+      <h3>0DTE</h3>
+      <ul>
+        <li>Pick today's expiration on the Strike Chart. Same-day options carry the most gamma, so their levels matter most during the session.</li>
+        <li>Turn on <strong>Power Zone</strong> and watch the <strong>Matrix</strong> level: price often gravitates toward it into the afternoon.</li>
+        <li>Data reloads only when you press Search or a button, so refresh before you act.</li>
+      </ul>
+
+      <h2>Limits</h2>
+      <ul>
+        <li>Matrix assumes dealers are long calls and short puts. Real positioning can differ.</li>
+        <li>Open interest updates once a day, and prices may be delayed.</li>
+        <li>Levels describe where hedging is likely, not where price must go. Use them with your own analysis and risk management.</li>
+      </ul>
+    </article>
   </section>
 
   <section class="app-view" id="view-disclaimer" data-title="Disclaimer">
-    <div class="coming-soon"><h2>Disclaimer</h2><p>Coming soon.</p></div>
+    <article class="card guide-page disclaimer-page">
+      <h1>Disclaimer</h1>
+      <p>Information on this site is provided for educational purposes only. It is not investment, financial, legal or tax advice, and it is not a recommendation to buy or sell any security or option.</p>
+      <p>Market data may be delayed, incomplete or wrong. Power Zone, the Matrix level, the Price Lines, the Key Levels and the Forecast are our own estimates built from that data, not facts about what dealers hold.</p>
+      <p>Trading options involves substantial risk and is not suitable for everyone. You can lose more than you invest. Past behaviour of any level or signal does not predict future results.</p>
+      <p>You are solely responsible for your trading decisions. We accept no liability for any loss arising from use of this site.</p>
+    </article>
   </section>
 </main>
 
-<script src="/matrix/matrix.js?v=20261026-gex-board"></script>
+<script src="/matrix/matrix.js?v=20261026-guide"></script>
 </body>
 </html>
