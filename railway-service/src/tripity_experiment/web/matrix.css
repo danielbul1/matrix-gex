@@ -40,15 +40,6 @@
   .coming-soon h2{margin:0;color:#e2e2e2;font-size:26px}
   .coming-soon p{margin:0;font-size:16px}
   .app-view > .coming-soon:first-child{margin-top:10px;min-height:calc(100vh - 32px)}
-  .expiry-picker{width:min(720px,calc(100vw - 420px));min-width:360px;max-height:88px;display:flex;gap:7px;flex-wrap:wrap;
-                 overflow-y:auto;padding:7px;background:#292929;border:1px solid #3b3b3b;border-radius:6px;scrollbar-width:thin}
-  .expiry-option{display:inline-flex;align-items:center;gap:6px;white-space:nowrap;padding:5px 8px;
-                 background:#353535;border:1px solid #494949;border-radius:5px;font-size:12px;cursor:pointer}
-  .expiry-option:has(input:checked){border-color:var(--accent);background:rgba(31,169,244,.16);color:#fff}
-  .expiry-option input{width:14px;min-width:14px;height:14px;margin:0;padding:0;accent-color:var(--accent)}
-  .expiry-empty{padding:5px 8px;color:var(--muted);font-size:12px}
-  .expiry-quick{display:flex;gap:3px;margin:0 0 6px}
-  .expiry-quick .range-btn{min-width:0;padding:5px 9px;font-size:11px}
   select,input{background:#3a3a3a;color:var(--text);border:1px solid #262626;
                border-radius:5px;padding:8px 10px;font-size:14px;min-width:112px;max-width:100%}
   button{background:var(--accent);color:white;border:none;border-radius:5px;
@@ -97,9 +88,54 @@
   .chart-tooltip .neg{color:#ff3b2f;font-weight:800}
   .chart-crosshair-x{position:absolute;top:0;bottom:0;display:none;border-left:1px dashed rgba(255,255,255,.55);
                      z-index:4;pointer-events:none}
+  #expirationSelect{min-width:170px}
+  /* Price charts under the strike chart: side by side, stacked on narrow screens */
+  .price-charts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:10px}
+  .price-card.chartcard{min-height:0;padding:22px 18px 16px}
+  .price-card .symlabel{margin-left:56px;font-size:16px}
+  .price-card .chartlegend{margin-right:18px}
+  .price-empty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+               color:var(--muted);font-size:14px;font-weight:700;pointer-events:none}
+  .price-empty:empty{display:none}
   .watermark{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
              font-size:72px;font-weight:800;color:rgba(255,255,255,.055);
              pointer-events:none;letter-spacing:2px;user-select:none}
+
+  /* Key Levels: price chart with the four levels, and the Forecast under it */
+  .kl-card{min-height:auto}
+  .kl-legend{flex-wrap:wrap;justify-content:flex-end;gap:12px}
+  .kl-legend span{display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+  .kl-legend i{display:inline-block;width:16px;height:0;border-top:2px solid}
+  .kl-legend i.dashed{border-top-style:dashed}
+  .forecast-card{margin-top:10px;padding:26px 34px 30px;background:#202020;border:0;border-radius:8px;
+                 color:#d6d6d6;font-size:15px;line-height:1.6}
+  .forecast-card:empty{display:none}
+  .forecast-card h3{margin:0 0 14px;font-size:24px;font-weight:800;
+                    background:linear-gradient(90deg,#22b8ff,#ab7df6);-webkit-background-clip:text;background-clip:text;color:transparent}
+  .forecast-card h4{margin:22px 0 8px;font-size:18px;font-weight:800;color:#fff}
+  .forecast-card h5{margin:14px 0 4px;font-size:15px;font-weight:800;
+                    background:linear-gradient(90deg,#ffc107,#ff8a3d);-webkit-background-clip:text;background-clip:text;color:transparent}
+  .forecast-card p{margin:0 0 8px}
+  .forecast-card ul{margin:0 0 8px;padding-left:20px}
+  .forecast-card .pos{color:#22aaf2;font-weight:800}
+  .forecast-card .neg{color:#ff3b2f;font-weight:800}
+  /* P/C Ratio screen */
+  .pc-card{margin-top:10px;background:#202020;border:0;padding:28px 30px}
+  .pc-title{margin:0 0 4px;color:#e2e2e2;font-size:24px}
+  .pc-note{margin:0 0 16px;color:var(--muted);font-size:13px}
+  .pc-table-wrap{overflow-x:auto}
+  .pc-table{font-size:14px;min-width:640px}
+  .pc-table th{font-size:12px;padding:10px 8px;border-bottom:1px solid #3a3a3a}
+  .pc-table td{padding:11px 8px}
+  .pc-table td.pc-ticker{font-weight:800;color:#f0f0f0}
+  .pc-table td.pc-ratio{font-weight:800}
+  .pc-table td.pc-missing{color:var(--muted)}
+  .pc-status{margin:12px 0 0;min-height:16px;color:#9da7af;font-size:12px;font-weight:700}
+  .pc-status.error{color:#ff8e86}
+  .pc-status:empty{display:none}
+  @media(max-width:1200px){
+    .price-charts{grid-template-columns:minmax(0,1fr)}
+  }
   @media(max-width:900px){
     body{overflow-x:hidden}
     header{position:sticky;top:0;width:auto;padding:12px 16px;border-right:0;border-bottom:1px solid #252525;z-index:30}
@@ -115,7 +151,9 @@
     .ticker-form label{flex:1;min-width:0}
     .ticker-form input{width:100%}
     .ctrl{width:100%;min-width:0}
-    .expiry-picker{width:100%;min-width:0;max-height:112px}
+    .price-charts{grid-template-columns:minmax(0,1fr);gap:8px;margin-top:8px}
+    .price-card.chartcard{padding:12px 6px 10px}
+    .price-card .symlabel{margin-left:0}
     select,input{width:100%;min-width:0;font-size:16px;padding:9px 8px}
     main{margin-left:0;padding:0 8px 12px}
     .coming-soon,.app-view > .coming-soon:first-child{min-height:50vh}
@@ -127,8 +165,18 @@
     .symlabel{margin-left:0;font-size:16px}
     .chartlegend{margin-right:0;font-size:12px}
     .watermark{font-size:44px}
+    .kl-legend{justify-content:flex-start;gap:8px}
+    .forecast-card{padding:18px 14px 20px;font-size:14px}
+    .pc-card{padding:16px 10px}
   }
   @media(max-width:520px){
     .chartcard{padding-left:4px;padding-right:4px}
     .watermark{font-size:34px}
   }
+
+  /* OI Volume */
+  .pricecard{min-height:auto;margin-top:10px}
+  .price-empty{position:absolute;inset:0;display:none;align-items:center;justify-content:center;
+               color:var(--muted);font-size:15px;font-weight:700;text-align:center;padding:0 16px}
+  .price-empty.show{display:flex}
+  #oivExpiry{min-width:170px}

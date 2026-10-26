@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Matrix</title>
-<link rel="stylesheet" href="/matrix/matrix.css?v=20261026-shell">
+<link rel="stylesheet" href="/matrix/matrix.css?v=20261026-oiv-pc-kl-strike">
 </head>
 <body>
 <header id="sidebar">
@@ -35,13 +35,8 @@
         <span class="ticker-status" aria-live="polite"></span>
       </form>
       <div class="ctrl">
-        <label>Expirations</label>
-        <div class="expiry-quick" role="group" aria-label="Quick expiration selection">
-          <button type="button" class="range-btn expiry-quick-btn" data-expquick="0dte">0DTE</button>
-          <button type="button" class="range-btn expiry-quick-btn" data-expquick="week">Week</button>
-          <button type="button" class="range-btn expiry-quick-btn" data-expquick="all">All</button>
-        </div>
-        <div id="expirationPicker" class="expiry-picker" aria-label="Choose expiration dates"></div>
+        <label for="expirationSelect">Expiration</label>
+        <select id="expirationSelect" aria-label="Expiration date"></select>
       </div>
     </div>
 
@@ -51,8 +46,8 @@
       <button class="pbtn"        data-metric="ag"       style="--c:#ab7df6">AG</button>
       <button class="pbtn"        data-metric="call_oi"  style="--c:#26c281">Call OI</button>
       <button class="pbtn"        data-metric="put_oi"   style="--c:#ef5350">Put OI</button>
-      <button class="pbtn"        data-metric="call_vol" style="--c:#2f73ff">Call Volume</button>
-      <button class="pbtn"        data-metric="put_vol"  style="--c:#ff8a3d">Put Volume</button>
+      <button class="pbtn"        data-metric="call_vol" style="--c:#2f73ff">Call Vol</button>
+      <button class="pbtn"        data-metric="put_vol"  style="--c:#ff8a3d">Put Vol</button>
       <button class="pbtn"        data-metric="power"    style="--c:#ffc107">Power Zone</button>
     </div>
 
@@ -68,6 +63,35 @@
         <canvas id="gexChart" height="540"></canvas>
       </div>
     </div>
+
+    <div class="price-charts">
+      <div class="card chartcard price-card">
+        <div class="charttop">
+          <span class="symlabel" id="priceSymLabel"></span>
+          <span class="chartlegend">Price</span>
+        </div>
+        <div class="chartwrap">
+          <div class="watermark">Matrix</div>
+          <div class="chart-crosshair-x" id="priceCrosshairX"></div>
+          <div class="chart-tooltip" id="priceTooltip"></div>
+          <div class="price-empty" id="priceEmpty"></div>
+          <canvas id="priceChart" height="380"></canvas>
+        </div>
+      </div>
+      <div class="card chartcard price-card">
+        <div class="charttop">
+          <span class="symlabel" id="priceSimpleSymLabel"></span>
+          <span class="chartlegend">Simplified price</span>
+        </div>
+        <div class="chartwrap">
+          <div class="watermark">Matrix</div>
+          <div class="chart-crosshair-x" id="priceSimpleCrosshairX"></div>
+          <div class="chart-tooltip" id="priceSimpleTooltip"></div>
+          <div class="price-empty" id="priceSimpleEmpty"></div>
+          <canvas id="priceSimpleChart" height="380"></canvas>
+        </div>
+      </div>
+    </div>
   </section>
 
   <section class="app-view" id="view-oi-volume" data-title="OI Volume">
@@ -79,8 +103,45 @@
         <button type="submit">Search</button>
         <span class="ticker-status" aria-live="polite"></span>
       </form>
+      <div class="ctrl">
+        <label for="oivExpiry">Expiration</label>
+        <select id="oivExpiry" aria-label="Expiration date"></select>
+      </div>
     </div>
-    <div class="coming-soon"><h2>OI Volume</h2><p>Coming soon.</p></div>
+
+    <div class="params" id="oivParams">
+      <span class="plabel">Parameters:</span>
+      <button class="pbtn active" data-oiv-metric="volume_spread" style="--c:#22b8ff">Volume Spread</button>
+      <button class="pbtn"        data-oiv-metric="call_oi"       style="--c:#26c281">Call OI</button>
+      <button class="pbtn"        data-oiv-metric="put_oi"        style="--c:#ef5350">Put OI</button>
+      <button class="pbtn"        data-oiv-metric="call_vol"      style="--c:#2f73ff">Call Vol</button>
+      <button class="pbtn"        data-oiv-metric="put_vol"       style="--c:#ff8a3d">Put Vol</button>
+    </div>
+
+    <div class="card chartcard">
+      <div class="charttop">
+        <span class="symlabel" id="oivSymLabel"></span>
+        <span class="chartlegend" id="oivChartLegend"></span>
+      </div>
+      <div class="chartwrap">
+        <div class="watermark">Matrix</div>
+        <div class="chart-crosshair-x" id="oivCrosshairX"></div>
+        <div class="chart-tooltip" id="oivTooltip"></div>
+        <canvas id="oiVolumeChart" height="540"></canvas>
+      </div>
+    </div>
+
+    <div class="card chartcard pricecard">
+      <div class="charttop">
+        <span class="symlabel" id="oivPriceLabel"></span>
+        <span class="chartlegend" id="oivPriceLegend"></span>
+      </div>
+      <div class="chartwrap">
+        <div class="watermark">Matrix</div>
+        <div class="price-empty" id="oivPriceEmpty"></div>
+        <canvas id="oiVolumePriceChart" height="420"></canvas>
+      </div>
+    </div>
   </section>
 
   <section class="app-view" id="view-gex-analysis" data-title="GEX Analysis">
@@ -106,11 +167,46 @@
         <span class="ticker-status" aria-live="polite"></span>
       </form>
     </div>
-    <div class="coming-soon"><h2>Key Levels</h2><p>Coming soon.</p></div>
+
+    <div class="card chartcard kl-card">
+      <div class="charttop">
+        <span class="symlabel" id="klSymLabel"></span>
+        <span class="chartlegend kl-legend" id="klLegend"></span>
+      </div>
+      <div class="chartwrap">
+        <div class="watermark">Matrix</div>
+        <div class="chart-crosshair-x" id="klCrosshairX"></div>
+        <div class="chart-tooltip" id="klTooltip"></div>
+        <canvas id="keyLevelsChart" height="560"></canvas>
+      </div>
+    </div>
+
+    <div class="card forecast-card" id="forecast" aria-live="polite"></div>
   </section>
 
   <section class="app-view" id="view-options-summary" data-title="P/C Ratio">
-    <div class="coming-soon"><h2>P/C Ratio</h2><p>Coming soon.</p></div>
+    <div class="card pc-card">
+      <h2 class="pc-title">P/C Ratio</h2>
+      <p class="pc-note">Put / call across all expirations, by open interest and by volume.</p>
+      <div class="pc-table-wrap">
+        <table class="pc-table" id="pcTable">
+          <thead>
+            <tr>
+              <th scope="col">Ticker</th>
+              <th scope="col">Spot</th>
+              <th scope="col">P/C OI</th>
+              <th scope="col">P/C Vol</th>
+              <th scope="col">Call OI</th>
+              <th scope="col">Put OI</th>
+              <th scope="col">Call Vol</th>
+              <th scope="col">Put Vol</th>
+            </tr>
+          </thead>
+          <tbody id="pcTableBody"></tbody>
+        </table>
+      </div>
+      <p class="pc-status" id="pcStatus" aria-live="polite"></p>
+    </div>
   </section>
 
   <section class="app-view" id="view-how-to-use-gex" data-title="How to use GEX">
@@ -122,6 +218,6 @@
   </section>
 </main>
 
-<script src="/matrix/matrix.js?v=20261026-shell"></script>
+<script src="/matrix/matrix.js?v=20261026-oiv-pc-kl-strike"></script>
 </body>
 </html>

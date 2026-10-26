@@ -56,8 +56,7 @@ MATRIX_LSE_PRICE_SYMBOLS = {
 MATRIX_LSE_TIMEFRAMES = {"1m": "1m", "5m": "5m", "15m": "15m", "30m": "30m", "60m": "1h"}
 MATRIX_LSE_RANGE_DAYS = {"1d": 4, "5d": 8, "1mo": 32}
 MATRIX_LSE_CANDLE_MAX_AGE_SECONDS = 4 * 24 * 3600  # spans a weekend plus a holiday
-MATRIX_CANDLE_SYMBOLS = set(MATRIX_LSE_PRICE_SYMBOLS)
-MATRIX_YAHOO_SYMBOLS = {"SPX": "^GSPC", "NDX": "^NDX"}
+MATRIX_YAHOO_SYMBOLS = {"SPX": "^GSPC", "NDX": "^NDX", "VIX": "^VIX"}
 MATRIX_CANDLE_INTERVALS = {"1m", "2m", "5m", "15m", "30m", "60m"}
 MATRIX_CBOE_SYMBOLS = (
     ("_NDX", "NDX"),
@@ -78,6 +77,7 @@ MATRIX_DYNAMIC_CHAIN_CACHE_MAX = 64
 MATRIX_DYNAMIC_CHAIN_FETCHES_PER_MINUTE = 12
 MATRIX_MARKET_DATA_CACHE_SECONDS = 300.0
 MATRIX_CANDLES_CACHE_SECONDS = 50.0
+MATRIX_CANDLES_CACHE_MAX = 256  # any ticker can be asked for, so keep the cache bounded
 _MATRIX_PACKAGED_WEB_DIR = Path(__file__).with_name("web")
 MATRIX_WEB_DIR = (
     _MATRIX_PACKAGED_WEB_DIR
@@ -345,9 +345,9 @@ async def _fetch_matrix_candles_uncached(
     interval: str = "1m",
     range_: str = "1d",
 ) -> dict[str, Any]:
-    symbol = symbol.upper()
-    if symbol not in MATRIX_CANDLE_SYMBOLS:
-        raise ValueError("Unsupported candle symbol")
+    # Key Levels draws price for any ticker it can search, so any valid
+    # symbol is allowed; tickers LSE does not carry come from Yahoo.
+    symbol = _matrix_dynamic_symbol(symbol)
     if interval not in MATRIX_CANDLE_INTERVALS:
         raise ValueError("Unsupported candle interval")
     api_key = _matrix_lse_api_key()
@@ -459,6 +459,8 @@ async def _fetch_matrix_candles(
         if cached is not None and now - cached[0] < MATRIX_CANDLES_CACHE_SECONDS:
             return cached[1]
         data = await _fetch_matrix_candles_uncached(symbol=symbol, interval=interval, range_=range_)
+        if len(_matrix_candles_cache) >= MATRIX_CANDLES_CACHE_MAX:
+            _matrix_candles_cache.clear()
         _matrix_candles_cache[key] = (time.time(), data)
         return data
 
@@ -490,6 +492,9 @@ def _compact_matrix_options_payload(
     if not isinstance(options, list):
         raise ValueError(f"CBOE options response did not include options for {display_symbol}")
     compact_options: list[dict[str, Any]] = []
+    # P/C Ratio screen: call/put OI and volume over every live expiry and every
+    # strike, counted before the strike-range and zero-OI filters below.
+    totals = {"call_oi": 0, "put_oi": 0, "call_vol": 0, "put_vol": 0}
     for option in options:
         if not isinstance(option, dict):
             continue
@@ -499,6 +504,9 @@ def _compact_matrix_options_payload(
         root, expiration, call_put, strike = parsed
         if expiration < today:
             continue
+        side = "call" if call_put == "C" else "put"
+        totals[f"{side}_oi"] += max(0, int(option.get("open_interest") or 0))
+        totals[f"{side}_vol"] += max(0, int(option.get("volume") or 0))
         if spot and abs(strike - spot) / spot > MATRIX_STRIKE_RANGE:
             continue
         open_interest = option.get("open_interest") or 0
@@ -521,6 +529,7 @@ def _compact_matrix_options_payload(
         "asof": data.get("last_trade_time") or today.isoformat(),
         "mult": 100,
         "opts": compact_options,
+        "totals": totals,
     }
 
 
@@ -1284,6 +1293,13 @@ class PublicCompanyApp:
                     *self._matrix_cors_headers(scope),
                     (b"cache-control", b"public, max-age=15"),
                 ],
+            )
+        except ValueError as exc:
+            await self._json(
+                send,
+                {"ok": False, "detail": str(exc)},
+                status=400,
+                headers=self._matrix_cors_headers(scope),
             )
         except Exception as exc:  # noqa: BLE001
             await self._json(
