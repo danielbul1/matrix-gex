@@ -23,10 +23,9 @@ def snapshot(symbol, rec):
             continue
         row = strikes.setdefault(strike, [strike, 0.0, 0.0, 0.0, 0.0])
         oi = float(option.get("oi") or 0)
-        # Vendor gamma is frequently 0 even when IV is valid; effective_gamma
-        # falls back to Black-Scholes from the row's IV and the spot.
-        gamma = matrix_gex.effective_gamma(option, spot, now_ms)
-        delta = float(option.get("d") or 0)
+        # Black-Scholes from the row's IV at this spot; vendor greeks only
+        # when the row has no IV (#68).
+        gamma, delta = matrix_gex.effective_greeks(option, spot, now_ms)
         gex = matrix_gex.gex_value(gamma, oi, mult, spot)
         dex = matrix_gex.dex_value(delta, oi, mult, spot)
         if option.get("t") == "C":

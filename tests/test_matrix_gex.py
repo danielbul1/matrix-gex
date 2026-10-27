@@ -84,13 +84,13 @@ def test_chex_is_per_trading_day_and_put_single_negation():
     assert calls["call_chex"] == pytest.approx(charm * 1000 * 100 * S / 252, rel=1e-9)
 
 
-# ---------- Zero-gamma flip (smooth method) ----------
+# ---------- Gamma Flip (smooth method, #69) ----------
 def test_flip_within_expected_interval():
     # Calls concentrated at 95, puts at 105: net gamma flips sign in between.
     chain = [_row("C", 95, oi=50000), _row("P", 105, oi=50000)]
     levels = [90 + i * 0.5 for i in range(41)]  # 90..110
     profile = mg.gamma_profile(chain, levels, 100, VALUATION)
-    flip = mg.zero_gamma_flip(levels, profile)
+    flip = mg.flip_from_profile(levels, profile, S)
     assert flip is not None
     assert 95 < flip < 105
     # Interpolation sanity: profile values straddle zero around the flip.
@@ -99,11 +99,59 @@ def test_flip_within_expected_interval():
     assert profile[levels.index(below[-1])] * profile[levels.index(above[0])] < 0
 
 
-def test_flip_none_when_no_sign_change():
+def test_flip_from_profile_none_and_linear_root():
     levels = [90, 100, 110]
-    assert mg.zero_gamma_flip(levels, [1.0, 2.0, 3.0]) is None
+    assert mg.flip_from_profile(levels, [1.0, 2.0, 3.0], 100) is None
     # Sign change between 90 (profile +2) and 100 (profile -4): linear root.
-    assert mg.zero_gamma_flip(levels, [2.0, -4.0, 1.0]) == pytest.approx(90 + 10 * 2 / 6)
+    assert mg.flip_from_profile(levels, [2.0, -4.0, -1.0], 100) == pytest.approx(90 + 10 * 2 / 6)
+
+
+def test_flip_from_profile_takes_the_crossing_nearest_spot_not_the_first():
+    # Crossings near 95 and near 145: spot at 140 must get the upper one
+    # (the old rule returned the first from the bottom).
+    levels = [90, 100, 140, 150]
+    profile = [1.0, -1.0, -1.0, 1.0]
+    assert mg.flip_from_profile(levels, profile, 140) == pytest.approx(145)
+    assert mg.flip_from_profile(levels, profile, 96) == pytest.approx(95)
+
+
+def test_flip_from_profile_threshold_skips_negligible_values():
+    # A tail value that is only underflow noise (-1e-12) must not create a crossing.
+    levels = [80, 90, 100, 110]
+    assert mg.flip_from_profile(levels, [1e-12, -1e-12, 5.0, 6.0], 100, threshold=1e-9) is None
+    # A run of negligible values between two signs: the flip is the run's middle.
+    assert mg.flip_from_profile(levels, [3.0, 0.0, 0.0, -3.0], 100, threshold=1e-9) == pytest.approx(95)
+
+
+def _two_flip_chain():
+    # Puts at 90, calls at 100, puts at 110: the profile is - / + / - around 100.
+    return [_row("P", 90, oi=40000), _row("C", 100, oi=60000), _row("P", 110, oi=40000)]
+
+
+def test_gamma_flip_reports_every_crossing_and_picks_the_nearest():
+    chain = _two_flip_chain()
+    flip = mg.gamma_flip(chain, 103.0, 100, VALUATION)
+    assert flip is not None
+    assert len(flip.crossings) == 2
+    low, high = sorted(flip.crossings)
+    assert 90 < low < 100 < high < 110
+    assert flip.level == high  # spot 103 sits nearer the upper crossing
+    assert mg.gamma_flip(chain, 97.0, 100, VALUATION).level == pytest.approx(low, abs=1e-4)
+
+
+def test_gamma_flip_matches_a_dense_grid_oracle():
+    # Oracle: a 4001-point profile over the same range, linear root nearest spot.
+    chain = _two_flip_chain()
+    spot = 103.0
+    levels = [spot * (0.9 + 0.2 * j / 4000) for j in range(4001)]
+    oracle = mg.flip_from_profile(levels, mg.gamma_profile(chain, levels, 100, VALUATION), spot)
+    assert mg.gamma_flip(chain, spot, 100, VALUATION).level == pytest.approx(oracle, abs=1e-3)
+
+
+def test_gamma_flip_none_without_a_sign_change_or_rows():
+    assert mg.gamma_flip([_row("C", 100), _row("C", 105)], S, 100, VALUATION) is None
+    assert mg.gamma_flip([_row("C", 100, iv=0.0)], S, 100, VALUATION) is None
+    assert mg.gamma_flip([], S, 100, VALUATION) is None
 
 
 # ---------- years_to_expiry ----------
@@ -153,27 +201,42 @@ def test_norm_iv():
 
 
 # ---------- effective_gamma ----------
-def test_effective_gamma_vendor_passthrough_and_bs_fallback():
-    row = _row("C", 100, g=0.05)
-    assert mg.effective_gamma(row, S, VALUATION) == 0.05
-    fallback = mg.effective_gamma(_row("C", 100, g=0.0), S, VALUATION)
+def test_effective_greeks_use_black_scholes_whenever_the_row_has_iv():
+    # Vendor greeks computed at another underlying are ignored when IV exists (#68).
     T_row = mg.years_to_expiry("2026-08-21", "SPY", VALUATION)
-    assert fallback > 0
-    assert fallback == pytest.approx(mg.bs_gamma(S, 100, T_row, 0.2), rel=1e-12)
-    # Missing/invalid IV -> default IV 0.2.
-    assert mg.effective_gamma(_row("C", 100, g=0.0, iv=0.0), S, VALUATION) == pytest.approx(
-        fallback, rel=1e-12)
+    gamma, delta = mg.effective_greeks(_row("C", 100, iv=0.25, g=0.05, d=0.9), S, VALUATION)
+    assert gamma == pytest.approx(mg.bs_gamma(S, 100, T_row, 0.25), rel=1e-12)
+    assert delta == pytest.approx(mg.bs_delta(S, 100, T_row, 0.25, is_call=True), rel=1e-12)
+
+
+def test_effective_greeks_vendor_only_without_iv_then_default_iv():
+    assert mg.effective_greeks(_row("P", 100, iv=0.0, g=0.05, d=-0.4), S, VALUATION) == (0.05, -0.4)
+    T_row = mg.years_to_expiry("2026-08-21", "SPY", VALUATION)
+    gamma, delta = mg.effective_greeks(_row("P", 100, iv=0.0), S, VALUATION)
+    assert gamma == pytest.approx(mg.bs_gamma(S, 100, T_row, mg.DEFAULT_IV), rel=1e-12)
+    assert delta == pytest.approx(mg.bs_delta(S, 100, T_row, mg.DEFAULT_IV, is_call=False), rel=1e-12)
+
+
+def test_naive_gex_ignores_vendor_gamma_from_another_spot():
+    # Vendor gamma that peaks above spot (as Cboe's did on 2026-10-26) must not move
+    # Naive GEX: the strike sum agrees with the repriced profile at spot.
+    chain = [_row("C", 105, g=0.09), _row("P", 95, g=0.001), _row("C", 100, g=0.06), _row("P", 100, g=0.02)]
+    rows = mg.aggregate_strikes(chain, S, 100, VALUATION, min_oi=0)
+    total = sum(row["net_gex"] for row in rows)
+    assert total == pytest.approx(mg.gamma_profile(chain, [S], 100, VALUATION)[0], rel=1e-12)
 
 
 # ---------- walls / expected move ----------
 def test_walls_and_expected_move():
-    # Vendor gamma pinned at 0.01 so the wall tracks OI, not BS fallback shape.
-    chain = [_row("C", 110, oi=5000, g=0.01), _row("C", 100, oi=1000, g=0.01),
-             _row("P", 90, oi=8000, g=0.01), _row("P", 100, oi=1000, g=0.01)]
-    rows = mg.aggregate_strikes(chain, S, 100, VALUATION)
+    # Gamma pinned at 0.01 so the wall tracks OI, not BS shape: without IV the
+    # vendor value is used.
+    pinned = [_row("C", 110, oi=5000, iv=0.0, g=0.01), _row("C", 100, oi=1000, iv=0.0, g=0.01),
+              _row("P", 90, oi=8000, iv=0.0, g=0.01), _row("P", 100, oi=1000, iv=0.0, g=0.01)]
+    rows = mg.aggregate_strikes(pinned, S, 100, VALUATION)
     call_wall, put_wall = mg.walls(rows)
     assert call_wall == 110
     assert put_wall == 90
+    chain = [dict(row, iv=0.2) for row in pinned]
     em = mg.expected_move(chain, S, VALUATION)
     T_row = mg.years_to_expiry("2026-08-21", "SPY", VALUATION)
     assert em == pytest.approx(
@@ -182,3 +245,29 @@ def test_walls_and_expected_move():
     # ATM straddle is within 20% of the 0.8*S*sigma*sqrt(T) approximation.
     import math
     assert em == pytest.approx(0.8 * S * 0.2 * math.sqrt(T_row), rel=0.2)
+
+
+# ---------- Early closes (#71) ----------
+@pytest.mark.parametrize("day, early", [
+    ("2026-11-27", True),   # day after Thanksgiving (Nov 26)
+    ("2025-11-28", True),
+    ("2026-11-20", False),  # an ordinary Friday in November
+    ("2026-12-24", True),   # Thursday
+    ("2027-12-24", False),  # Friday: the observed Christmas holiday
+    ("2025-07-03", True),   # Thursday
+    ("2026-07-03", False),  # Friday: the observed Independence Day
+    ("2026-10-27", False),
+])
+def test_is_early_close(day, early):
+    assert mg.is_early_close(datetime.fromisoformat(day).date()) is early
+
+
+def test_years_to_expiry_pm_expiry_on_an_early_close_is_13_00():
+    valuation = ms(datetime(2026, 11, 27, 10, 0, tzinfo=ET))
+    assert mg.years_to_expiry("2026-11-27", "SPXW", valuation) == pytest.approx(
+        3 * 3600 * 1000 / mg._MS_PER_YEAR)
+    # AM-settled SPX keeps 9:30, and an ordinary day keeps 16:00.
+    assert mg.years_to_expiry("2026-11-27", "SPX", valuation) == mg.MIN_T
+    ordinary = ms(datetime(2026, 11, 20, 10, 0, tzinfo=ET))
+    assert mg.years_to_expiry("2026-11-20", "SPY", ordinary) == pytest.approx(
+        6 * 3600 * 1000 / mg._MS_PER_YEAR)

@@ -42,11 +42,20 @@ function zonedDateTimeToUtc(year,month,day,hour,minute,timeZone){
   const represented=Date.UTC(get('year'),get('month')-1,get('day'),get('hour'),get('minute'),get('second'));
   return guess-(represented-guess);
 }
+// NYSE early close (13:00 ET), the same rule as matrix_gex.is_early_close (#71):
+// the day after Thanksgiving, and July 3 and December 24 from Monday to Thursday.
+function isEarlyClose(year,month,day){
+  const weekday=new Date(Date.UTC(year,month-1,day)).getUTCDay(); // 0 = Sunday
+  if(month===11 && weekday===5) return day-1>=22 && day-1<=28;
+  if((month===7 && day===3) || (month===12 && day===24)) return weekday>=1 && weekday<=4;
+  return false;
+}
 function preciseYearsToExpiry(exp,root,valuationMs){
   const [year,month,day]=String(exp).split('-').map(Number);
   // AM-settled index roots (9:30 AM ET expiry): SPX/NDX, plus VIX and its weeklies.
   const isAmSettled=root==='SPX'||root==='NDX'||root==='VIX'||root==='VIXW';
-  const expiryMs=zonedDateTimeToUtc(year,month,day,isAmSettled?9:16,isAmSettled?30:0,'America/New_York');
+  const [hour,minute]=isAmSettled ? [9,30] : isEarlyClose(year,month,day) ? [13,0] : [16,0];
+  const expiryMs=zonedDateTimeToUtc(year,month,day,hour,minute,'America/New_York');
   return Math.max((expiryMs-valuationMs)/(365.25*86400000),1/(365.25*24*60));
 }
 
@@ -70,14 +79,17 @@ function buildChainRealFromRecord(symKey, rec){
   const quotes = rec.opts.map(o=>{
     const isCall = o.t==="C";
     const T = preciseYearsToExpiry(o.exp,o.root||'',now);
-    // The upstream does not always provide gamma; fall back to Black-Scholes when missing.
-    const modelGreeks = calcGreeks(spot, o.k, T, o.iv>0?o.iv:0.2, r, isCall);
-    const recalcFromLiveIndex = String(rec.source||'').includes('lse_live_index') || rec.dynamic===true;
-    let g = {...modelGreeks, gamma:o.g, delta:o.d, iv:o.iv};
-    if(recalcFromLiveIndex || !o.g || o.g<=0){
-      g = modelGreeks;
+    // Gamma and delta come from Black-Scholes on the row's IV at the spot shown (#68).
+    // Cboe's own greeks are computed at another underlying price, which flipped SPX's
+    // Naive GEX sign; they are used only for a row with no IV.
+    // The expiry's implied carry b = r - q from put-call parity (#72), else RISK_FREE.
+    const rate = Number.isFinite(o.b) ? o.b : r;
+    const modelGreeks = calcGreeks(spot, o.k, T, o.iv>0?o.iv:0.2, rate, isCall);
+    let g = modelGreeks;
+    if(!(o.iv>0) && o.g>0){
+      g = {...modelGreeks, gamma:o.g, delta:Number.isFinite(o.d) && o.d!==0 ? o.d : modelGreeks.delta};
     }
-    return {K:o.k, dte:o.dte, T, exp:o.exp, root:o.root||'', isCall, iv:o.iv, oi:o.oi, vol:o.vol, g};
+    return {K:o.k, dte:o.dte, T, exp:o.exp, root:o.root||'', isCall, iv:o.iv, oi:o.oi, vol:o.vol, g, rate};
   });
   return {symbol:symKey, spot, mult:rec.mult||100, quotes};
 }
@@ -1896,7 +1908,7 @@ function gexBoardStrikes(chain){
     if(!(q.oi > 0)) continue;
     const gex = q.g.gamma * q.oi * mult * spot * spot * 0.01;
     const delta = Number.isFinite(q.g.delta) ? q.g.delta
-      : calcGreeks(spot, q.K, q.T, q.iv>0 ? q.iv : 0.2, RISK_FREE, q.isCall).delta;
+      : calcGreeks(spot, q.K, q.T, q.iv>0 ? q.iv : 0.2, q.rate ?? RISK_FREE, q.isCall).delta;
     if(!byStrike.has(q.K)) byStrike.set(q.K,{strike:q.K, callGex:0, putGex:0, callOI:0, putOI:0,
       callVol:0, putVol:0, notionalDelta:0});
     const s = byStrike.get(q.K);

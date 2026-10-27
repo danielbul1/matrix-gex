@@ -48,6 +48,9 @@ VIX, ATM IV and VRP as covariates, a paired block bootstrap of the Sharpe and
 mean-P&L differences, and a per-year split. The report opens with the
 verdict: the filter beats its control significantly (every interval above
 zero) and consistently (every year), or GEX adds nothing beyond VIX.
+Every filter is rerun under the other two Sign Conventions (dealers short
+every option, and the reverse of Naive); sign_convention_check says whether
+any verdict depends on the convention.
 
 optopsy builds the spreads, applies the fill model and computes the exit
 proceeds. The loader feeds it only the two chosen legs per session plus one
@@ -156,6 +159,19 @@ GEX_PERCENTILE_MIN_HISTORY = 20  # past sessions before a percentile exists
 # How far before the first session Naive GEX history is read, in calendar
 # days: enough to hold GEX_PERCENTILE_LOOKBACK sessions.
 GEX_HISTORY_CALENDAR_DAYS = 380
+# Sign Conventions (#70): which side of each option dealers are assumed to hold.
+SIGN_NAIVE = "naive"                  # dealers long calls, short puts
+SIGN_SHORT_ALL = "dealers_short_all"  # dealers short every option
+SIGN_REVERSE = "reverse_naive"        # dealers short calls, long puts
+SIGN_CONVENTIONS = (SIGN_NAIVE, SIGN_SHORT_ALL, SIGN_REVERSE)
+CONVENTION_SAME_LINE = "The verdict does not depend on the Sign Convention."
+CONVENTION_DIFFERS_LINE = "The verdict depends on the Sign Convention: {}."
+# An entry snapshot counts only when rows with an IV hold at least this share
+# of its SOD Open Interest (#71): a row without IV would otherwise be priced
+# at matrix_gex's default IV.
+IV_COVERAGE_MIN = 0.9
+NO_GEX_REASON = ("no usable entry snapshot (none, stale, or IV on under"
+                 f" {IV_COVERAGE_MIN:.0%} of its open interest)")
 # The report's rows for every filter.
 ROW_KEPT = "kept"
 ROW_REJECTED = "rejected"
@@ -715,8 +731,10 @@ def run_grid(store_path, start=None, end=None,
 # ---------------------------------------------------------------------------
 # The GEX Filter
 # ---------------------------------------------------------------------------
-def naive_gex(rows, session):
-    """Naive GEX at a session's entry snapshot, or None without one.
+def entry_strikes(rows, session):
+    """Per-strike GEX rows (matrix_gex.aggregate_strikes) at a session's entry
+    snapshot, or None without one, or when rows with an IV hold under
+    IV_COVERAGE_MIN of its SOD Open Interest.
 
     The dashboard's number: canonical-engine gamma over the whole SPX/SPXW
     chain (0DTE included), SOD Open Interest, calls + and puts -. Only the
@@ -731,26 +749,64 @@ def naive_gex(rows, session):
     spots = [r.underlying for r in snapshot if r.underlying]
     if not spots:
         return None
+    if iv_coverage(snapshot) < IV_COVERAGE_MIN:
+        return None
     options = [{"t": r.right, "k": r.strike, "oi": r.sod_oi, "iv": r.iv,
                 "exp": r.expiry, "root": r.root} for r in snapshot]
-    strikes = matrix_gex.aggregate_strikes(options, statistics.median(spots),
-                                           CONTRACT_MULTIPLIER, stamp)
-    return sum(strike["net_gex"] for strike in strikes)
+    return matrix_gex.aggregate_strikes(options, statistics.median(spots),
+                                        CONTRACT_MULTIPLIER, stamp)
+
+
+def iv_coverage(snapshot):
+    """Share of the snapshot's SOD Open Interest (rows at or above min_oi 10)
+    held by rows with an IV; 0 when it has none."""
+    counted = [r for r in snapshot if (r.sod_oi or 0) >= 10]
+    total = sum(r.sod_oi for r in counted)
+    covered = sum(r.sod_oi for r in counted if (r.iv or 0) > 0)
+    return covered / total if total else 0.0
+
+
+def signed_gex(strikes, convention=SIGN_NAIVE):
+    """GEX summed over strikes under a Sign Convention. aggregate_strikes
+    carries calls + and puts -, which is Naive."""
+    calls = sum(strike["call_gex"] for strike in strikes)
+    puts = sum(strike["put_gex"] for strike in strikes)  # <= 0
+    if convention == SIGN_NAIVE:
+        return calls + puts
+    if convention == SIGN_REVERSE:
+        return -(calls + puts)
+    if convention == SIGN_SHORT_ALL:
+        return -(calls - puts)
+    raise ValueError(f"unknown Sign Convention {convention!r}")
+
+
+def naive_gex(rows, session):
+    """Naive GEX at a session's entry snapshot, or None without one: the
+    dashboard's number (see entry_strikes)."""
+    strikes = entry_strikes(rows, session)
+    return None if strikes is None else signed_gex(strikes)
 
 
 def gex_series(store_path, first, last):
     """{session: Naive GEX} for every day in [first, last] with an entry
     snapshot. Reads each day's 09:30-10:00 window only, across both roots."""
+    return convention_series(store_path, first, last)[SIGN_NAIVE]
+
+
+def convention_series(store_path, first, last):
+    """{Sign Convention: {session: GEX}} for every day in [first, last] with
+    an entry snapshot, reading the store once."""
     connection = chain_store.connect(store_path)
-    series = {}
+    series = {convention: {} for convention in SIGN_CONVENTIONS}
     try:
         day = first
         while day <= last:
             rows = chain_store.read_rows(connection, None, _et_ms(day, *MARKET_OPEN),
                                          _et_ms(day, *ENTRY_TIME))
-            value = naive_gex(rows, day) if rows else None
-            if value is not None:
-                series[day] = value
+            strikes = entry_strikes(rows, day) if rows else None
+            if strikes is not None:
+                for convention in SIGN_CONVENTIONS:
+                    series[convention][day] = signed_gex(strikes, convention)
             day += timedelta(days=1)
     finally:
         connection.close()
@@ -1010,25 +1066,58 @@ def run_gex_filter(store_path, config, start=None, end=None,
     sessions, closes = load_store(store_path, start, end)
     covariates = session_covariates(sessions, closes,
                                     load_closes(store_path, VIX_SYMBOL))
-    series = {}
+    by_convention = {convention: {} for convention in SIGN_CONVENTIONS}
     if sessions:
-        series = gex_series(store_path,
-                            min(sessions) - timedelta(days=GEX_HISTORY_CALENDAR_DAYS),
-                            max(sessions))
-    percentiles = gex_percentiles(series)
+        by_convention = convention_series(
+            store_path, min(sessions) - timedelta(days=GEX_HISTORY_CALENDAR_DAYS),
+            max(sessions))
     candidates, skipped = select_candidates(sessions, closes, config)
     priced, pricing_skips = price_candidates(candidates, config.fill_ratio)
     skipped += pricing_skips
     marks = leg_marks(sessions)
+    replay = (sessions, marks, priced, skipped, covariates, config)
+
+    series = by_convention[SIGN_NAIVE]
+    percentiles = gex_percentiles(series)
+    filters = _run_filters(series, percentiles, percentile_threshold, replay)
+    conventions = [{"sign_convention": SIGN_NAIVE, "filters": filters}]
+    for convention in (SIGN_SHORT_ALL, SIGN_REVERSE):
+        other = by_convention[convention]
+        conventions.append({
+            "sign_convention": convention,
+            # Dealers short everything: GEX is never positive, so a Gamma
+            # Regime filter would keep nothing; only the percentile runs.
+            "filters": _run_filters(other, gex_percentiles(other), percentile_threshold,
+                                    replay, with_regime=convention != SIGN_SHORT_ALL)})
+    return {
+        "verdict": verdict_line(filters),
+        "sign_convention_check": convention_line(conventions),
+        "config": asdict(config),
+        "sessions": len(sessions),
+        "covariates": [{"session": day.isoformat(), **covariates[day]}
+                       for day in sorted(sessions)],
+        "gex": [{"session": day.isoformat(), "naive_gex": series[day],
+                 "gamma_regime": gamma_regime(series[day]),
+                 "gex_percentile": percentiles[day]}
+                for day in sorted(series) if day in sessions],
+        "filters": filters,
+        "sign_conventions": conventions,
+    }
+
+
+def _run_filters(series, percentiles, percentile_threshold, replay, with_regime=True):
+    """Every GEX Filter over one GEX series, each split into kept, Rejected
+    and Undecided Sessions and compared with its IV-Matched Control."""
+    sessions, marks, priced, skipped, covariates, config = replay
 
     def positive_gamma(day):
         if day not in series:
-            return None, "no Naive GEX at the entry snapshot"
+            return None, NO_GEX_REASON
         return series[day] > 0, None
 
     def above_percentile(day):
         if day not in series:
-            return None, "no Naive GEX at the entry snapshot"
+            return None, NO_GEX_REASON
         if percentiles[day] is None:
             return None, (f"fewer than {GEX_PERCENTILE_MIN_HISTORY}"
                           " past sessions of Naive GEX")
@@ -1037,6 +1126,8 @@ def run_gex_filter(store_path, config, start=None, end=None,
     variants = ((FILTER_POSITIVE_GAMMA, positive_gamma, {}),
                 (FILTER_GEX_PERCENTILE, above_percentile,
                  {"threshold": percentile_threshold}))
+    if not with_regime:
+        variants = variants[1:]
     filters = []
     for name, decide, settings in variants:
         kept, rejected, undecided = set(), set(), []
@@ -1057,18 +1148,19 @@ def run_gex_filter(store_path, config, start=None, end=None,
         filters.append({"filter": name, **settings, "rows": list(rows.values()),
                         "comparison": compare(kept, rows, covariates, sessions, config),
                         "undecided": undecided})
-    return {
-        "verdict": verdict_line(filters),
-        "config": asdict(config),
-        "sessions": len(sessions),
-        "covariates": [{"session": day.isoformat(), **covariates[day]}
-                       for day in sorted(sessions)],
-        "gex": [{"session": day.isoformat(), "naive_gex": series[day],
-                 "gamma_regime": gamma_regime(series[day]),
-                 "gex_percentile": percentiles[day]}
-                for day in sorted(series) if day in sessions],
-        "filters": filters,
-    }
+    return filters
+
+
+def convention_line(conventions):
+    """One sentence: does any filter's verdict change with the Sign Convention?"""
+    verdicts = {}
+    for entry in conventions:
+        for variant in entry["filters"]:
+            verdicts.setdefault(variant["filter"], {})[entry["sign_convention"]] = (
+                variant["comparison"]["verdict"])
+    differs = [f"{name} ({', '.join(f'{c} {v}' for c, v in by.items())})"
+               for name, by in verdicts.items() if len(set(by.values())) > 1]
+    return CONVENTION_DIFFERS_LINE.format("; ".join(differs)) if differs else CONVENTION_SAME_LINE
 
 
 # ---------------------------------------------------------------------------
@@ -1089,6 +1181,14 @@ def format_summary(report):
              f"Short delta {config['short_delta']:g}, width {config['width']:g},"
              f" exit {config['exit_rule']}, fill ratio {config['fill_ratio']:g};"
              f" {report['sessions']} sessions."]
+    if report.get("sign_conventions"):
+        lines += ["", "## Sign Convention", "", report["sign_convention_check"], "",
+                  "| Sign Convention | Filter | Kept | Verdict |", "|---|---|---|---|"]
+        for entry in report["sign_conventions"]:
+            for variant in entry["filters"]:
+                (kept,) = [row for row in variant["rows"] if row["sessions"] == ROW_KEPT]
+                lines.append(f"| {entry['sign_convention']} | {variant['filter']}"
+                             f" | {kept['session_count']} | {variant['comparison']['verdict']} |")
     for variant in report["filters"]:
         comparison = variant["comparison"]
         lines += ["", f"## {variant['filter']}", "",

@@ -373,7 +373,7 @@ def _compute_fresh(now):
     prof_xn  = [v/1e9 for v in matrix_gex.gamma_profile(engine_rows(opts, next_exp), level_ls, 100, now_ms)]
     prof_xf  = [v/1e9 for v in matrix_gex.gamma_profile(engine_rows(opts, next_fri), level_ls, 100, now_ms)]
 
-    zero_gamma = matrix_gex.zero_gamma_flip(level_ls, prof_all)
+    zero_gamma = matrix_gex.flip_from_profile(level_ls, prof_all, spot)
 
     # GEX heatmap (strikes x expiries within 60 days)
     hm_lo, hm_hi = 0.9*spot, 1.1*spot    # tighter range for readability

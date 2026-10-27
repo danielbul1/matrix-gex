@@ -888,3 +888,79 @@ def test_cli_summary_needs_the_gex_filter(tmp_path, capsys):
         bt.main(["--store", str(tmp_path / "chain.sqlite3"),
                  "--summary", str(tmp_path / "gex.md")])
     assert raised.value.code == 2
+
+
+# ---------------------------------------------------------------------------
+# Sign Conventions (#70)
+# ---------------------------------------------------------------------------
+def test_signed_gex_under_each_sign_convention():
+    strikes = [{"call_gex": 5.0, "put_gex": -2.0}, {"call_gex": 1.0, "put_gex": -7.0}]
+    assert bt.signed_gex(strikes, bt.SIGN_NAIVE) == pytest.approx(-3.0)
+    assert bt.signed_gex(strikes, bt.SIGN_REVERSE) == pytest.approx(3.0)
+    assert bt.signed_gex(strikes, bt.SIGN_SHORT_ALL) == pytest.approx(-15.0)
+    with pytest.raises(ValueError):
+        bt.signed_gex(strikes, "dealers_long_all")
+
+
+def test_reversed_sign_gives_complementary_percentiles():
+    start = date(2024, 1, 1)
+    rng = random.Random(3)
+    series = {start + timedelta(days=i): rng.uniform(-5, 5) for i in range(60)}
+    naive = bt.gex_percentiles(series)
+    reverse = bt.gex_percentiles({day: -value for day, value in series.items()})
+    for day, value in naive.items():
+        if value is None:
+            assert reverse[day] is None
+        else:
+            assert reverse[day] == pytest.approx(1 - value)
+
+
+def test_gex_filter_reruns_under_every_sign_convention(planted_report):
+    conventions = {entry["sign_convention"]: entry["filters"]
+                   for entry in planted_report["sign_conventions"]}
+    assert list(conventions) == ["naive", "dealers_short_all", "reverse_naive"]
+    assert conventions["naive"] == planted_report["filters"]
+    # Dealers short everything: GEX is never positive, so only the percentile runs.
+    assert [f["filter"] for f in conventions["dealers_short_all"]] == ["gex_percentile"]
+    # The reverse of Naive keeps exactly the sessions Naive's Gamma Regime rejects.
+    naive_rows = _filter(planted_report, "positive_gamma")
+    (reverse,) = [f for f in conventions["reverse_naive"] if f["filter"] == "positive_gamma"]
+    reverse_rows = {row["sessions"]: row for row in reverse["rows"]}
+    assert reverse_rows["kept"]["session_count"] == naive_rows["rejected"]["session_count"]
+    assert reverse_rows["rejected"]["session_count"] == naive_rows["kept"]["session_count"]
+
+
+def test_planted_signal_depends_on_the_sign_convention(planted_report):
+    # The planted edge belongs to Naive's positive gamma; reversed, it is a loser.
+    (reverse,) = [f for entry in planted_report["sign_conventions"]
+                  if entry["sign_convention"] == "reverse_naive"
+                  for f in entry["filters"] if f["filter"] == "positive_gamma"]
+    assert reverse["comparison"]["verdict"] == "null"
+    line = planted_report["sign_convention_check"]
+    assert line.startswith("The verdict depends on the Sign Convention:")
+    assert "positive_gamma (naive positive, reverse_naive null)" in line
+
+
+def test_summary_lists_the_verdict_per_sign_convention(planted_report):
+    summary = bt.format_summary(planted_report)
+    assert "## Sign Convention" in summary
+    assert planted_report["sign_convention_check"] in summary
+    assert "| reverse_naive | positive_gamma |" in summary
+    assert "| dealers_short_all | gex_percentile |" in summary
+
+
+# ---------------------------------------------------------------------------
+# IV coverage at the entry snapshot (#71)
+# ---------------------------------------------------------------------------
+def test_entry_snapshot_without_enough_iv_is_undecided(tmp_path):
+    covered = [_option(MONDAY, 10, 0, "C", 5050.0, 1000), _option(MONDAY, 10, 0, "P", 4950.0, 1000)]
+    missing = [_option(MONDAY, 10, 0, "P", 4900.0, 9000, iv=None)]  # 82% of the OI, no IV
+    assert bt.iv_coverage(covered) == 1.0
+    assert bt.iv_coverage(covered + missing) == pytest.approx(2000 / 11000)
+    assert bt.entry_strikes(covered + missing, MONDAY) is None
+    assert bt.entry_strikes(covered, MONDAY) is not None
+    path = _store(tmp_path, {MONDAY: covered + missing}, {MONDAY: SPOT})
+    report = _gex_run(path)
+    assert report["gex"] == []
+    (variant,) = [f for f in report["filters"] if f["filter"] == "positive_gamma"]
+    assert [u["reason"] for u in variant["undecided"]] == [bt.NO_GEX_REASON]
