@@ -153,27 +153,42 @@ def test_norm_iv():
 
 
 # ---------- effective_gamma ----------
-def test_effective_gamma_vendor_passthrough_and_bs_fallback():
-    row = _row("C", 100, g=0.05)
-    assert mg.effective_gamma(row, S, VALUATION) == 0.05
-    fallback = mg.effective_gamma(_row("C", 100, g=0.0), S, VALUATION)
+def test_effective_greeks_use_black_scholes_whenever_the_row_has_iv():
+    # Vendor greeks computed at another underlying are ignored when IV exists (#68).
     T_row = mg.years_to_expiry("2026-08-21", "SPY", VALUATION)
-    assert fallback > 0
-    assert fallback == pytest.approx(mg.bs_gamma(S, 100, T_row, 0.2), rel=1e-12)
-    # Missing/invalid IV -> default IV 0.2.
-    assert mg.effective_gamma(_row("C", 100, g=0.0, iv=0.0), S, VALUATION) == pytest.approx(
-        fallback, rel=1e-12)
+    gamma, delta = mg.effective_greeks(_row("C", 100, iv=0.25, g=0.05, d=0.9), S, VALUATION)
+    assert gamma == pytest.approx(mg.bs_gamma(S, 100, T_row, 0.25), rel=1e-12)
+    assert delta == pytest.approx(mg.bs_delta(S, 100, T_row, 0.25, is_call=True), rel=1e-12)
+
+
+def test_effective_greeks_vendor_only_without_iv_then_default_iv():
+    assert mg.effective_greeks(_row("P", 100, iv=0.0, g=0.05, d=-0.4), S, VALUATION) == (0.05, -0.4)
+    T_row = mg.years_to_expiry("2026-08-21", "SPY", VALUATION)
+    gamma, delta = mg.effective_greeks(_row("P", 100, iv=0.0), S, VALUATION)
+    assert gamma == pytest.approx(mg.bs_gamma(S, 100, T_row, mg.DEFAULT_IV), rel=1e-12)
+    assert delta == pytest.approx(mg.bs_delta(S, 100, T_row, mg.DEFAULT_IV, is_call=False), rel=1e-12)
+
+
+def test_naive_gex_ignores_vendor_gamma_from_another_spot():
+    # Vendor gamma that peaks above spot (as Cboe's did on 2026-10-26) must not move
+    # Naive GEX: the strike sum agrees with the repriced profile at spot.
+    chain = [_row("C", 105, g=0.09), _row("P", 95, g=0.001), _row("C", 100, g=0.06), _row("P", 100, g=0.02)]
+    rows = mg.aggregate_strikes(chain, S, 100, VALUATION, min_oi=0)
+    total = sum(row["net_gex"] for row in rows)
+    assert total == pytest.approx(mg.gamma_profile(chain, [S], 100, VALUATION)[0], rel=1e-12)
 
 
 # ---------- walls / expected move ----------
 def test_walls_and_expected_move():
-    # Vendor gamma pinned at 0.01 so the wall tracks OI, not BS fallback shape.
-    chain = [_row("C", 110, oi=5000, g=0.01), _row("C", 100, oi=1000, g=0.01),
-             _row("P", 90, oi=8000, g=0.01), _row("P", 100, oi=1000, g=0.01)]
-    rows = mg.aggregate_strikes(chain, S, 100, VALUATION)
+    # Gamma pinned at 0.01 so the wall tracks OI, not BS shape: without IV the
+    # vendor value is used.
+    pinned = [_row("C", 110, oi=5000, iv=0.0, g=0.01), _row("C", 100, oi=1000, iv=0.0, g=0.01),
+              _row("P", 90, oi=8000, iv=0.0, g=0.01), _row("P", 100, oi=1000, iv=0.0, g=0.01)]
+    rows = mg.aggregate_strikes(pinned, S, 100, VALUATION)
     call_wall, put_wall = mg.walls(rows)
     assert call_wall == 110
     assert put_wall == 90
+    chain = [dict(row, iv=0.2) for row in pinned]
     em = mg.expected_move(chain, S, VALUATION)
     T_row = mg.years_to_expiry("2026-08-21", "SPY", VALUATION)
     assert em == pytest.approx(

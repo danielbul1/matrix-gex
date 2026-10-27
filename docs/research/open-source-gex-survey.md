@@ -14,6 +14,7 @@ Ground rules, decided with the trader:
    - Matrix mixes the two:
      - The research side (`tools/backtest_spread.py::naive_gex`) uses Black-Scholes only, while its docstring calls it "the dashboard's number".
      - The dashboard (`matrix.js::buildChainRealFromRecord`) prefers Cboe's gamma unless the record is tagged `lse_live_index` or `dynamic`. Live SPX and NDX are tagged; live SPY and QQQ are tagged `lse_live+cboe_oi`. So SPY and QQQ pair Cboe's gamma with the live LSE spot.
+   - **Fixed in #68 (this PR):** the dashboard, `effective_greeks` and `build_exposure_history` now use Black-Scholes from IV at the spot shown. Cboe's greeks are used only for a row without IV. On this snapshot the dashboard now gives SPX −21.13, SPY −4.09 and QQQ −3.38.
 2. **Per-strike Zero Gamma and the repriced Gamma Flip are different levels.** On this snapshot they sit 10 points apart on SPX, 2.8 on SPY and 8.5 on QQQ (1.2% of spot).
    - Both are now glossary terms. Zero Gamma stays the Key Level, as Quant Power reads it.
 3. **How finely the flip is searched barely matters here.** We tried our 201-point linear grid, Darthreign's ±8% 161-point grid, gexkit's threshold plus bisection, and puneet-chandna's exact root-finding. They agree to within 0.03 points, because every scope had a single crossing. Both projects run unmodified reproduce our profile at spot exactly once given our inputs.

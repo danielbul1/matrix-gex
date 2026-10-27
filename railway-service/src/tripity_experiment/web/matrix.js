@@ -70,12 +70,13 @@ function buildChainRealFromRecord(symKey, rec){
   const quotes = rec.opts.map(o=>{
     const isCall = o.t==="C";
     const T = preciseYearsToExpiry(o.exp,o.root||'',now);
-    // The upstream does not always provide gamma; fall back to Black-Scholes when missing.
+    // Gamma and delta come from Black-Scholes on the row's IV at the spot shown (#68).
+    // Cboe's own greeks are computed at another underlying price, which flipped SPX's
+    // Naive GEX sign; they are used only for a row with no IV.
     const modelGreeks = calcGreeks(spot, o.k, T, o.iv>0?o.iv:0.2, r, isCall);
-    const recalcFromLiveIndex = String(rec.source||'').includes('lse_live_index') || rec.dynamic===true;
-    let g = {...modelGreeks, gamma:o.g, delta:o.d, iv:o.iv};
-    if(recalcFromLiveIndex || !o.g || o.g<=0){
-      g = modelGreeks;
+    let g = modelGreeks;
+    if(!(o.iv>0) && o.g>0){
+      g = {...modelGreeks, gamma:o.g, delta:Number.isFinite(o.d) && o.d!==0 ? o.d : modelGreeks.delta};
     }
     return {K:o.k, dte:o.dte, T, exp:o.exp, root:o.root||'', isCall, iv:o.iv, oi:o.oi, vol:o.vol, g};
   });

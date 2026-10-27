@@ -175,19 +175,25 @@ def effective_greeks(
     valuation_ms: float | None = None,
     r: float = DEFAULT_RATE,
 ) -> tuple[float, float]:
-    """(gamma, delta) for one option row: vendor values when present,
-    Black-Scholes from the row's IV (default 0.2) otherwise."""
+    """(gamma, delta) for one option row: Black-Scholes from the row's IV at
+    this spot and time. Vendor values are used only when the row has no IV,
+    and Black-Scholes at the default IV (0.2) when neither exists.
+
+    Vendor greeks are computed at the vendor's own underlying price, not at
+    `spot`: on the 2026-10-26 Cboe close they turned SPX's Naive GEX from
+    -21 to +11 $bn (#68)."""
     K = float(row.get("k") or 0)
     T = years_to_expiry(str(row.get("exp") or ""), str(row.get("root") or ""), valuation_ms)
     iv = float(row.get("iv") or 0)
-    sigma = iv if iv > 0 else DEFAULT_IV
     is_call = row.get("t") == "C"
+    if iv > 0:
+        return bs_gamma(spot, K, T, iv, r), bs_delta(spot, K, T, iv, r, is_call)
     gamma = float(row.get("g") or 0)
     if gamma <= 0:
-        gamma = bs_gamma(spot, K, T, sigma, r)
+        gamma = bs_gamma(spot, K, T, DEFAULT_IV, r)
     delta = float(row.get("d") or 0)
     if delta == 0:
-        delta = bs_delta(spot, K, T, sigma, r, is_call)
+        delta = bs_delta(spot, K, T, DEFAULT_IV, r, is_call)
     return gamma, delta
 
 
