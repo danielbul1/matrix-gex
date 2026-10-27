@@ -152,7 +152,14 @@ Rejected:
 
 ## Ideas that improve what exists
 
-Each needs the trader's go-ahead before an issue is opened.
+Opened on 2026-10-27, with the trader's go-ahead:
+- 1 → #68
+- 2 → #69
+- 3 → #70
+- 6 → #71
+- 7 → #72
+
+Ideas 4, 5 and 8 wait. The screen ideas below stay closed, and ADR 0001 is not reopened for now.
 
 1. **One gamma source everywhere: Black-Scholes from IV at the spot shown.** Cboe's gamma is used only when IV is missing.
    - Fixes the SPY and QQQ live mismatch and the SPX sign flip.
