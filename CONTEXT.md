@@ -12,6 +12,14 @@ _Avoid_: gamma, gamma exposure level
 GEX computed under the assumption that dealers are long every call and short every put.
 _Avoid_: dealer gamma, true GEX
 
+**Sign Convention**:
+Which side of each option dealers are assumed to hold. Naive GEX uses one of three: dealers long calls and short puts. The other two are dealers short every option, and the reverse of Naive.
+_Avoid_: dealer sign, positioning assumption
+
+**Gamma Flip**:
+The spot price at which Naive GEX, recomputed for the whole chain as if spot stood there, changes sign; the crossing nearest spot. A session may have none. Unlike Zero Gamma, it moves spot and reprices every contract instead of reading the sign change between two neighbouring strikes.
+_Avoid_: zero gamma, flip point, HVL
+
 **Gamma Regime**:
 The sign of Naive GEX for a session: positive gamma or negative gamma.
 _Avoid_: GEX regime, gamma state
