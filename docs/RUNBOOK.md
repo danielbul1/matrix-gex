@@ -219,6 +219,13 @@ python tools\gex_crosscheck.py --store C:\path\chain.sqlite3
   tables per filter), is the verdict: the filters that beat their
   IV-Matched Control, or `GEX adds nothing beyond VIX as a trade filter`.
   Two filters are tested, so treat a lone marginal positive with suspicion.
+- Sign Conventions (#70): `sign_conventions` reruns the filters under each
+  of `naive` (the `filters` above), `dealers_short_all` and `reverse_naive`,
+  with the same rows and `comparison`. Under `dealers_short_all` GEX is never
+  positive, so only `gex_percentile` runs. `sign_convention_check`, also at
+  the top of `--summary` with a table of every verdict, says whether any
+  filter's verdict changes with the convention. A filter that wins under
+  only one convention is a warning, not a finding.
 - `gex_crosscheck.py` compares our daily Naive GEX with SqueezeMetrics' free
   daily GEX (the DIX CSV, downloaded unless `--csv` points to a copy) and
   prints the Pearson correlation and the share of sessions with the same
