@@ -82,12 +82,14 @@ function buildChainRealFromRecord(symKey, rec){
     // Gamma and delta come from Black-Scholes on the row's IV at the spot shown (#68).
     // Cboe's own greeks are computed at another underlying price, which flipped SPX's
     // Naive GEX sign; they are used only for a row with no IV.
-    const modelGreeks = calcGreeks(spot, o.k, T, o.iv>0?o.iv:0.2, r, isCall);
+    // The expiry's implied carry b = r - q from put-call parity (#72), else RISK_FREE.
+    const rate = Number.isFinite(o.b) ? o.b : r;
+    const modelGreeks = calcGreeks(spot, o.k, T, o.iv>0?o.iv:0.2, rate, isCall);
     let g = modelGreeks;
     if(!(o.iv>0) && o.g>0){
       g = {...modelGreeks, gamma:o.g, delta:Number.isFinite(o.d) && o.d!==0 ? o.d : modelGreeks.delta};
     }
-    return {K:o.k, dte:o.dte, T, exp:o.exp, root:o.root||'', isCall, iv:o.iv, oi:o.oi, vol:o.vol, g};
+    return {K:o.k, dte:o.dte, T, exp:o.exp, root:o.root||'', isCall, iv:o.iv, oi:o.oi, vol:o.vol, g, rate};
   });
   return {symbol:symKey, spot, mult:rec.mult||100, quotes};
 }
@@ -1906,7 +1908,7 @@ function gexBoardStrikes(chain){
     if(!(q.oi > 0)) continue;
     const gex = q.g.gamma * q.oi * mult * spot * spot * 0.01;
     const delta = Number.isFinite(q.g.delta) ? q.g.delta
-      : calcGreeks(spot, q.K, q.T, q.iv>0 ? q.iv : 0.2, RISK_FREE, q.isCall).delta;
+      : calcGreeks(spot, q.K, q.T, q.iv>0 ? q.iv : 0.2, q.rate ?? RISK_FREE, q.isCall).delta;
     if(!byStrike.has(q.K)) byStrike.set(q.K,{strike:q.K, callGex:0, putGex:0, callOI:0, putOI:0,
       callVol:0, putVol:0, notionalDelta:0});
     const s = byStrike.get(q.K);

@@ -30,6 +30,7 @@ from tripity_experiment.har_openapi import har_to_openapi
 from tripity_experiment.company_connector import build_company_connector_draft
 from tripity_experiment.connector_manifest import manifest_from_draft
 from tripity_experiment.mcp_adapter import build_mcp_server
+from tripity_experiment import matrix_gex
 from tripity_experiment.openapi_intake import IntakeError, parse_openapi_text
 from tripity_experiment.project_gateway import BearerGate
 from tripity_experiment.semantic_curation import apply_tool_curation_to_spec
@@ -479,6 +480,29 @@ def _parse_matrix_occ(option_symbol: str) -> tuple[str, datetime.date, str, floa
     return root, expiration, call_put, int(strike) / 1000.0
 
 
+def _matrix_expiry_carries(options, spot, last_trade_time, today) -> dict:
+    """{(root, expiry): implied carry} for a raw Cboe chain (#72); {} without
+    a spot or quotes."""
+    if not spot or not isinstance(options, list):
+        return {}
+    try:
+        valuation_ms = datetime.datetime.fromisoformat(str(last_trade_time)).replace(
+            tzinfo=matrix_gex.ET).timestamp() * 1000
+    except (TypeError, ValueError):
+        valuation_ms = None
+    quotes = []
+    for option in options:
+        if not isinstance(option, dict):
+            continue
+        parsed = _parse_matrix_occ(str(option.get("option") or ""))
+        if parsed is None or parsed[1] < today:
+            continue
+        root, expiration, call_put, strike = parsed
+        quotes.append((root, expiration.isoformat(), call_put, strike,
+                       option.get("bid"), option.get("ask")))
+    return matrix_gex.expiry_carries(quotes, float(spot), valuation_ms)
+
+
 def _compact_matrix_options_payload(
     display_symbol: str,
     payload: dict[str, Any],
@@ -493,6 +517,7 @@ def _compact_matrix_options_payload(
     if not isinstance(options, list):
         raise ValueError(f"CBOE options response did not include options for {display_symbol}")
     compact_options: list[dict[str, Any]] = []
+    carries = _matrix_expiry_carries(options, spot, data.get("last_trade_time"), today)
     # P/C Ratio screen: call/put OI and volume over every live expiry and every
     # strike, counted before the strike-range and zero-OI filters below.
     totals = {"call_oi": 0, "put_oi": 0, "call_vol": 0, "put_vol": 0}
@@ -525,6 +550,9 @@ def _compact_matrix_options_payload(
             "g": round(option.get("gamma") or 0, 7),
             "d": round(option.get("delta") or 0, 4),
         })
+        carry = carries.get((root, expiration.isoformat()))
+        if carry is not None:
+            compact_options[-1]["b"] = round(carry, 5)
     return display_symbol, {
         "spot": round(spot, 2) if spot else None,
         "asof": data.get("last_trade_time") or today.isoformat(),

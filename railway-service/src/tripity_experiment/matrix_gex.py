@@ -5,8 +5,9 @@ Pure stdlib (math.erf for the normal CDF) so it runs unchanged on Railway,
 in GitHub Actions, and locally.
 
 Conventions (SqueezeMetrics-style, matching web/matrix.js):
-- Rates: r = 0.05, q = 0. (server.py historically used r = q = 0 and is being
-  migrated to this canonical module.)
+- Rates: a row's implied carry b = r - q ("b", from put-call parity on its
+  expiry, #72) is the Black-Scholes rate with q = 0; rows without one use
+  r = 0.05, q = 0.
 - GEX = gamma * OI * mult * spot^2 * 0.01   (calls +, puts -)
 - DEX = delta * OI * mult * spot  * 0.01    (put delta is negative, added as-is)
 - VEX = vanna * OI * mult * spot  * 0.01    (calls +, puts -)
@@ -22,7 +23,8 @@ Conventions (SqueezeMetrics-style, matching web/matrix.js):
   the first crossing from the bottom of the ladder).
 
 Option rows are mappings with keys: t ("C"/"P"), k (strike), oi, iv, g
-(vendor gamma), d (vendor delta), exp ("YYYY-MM-DD"), root.
+(vendor gamma), d (vendor delta), exp ("YYYY-MM-DD"), root, and optionally
+b (implied carry).
 """
 
 import math
@@ -188,6 +190,74 @@ def norm_iv(iv: float) -> float:
     return iv if 0 < iv < 5 else 0.0
 
 
+# ---------- Implied carry from put-call parity (#72) ----------
+CARRY_WINDOW = 0.03    # strikes within +/-3% of spot
+CARRY_MIN_PAIRS = 5    # strikes with a two-sided call and put quote
+CARRY_MAX_ABS = 0.25   # a carry beyond +/-25% a year is treated as bad data
+
+
+def implied_carry(pairs, spot: float, T: float) -> float | None:
+    """Net carry b = r - q for one expiry, from put-call parity, or None.
+
+    pairs: (strike, call_mid, put_mid, call_spread + put_spread). Parity gives
+    C - P = D * (F - K), so a spread-weighted line of C - P against K has
+    slope -D and puts the forward at F = intercept / D; b = ln(F / spot) / T.
+    Only the forward is used: D on its own is noisy, and American-style ETF
+    options break parity by their early-exercise premium. Gamma depends on
+    the forward, so Black-Scholes takes b as its rate, with q = 0."""
+    if spot <= 0 or T <= 0:
+        return None
+    points = [(K, c - p, max(width, 1e-6)) for K, c, p, width in pairs
+              if abs(K / spot - 1) <= CARRY_WINDOW]
+    if len(points) < CARRY_MIN_PAIRS:
+        return None
+    weights = [1 / width ** 2 for _, _, width in points]
+    total = sum(weights)
+    k_mean = sum(w * K for w, (K, _, _) in zip(weights, points)) / total
+    y_mean = sum(w * y for w, (_, y, _) in zip(weights, points)) / total
+    spread_k = sum(w * (K - k_mean) ** 2 for w, (K, _, _) in zip(weights, points))
+    if spread_k <= 0:
+        return None
+    discount = -sum(w * (K - k_mean) * (y - y_mean)
+                    for w, (K, y, _) in zip(weights, points)) / spread_k
+    if discount <= 0:
+        return None
+    forward = (y_mean + discount * k_mean) / discount
+    if forward <= 0:
+        return None
+    carry = math.log(forward / spot) / T
+    return carry if abs(carry) <= CARRY_MAX_ABS else None
+
+
+def expiry_carries(quotes, spot: float, valuation_ms: float | None = None) -> dict[tuple[str, str], float]:
+    """{(root, expiry): implied carry} from raw quotes
+    (root, expiry "YYYY-MM-DD", "C"/"P", strike, bid, ask)."""
+    sides: dict[tuple[str, str], dict[float, dict[str, tuple[float, float]]]] = {}
+    for root, exp, call_put, K, bid, ask in quotes:
+        bid, ask = float(bid or 0), float(ask or 0)
+        if bid > 0 and ask > bid:
+            sides.setdefault((root, exp), {}).setdefault(float(K), {})[call_put] = (
+                (bid + ask) / 2, ask - bid)
+    carries = {}
+    for (root, exp), strikes in sides.items():
+        pairs = [(K, q["C"][0], q["P"][0], q["C"][1] + q["P"][1])
+                 for K, q in strikes.items() if "C" in q and "P" in q]
+        carry = implied_carry(pairs, spot, years_to_expiry(exp, root, valuation_ms))
+        if carry is not None:
+            carries[(root, exp)] = carry
+    return carries
+
+
+def row_rate(row: dict, r: float = DEFAULT_RATE) -> float:
+    """The Black-Scholes rate for one option row: its implied carry ("b")
+    when the row has one, else r."""
+    try:
+        b = float(row.get("b"))
+    except (TypeError, ValueError):
+        return r
+    return b if math.isfinite(b) else r
+
+
 # ---------- Per-row effective greeks (vendor with BS fallback) ----------
 def effective_greeks(
     row: dict,
@@ -206,6 +276,7 @@ def effective_greeks(
     T = years_to_expiry(str(row.get("exp") or ""), str(row.get("root") or ""), valuation_ms)
     iv = float(row.get("iv") or 0)
     is_call = row.get("t") == "C"
+    r = row_rate(row, r)
     if iv > 0:
         return bs_gamma(spot, K, T, iv, r), bs_delta(spot, K, T, iv, r, is_call)
     gamma = float(row.get("g") or 0)
@@ -273,8 +344,9 @@ def aggregate_strikes(
             iv = float(option.get("iv") or 0)
             if iv > 0:
                 T = years_to_expiry(str(option.get("exp") or ""), str(option.get("root") or ""), valuation_ms)
-                vex = vex_value(bs_vanna(spot, K, T, iv, r), oi, mult, spot)
-                chex = chex_value(bs_charm(spot, K, T, iv, r), oi, mult, spot)
+                rate = row_rate(option, r)
+                vex = vex_value(bs_vanna(spot, K, T, iv, rate), oi, mult, spot)
+                chex = chex_value(bs_charm(spot, K, T, iv, rate), oi, mult, spot)
         row = by_strike.setdefault(K, [0.0] * 8)
         if is_call:
             row[0] += gex
@@ -319,8 +391,9 @@ class GammaFlip(NamedTuple):
     crossings: list[float]
 
 
-def _profile_rows(options, min_oi: float, valuation_ms: float | None) -> list[tuple]:
-    """(K, T, iv, oi, sign) for each row that can be repriced (IV > 0)."""
+def _profile_rows(options, min_oi: float, valuation_ms: float | None,
+                  r: float = DEFAULT_RATE) -> list[tuple]:
+    """(K, T, iv, oi, sign, rate) for each row that can be repriced (IV > 0)."""
     rows = []
     for option in options:
         try:
@@ -335,12 +408,13 @@ def _profile_rows(options, min_oi: float, valuation_ms: float | None) -> list[tu
             continue
         T = years_to_expiry(str(option.get("exp") or ""), str(option.get("root") or ""), valuation_ms)
         sign = 1.0 if option.get("t") == "C" else -1.0
-        rows.append((K, T, iv, oi, sign))
+        rows.append((K, T, iv, oi, sign, row_rate(option, r)))
     return rows
 
 
-def _gex_at(rows, S: float, mult: float, r: float) -> float:
-    return sum(sign * bs_gamma(S, K, T, iv, r) * oi for K, T, iv, oi, sign in rows) * mult * S * S * 0.01
+def _gex_at(rows, S: float, mult: float) -> float:
+    return sum(sign * bs_gamma(S, K, T, iv, rate) * oi
+               for K, T, iv, oi, sign, rate in rows) * mult * S * S * 0.01
 
 
 def gamma_profile(
@@ -354,8 +428,8 @@ def gamma_profile(
     """Net GEX ($, calls + puts -) at each spot level, using BS gamma from
     each row's IV (vendor gamma is spot-stale, so the profile is model-based).
     """
-    rows = _profile_rows(options, min_oi, valuation_ms)
-    return [_gex_at(rows, S, mult, r) for S in levels]
+    rows = _profile_rows(options, min_oi, valuation_ms, r)
+    return [_gex_at(rows, S, mult) for S in levels]
 
 
 def _sign_brackets(levels, profile, threshold: float = 0.0) -> list[tuple[int, int]]:
@@ -400,13 +474,14 @@ def gamma_flip(
     (so far-tail underflow cannot fake a crossing) and refines each crossing
     by bisection. The method follows mervinj3546/gexkit (research: open-source
     GEX survey, #69); no code is copied."""
-    rows = _profile_rows(options, min_oi, valuation_ms)
+    rows = _profile_rows(options, min_oi, valuation_ms, r)
     if not rows:
         return None
-    gross = sum(oi * bs_gamma(K, K, T, iv, r) * K * K for K, T, iv, oi, _ in rows) * mult * 0.01
+    gross = sum(oi * bs_gamma(K, K, T, iv, rate) * K * K
+                for K, T, iv, oi, _, rate in rows) * mult * 0.01
     threshold = FLIP_NEGLIGIBLE * gross
     levels = [spot * (lower + (upper - lower) * j / (points - 1)) for j in range(points)]
-    profile = [_gex_at(rows, S, mult, r) for S in levels]
+    profile = [_gex_at(rows, S, mult) for S in levels]
     tolerance = FLIP_TOLERANCE * spot
     crossings = []
     for i, k in _sign_brackets(levels, profile, threshold):
@@ -416,7 +491,7 @@ def gamma_flip(
         lo, hi, lo_negative = levels[i], levels[k], profile[i] < 0
         while hi - lo > tolerance:
             mid = (lo + hi) / 2
-            value = _gex_at(rows, mid, mult, r)
+            value = _gex_at(rows, mid, mult)
             if abs(value) <= threshold:
                 lo = hi = mid
             elif (value < 0) == lo_negative:

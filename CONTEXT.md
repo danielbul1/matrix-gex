@@ -16,6 +16,10 @@ _Avoid_: dealer gamma, true GEX
 Which side of each option dealers are assumed to hold. Naive GEX uses one of three: dealers long calls and short puts. The other two are dealers short every option, and the reverse of Naive.
 _Avoid_: dealer sign, positioning assumption
 
+**Implied Carry**:
+An expiry's interest rate minus its dividend yield, read from the forward price its call and put quotes imply. Gamma is computed with it in place of a fixed rate.
+_Avoid_: risk-free rate, interest rate, dividend yield
+
 **Gamma Flip**:
 The spot price at which Naive GEX, recomputed for the whole chain as if spot stood there, changes sign; the crossing nearest spot. A session may have none. Unlike Zero Gamma, it moves spot and reprices every contract instead of reading the sign change between two neighbouring strikes.
 _Avoid_: zero gamma, flip point, HVL

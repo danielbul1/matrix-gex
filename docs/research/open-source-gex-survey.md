@@ -178,6 +178,11 @@ Ideas 4, 5 and 8 wait. The screen ideas below stay closed, and ADR 0001 is not r
 7. **Rate and dividend yield from data, not constants.**
    - Use a tenor-matched bill rate (gflows) and a dividend yield per underlying.
    - On SPX they move Naive GEX by up to 10 $bn on this snapshot.
+   - **Done in #72 (this PR), from the chain itself rather than a curve.**
+     - Each expiry's Implied Carry b = r − q comes from put-call parity on two-sided quotes within ±3%.
+     - Only the forward is used. The discount on its own is noise, and for SPY and QQQ it came out above 1, because American options break parity.
+     - On the 2026-10-27 10:00 chain: SPX's long expiries 3.7–3.8% and SPY 4.2–4.3%, against the fixed 5%.
+     - SPX Naive GEX went from −6.38 to −12.21 $bn, and its Gamma Flip moved 4.4 points.
 8. **Backtest rules for any level study.** Levels taken from the session start only; an untouched level is not "held"; a break needs a margin (Darthreign). Pre-registered hypotheses with FDR correction (emlama).
 
 ## Ideas that would add a screen (each needs ADR 0001 reopened)

@@ -11,6 +11,10 @@ import urllib.request
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+# Canonical engine, for the implied carry of each expiry (#72).
+sys.path.insert(0, str(Path(__file__).resolve().parent / "railway-service" / "src"))
+from tripity_experiment import matrix_gex  # noqa: E402
+
 
 # ETFs and equities use multiplier=100. CBOE index symbols require a leading "_".
 SYMBOLS = [
@@ -50,13 +54,30 @@ def parse_symbol(s):
     return root, exp, cp, int(strike) / 1000.0
 
 
+def valuation_ms(asof):
+    """Epoch ms of Cboe's last_trade_time (ET wall clock), or None (now)."""
+    try:
+        return dt_from_asof(asof).timestamp() * 1000
+    except (TypeError, ValueError):
+        return None
+
+
+def dt_from_asof(asof):
+    return datetime.datetime.fromisoformat(str(asof)).replace(tzinfo=ET)
+
+
 def fetch_chain(cboe_sym, today):
-    """Fetch one Cboe chain and compact it into the cboe_data.json record."""
+    """Fetch one Cboe chain and compact it into the cboe_data.json record.
+    Each row carries its expiry's implied carry ("b") when parity gives one."""
     d = fetch(cboe_sym)
     spot = d.get("current_price") or d.get("close")
+    parsed = [(o, parse_symbol(o["option"])) for o in d["options"]]
+    carries = matrix_gex.expiry_carries(
+        [(p[0], p[1].isoformat(), p[2], p[3], o.get("bid"), o.get("ask"))
+         for o, p in parsed if p and p[1] >= today],
+        spot or 0, valuation_ms(d.get("last_trade_time"))) if spot else {}
     opts = []
-    for o in d["options"]:
-        p = parse_symbol(o["option"])
+    for o, p in parsed:
         if not p:
             continue
         root, exp, cp, K = p
@@ -80,6 +101,9 @@ def fetch_chain(cboe_sym, today):
             "g": round(o.get("gamma") or 0, 7),   # gamma from CBOE
             "d": round(o.get("delta") or 0, 4),
         })
+        carry = carries.get((root, exp.isoformat()))
+        if carry is not None:
+            opts[-1]["b"] = round(carry, 5)
     return {
         "spot": round(spot, 2) if spot else None,
         "asof": d.get("last_trade_time") or str(today),
