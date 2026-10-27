@@ -194,6 +194,9 @@ def norm_iv(iv: float) -> float:
 CARRY_WINDOW = 0.03    # strikes within +/-3% of spot
 CARRY_MIN_PAIRS = 5    # strikes with a two-sided call and put quote
 CARRY_MAX_ABS = 0.25   # a carry beyond +/-25% a year is treated as bad data
+# Under a day to expiry a tiny forward error becomes a large annual rate, so
+# such an expiry borrows the carry of the next expiry instead.
+CARRY_MIN_T = 1 / 365.25
 
 
 def implied_carry(pairs, spot: float, T: float) -> float | None:
@@ -231,20 +234,31 @@ def implied_carry(pairs, spot: float, T: float) -> float | None:
 
 def expiry_carries(quotes, spot: float, valuation_ms: float | None = None) -> dict[tuple[str, str], float]:
     """{(root, expiry): implied carry} from raw quotes
-    (root, expiry "YYYY-MM-DD", "C"/"P", strike, bid, ask)."""
+    (root, expiry "YYYY-MM-DD", "C"/"P", strike, bid, ask). An expiry under
+    CARRY_MIN_T from valuation takes the carry of the nearest later expiry
+    that has its own; with none, it gets no carry."""
     sides: dict[tuple[str, str], dict[float, dict[str, tuple[float, float]]]] = {}
     for root, exp, call_put, K, bid, ask in quotes:
         bid, ask = float(bid or 0), float(ask or 0)
         if bid > 0 and ask > bid:
             sides.setdefault((root, exp), {}).setdefault(float(K), {})[call_put] = (
                 (bid + ask) / 2, ask - bid)
-    carries = {}
+    own, short = {}, []
     for (root, exp), strikes in sides.items():
+        T = years_to_expiry(exp, root, valuation_ms)
+        if T < CARRY_MIN_T:
+            short.append(((root, exp), T))
+            continue
         pairs = [(K, q["C"][0], q["P"][0], q["C"][1] + q["P"][1])
                  for K, q in strikes.items() if "C" in q and "P" in q]
-        carry = implied_carry(pairs, spot, years_to_expiry(exp, root, valuation_ms))
+        carry = implied_carry(pairs, spot, T)
         if carry is not None:
-            carries[(root, exp)] = carry
+            own[(root, exp)] = (T, carry)
+    carries = {key: carry for key, (_, carry) in own.items()}
+    for key, T in short:
+        later = [(t, carry) for t, carry in own.values() if t > T]
+        if later:
+            carries[key] = min(later)[1]
     return carries
 
 

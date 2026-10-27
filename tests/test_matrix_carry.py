@@ -125,3 +125,19 @@ def test_dashboard_uses_the_rows_carry():
         [{**o, "b": None} for o in opts], SPOT, 100, VALUATION_MS))
     assert abs(expected - at_default) > 1e-3 * abs(expected)  # the carry moves the answer
     assert total == pytest.approx(expected, rel=1e-6)
+
+
+def test_an_expiry_under_a_day_borrows_the_next_expirys_carry():
+    today = VALUATION.date().isoformat()  # about six hours left at 10:00
+    later = "2026-11-03"
+    T_later = mg.years_to_expiry(later, "SPY", VALUATION_MS)
+    quotes = _quotes(exp=today)
+    for K, call, put, _ in _parity_pairs(SPOT, T_later, r=0.03, q=0.0):
+        quotes.append(("SPY", later, "C", K, call - 0.025, call + 0.025))
+        quotes.append(("SPY", later, "P", K, put - 0.025, put + 0.025))
+    quotes += _quotes()  # 2026-11-20 at r - q = 2.5%
+    carries = mg.expiry_carries(quotes, SPOT, VALUATION_MS)
+    assert carries[("SPY", later)] == pytest.approx(0.03, abs=1e-9)
+    assert carries[("SPY", today)] == carries[("SPY", later)]  # the nearest later one
+    # Alone, a same-day expiry gets no carry, and its rows fall back to the default rate.
+    assert mg.expiry_carries(_quotes(exp=today), SPOT, VALUATION_MS) == {}
