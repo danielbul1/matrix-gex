@@ -267,8 +267,8 @@ function renderImpl(R){
 // net_gex = bars on the left axis. The others are area layers on the right: AG and
 // Power Zone share one axis in GEX units (his AG sits on its own right axis, and his
 // Power Zone is in AG's units); OI and volume counts get their own scale (a guess).
-// Net GEX and AG start on, as in his 2026 screenshots (a guess at his default).
-let ACTIVE = new Set(["net_gex","ag"]);
+// Net GEX, AG and Power Zone start on (owner, 2026-10-27: Power Zone everywhere).
+let ACTIVE = new Set(["net_gex","ag","power"]);
 // Strikes shown: spot +/- 2 expected moves.
 const DISPLAY_SIGMA = 2;
 // Power Zone is drawn on, and the Matrix level is found among, only strikes within
@@ -291,7 +291,9 @@ const METRICS = {
   put_oi:   {label:"Put OI",      color:"#f32d35", kind:"area", axis:"count", val:s=>s.putOI},
   call_vol: {label:"Call Volume", color:"#003cfe", kind:"area", axis:"count", val:s=>s.callVol},
   put_vol:  {label:"Put Volume",  color:"#e55f04", kind:"area", axis:"count", val:s=>s.putVol},
-  power:    {label:"Power Zone",  color:"#e8ca01", kind:"area", axis:"gex", fill:.5, val:s=>s.powerZone || 0, window:POWER_ZONE_WINDOW},
+  // Power Zone has its own right-hand scale, as on his chart (0-120M beside Net GEX);
+  // on AG's scale it would sit at an eighth of AG and vanish.
+  power:    {label:"Power Zone",  color:"#e8ca01", kind:"area", axis:"pz", fill:.5, val:s=>s.powerZone || 0, window:POWER_ZONE_WINDOW},
 };
 // Active metrics in button order; the Net GEX bars draw only while its button is on.
 function chartActiveMetrics(){
@@ -363,7 +365,7 @@ function drawChart(R,chartId='gexChart'){
 
   const padL=mobile ? 48 : 70;
   // One right-hand scale per active group, side by side.
-  const rightAxes=['gex','count'].filter(ax=>areas.some(m=>METRICS[m].axis===ax));
+  const rightAxes=['gex','pz','count'].filter(ax=>areas.some(m=>METRICS[m].axis===ax));
   const axisW=mobile ? 42 : 62;
   const padR=(rightAxes.length ? rightAxes.length*axisW : (mobile ? 18 : 42));
   const padT=mobile ? 28 : 36;
@@ -556,35 +558,66 @@ function hideChartTooltip(){
   ['chartTooltip','chartCrosshairX'].forEach(id=>{const el=byId(id); if(el) el.style.display='none';});
 }
 // ---------- Price Lines ----------
-// The six strikes drawn across a price chart (CONTEXT "Price Line"). Each strike needs
-// netGex, callVol, putVol, ag and powerZone. Matrix looks only within 1% of spot.
-// chartLabel is how his price chart names each line (research Addendum 5); his magnet
-// label is the product name, so ours reads "Matrix" (#26).
-const PRICE_LINE_STYLES = [
-  {label:'P1',        chartLabel:'P1 Strike',       color:'#22b5ff'},
-  {label:'N1',        chartLabel:'N1 Strike',       color:'#ff453a'},
-  {label:'Call Vol',  chartLabel:'Call Vol Strike', color:'#003cfe'},
-  {label:'Put Vol',   chartLabel:'Put Vol Strike',  color:'#e55f04'},
-  {label:'Matrix',    chartLabel:'Matrix',          color:'#e8ca01'},
-  {label:'AG Strike', chartLabel:'AG Strike',       color:'#915bf8'},
-];
+// Max Power's level set (research Addendum 2 and his TradingView export): the magnet
+// (highest Power Zone within 1% of spot, "Matrix" here, #26), P1-P3 (largest positive
+// Net GEX), N1-N3 (largest negative), AG1-AG2 (largest Abs GEX), and the largest call
+// and put volume. Each strike needs netGex, callVol, putVol, ag and powerZone.
+const LEVEL_COLORS = {P:'#22b5ff', N:'#ff453a', AG:'#915bf8', 'Call Vol':'#003cfe', 'Put Vol':'#e55f04', Matrix:'#e8ca01'};
 // His line values carry two decimals ("6800.00").
 function fmtLineValue(v){ return Number(v).toFixed(2); }
+// The n strikes with the largest val, largest first, skipping any val of 0 or less.
+function topStrikes(list, val, n){
+  return list.filter(s=>val(s)>0).sort((a,b)=>val(b)-val(a)).slice(0,n);
+}
 function priceLines(strikes, spot){
-  const top = (list,val)=>list.reduce((best,s)=>!best || val(s)>val(best) ? s : best, null);
   const near = strikes.filter(s=>Math.abs(s.strike-spot)/spot<=POWER_ZONE_WINDOW);
-  const picks = {
-    'P1':        [top(strikes,s=>s.netGex),  s=>s.netGex>0],
-    'N1':        [top(strikes,s=>-s.netGex), s=>s.netGex<0],
-    'Call Vol':  [top(strikes,s=>s.callVol), s=>s.callVol>0],
-    'Put Vol':   [top(strikes,s=>s.putVol),  s=>s.putVol>0],
-    'Matrix':    [top(near,s=>s.powerZone),  s=>s.powerZone>0],
-    'AG Strike': [top(strikes,s=>s.ag),      s=>s.ag>0],
-  };
-  return PRICE_LINE_STYLES.map(style=>{
-    const [s, ok] = picks[style.label];
-    return s && ok(s) ? {...style, price:s.strike} : null;
-  }).filter(Boolean);
+  const line = (label, kind, s)=>({label, chartLabel:label, kind, color:LEVEL_COLORS[kind], price:s.strike});
+  return [
+    ...topStrikes(near, s=>s.powerZone||0, 1).map(s=>line('Matrix','Matrix',s)),
+    ...topStrikes(strikes, s=>s.netGex, 3).map((s,i)=>line(`P${i+1}`,'P',s)),
+    ...topStrikes(strikes, s=>-s.netGex, 3).map((s,i)=>line(`N${i+1}`,'N',s)),
+    ...topStrikes(strikes, s=>s.ag, 2).map((s,i)=>line(`AG${i+1}`,'AG',s)),
+    ...topStrikes(strikes, s=>s.callVol, 1).map(s=>line('Call Vol','Call Vol',s)),
+    ...topStrikes(strikes, s=>s.putVol, 1).map(s=>line('Put Vol','Put Vol',s)),
+  ];
+}
+// Price Lines on one strike share a dashed line and a label ("P1 · AG1 6800.00").
+function groupLines(lines){
+  const groups=[];
+  lines.forEach(l=>{
+    const g=groups.find(o=>o.price===l.price);
+    if(g) g.labels.push(l.chartLabel); else groups.push({price:l.price, color:l.color, labels:[l.chartLabel]});
+  });
+  return groups.sort((a,b)=>b.price-a.price);
+}
+function drawLineGroups(ctx, groups, {y, x0, x1, mobile, align='right'}){
+  ctx.font=mobile?'bold 10px Segoe UI':'bold 11px Segoe UI'; ctx.textAlign=align; ctx.textBaseline='bottom';
+  const labelYs=[];
+  groups.forEach(g=>{
+    const yy=y(g.price);
+    ctx.save(); ctx.setLineDash([6,4]); ctx.strokeStyle=g.color; ctx.lineWidth=1.5;
+    ctx.beginPath(); ctx.moveTo(x0,yy); ctx.lineTo(x1,yy); ctx.stroke(); ctx.restore();
+    let ly=yy-2;
+    while(labelYs.some(o=>Math.abs(o-ly)<12)) ly+=12;
+    labelYs.push(ly);
+    ctx.fillStyle=g.color;
+    ctx.fillText(`${g.labels.join(' · ')} ${fmtLineValue(g.price)}`, align==='right' ? x1-4 : x0+4, ly);
+  });
+}
+// The Power Zone drawn sideways along the price axis from the left edge of a price
+// chart, translucent yellow, as on his price chart. strikes: {strike, powerZone}.
+function drawPowerZoneSideways(ctx, strikes, {left, width, y, lo, hi, top, bottom}){
+  const prof=powerZoneProfile(strikes.filter(s=>s.powerZone>0)).filter(p=>p.price>=lo && p.price<=hi);
+  const maxV=Math.max(...prof.map(p=>p.value),0);
+  if(prof.length<2 || !(maxV>0)) return;
+  const pts=prof.map(p=>[left+p.value/maxV*width, y(p.price)]);
+  ctx.beginPath(); ctx.moveTo(left,pts[0][1]); ctx.lineTo(pts[0][0],pts[0][1]);
+  splineTo(ctx,pts,top,bottom,0.8);
+  ctx.lineTo(left,pts[pts.length-1][1]); ctx.closePath();
+  ctx.fillStyle='rgba(255,193,7,0.2)'; ctx.fill();
+  ctx.beginPath(); ctx.moveTo(pts[0][0],pts[0][1]);
+  splineTo(ctx,pts,top,bottom,0.8);
+  ctx.strokeStyle='#e8ca01'; ctx.lineWidth=2; ctx.stroke();
 }
 
 // ---------- Price charts (Strike Chart) ----------
@@ -747,39 +780,8 @@ function drawPriceChart(chartId,symbol){
     ctx.stroke();
   }
   if(levels){
-    // Power Zone drawn sideways along the price axis from the left edge, translucent yellow.
-    const prof=powerZoneProfile(levels.profile).filter(p=>p.price>=lo && p.price<=hi);
-    const maxV=Math.max(...prof.map(p=>p.value),0);
-    if(prof.length>1 && maxV>0){
-      // A smoothed line (0.8, like his) of width 2 with a translucent fill to the left edge.
-      const width=plotW*0.25;
-      const pts=prof.map(p=>[padL+p.value/maxV*width, y(p.price)]);
-      ctx.beginPath(); ctx.moveTo(padL,pts[0][1]); ctx.lineTo(pts[0][0],pts[0][1]);
-      splineTo(ctx,pts,top,bottom,0.8);
-      ctx.lineTo(padL,pts[pts.length-1][1]); ctx.closePath();
-      ctx.fillStyle='rgba(255,193,7,0.2)'; ctx.fill();
-      ctx.beginPath(); ctx.moveTo(pts[0][0],pts[0][1]);
-      splineTo(ctx,pts,top,bottom,0.8);
-      ctx.strokeStyle='#e8ca01'; ctx.lineWidth=2; ctx.stroke();
-    }
-    // The Price Lines; lines on the same strike share one line and one label.
-    const groups=[];
-    shownLines.forEach(l=>{
-      const g=groups.find(o=>o.price===l.price);
-      if(g) g.labels.push(l.chartLabel); else groups.push({price:l.price, color:l.color, labels:[l.chartLabel]});
-    });
-    ctx.font=mobile?'bold 10px Segoe UI':'bold 11px Segoe UI'; ctx.textAlign='right'; ctx.textBaseline='bottom';
-    const labelYs=[];
-    groups.sort((a,b)=>b.price-a.price).forEach(g=>{
-      const yy=y(g.price);
-      ctx.save(); ctx.setLineDash([6,4]); ctx.strokeStyle=g.color; ctx.lineWidth=1.5;
-      ctx.beginPath(); ctx.moveTo(padL,yy); ctx.lineTo(W-padR,yy); ctx.stroke(); ctx.restore();
-      let ly=yy-2;
-      while(labelYs.some(o=>Math.abs(o-ly)<12)) ly+=12;
-      labelYs.push(ly);
-      ctx.fillStyle=g.color;
-      ctx.fillText(`${g.labels.join(' · ')} ${fmtLineValue(g.price)}`, W-padR-4, ly);
-    });
+    drawPowerZoneSideways(ctx, levels.profile, {left:padL, width:plotW*0.25, y, lo, hi, top, bottom});
+    drawLineGroups(ctx, groupLines(shownLines), {y, x0:padL, x1:W-padR, mobile});
   }
   ctx.strokeStyle='rgba(255,255,255,.18)'; ctx.lineWidth=1;
   ctx.beginPath(); ctx.moveTo(padL,bottom); ctx.lineTo(W-padR,bottom); ctx.stroke();
@@ -885,50 +887,94 @@ function syncTickerInput(view,value=screenTickers[view]){
     `<button type="button" class="gb-btn${t===value?' active':''}" data-ticker="${t}" aria-pressed="${t===value}">${t}</button>`).join('');
 }
 
-// ---------- Expiration (Strike Chart) ----------
-// Like his Expiration dropdown: several dates at once, shown as removable chips, summed
-// per strike. The menu lists every open expiry, so the trader can add any of them. A
-// ticker starts on the nearest expiry only, and the trader adds more (owner's choice).
+// ---------- Expirations ----------
+// Every open expiry of a chain (New York date), nearest first.
 function chainExpirations(chain){
-  const todayIso = new Date().toISOString().slice(0,10);
+  const todayIso = nyTodayIso();
   return [...new Set(chain.quotes.map(q=>q.exp).filter(exp=>exp && exp >= todayIso))].sort();
 }
+// ---------- Expiry picker (every screen) ----------
+// Like gex_dashboard: preset buttons (0DTE, Week, Month, All) over a short list of
+// dates, each "Oct 27 (0d)"; a click on a date adds or removes it. A new ticker starts
+// on the last preset used (Week at first), remembered in this browser.
+const EXP_PRESETS = [['0dte','0DTE',0],['week','Week',7],['month','Month',30],['all','All',Infinity]];
+const EXP_PRESET_KEY = 'matrix.expiryPreset';
+function nyTodayIso(){
+  return new Intl.DateTimeFormat('en-CA',{timeZone:'America/New_York'}).format(new Date());
+}
+function daysOut(exp){
+  return Math.round((Date.parse(exp+'T00:00:00Z')-Date.parse(nyTodayIso()+'T00:00:00Z'))/86400000);
+}
+// A preset's dates; when none fall in it (a weekend for 0DTE), the nearest date.
+function presetDates(preset, expiries){
+  const max = (EXP_PRESETS.find(p=>p[0]===preset) || EXP_PRESETS[1])[2];
+  if(max===Infinity) return [...expiries];
+  const out = expiries.filter(exp=>daysOut(exp)<=max);
+  return out.length ? out : expiries.slice(0,1);
+}
+function savedPreset(){
+  try{ return localStorage.getItem(EXP_PRESET_KEY) || 'week'; }catch(_err){ return 'week'; }
+}
+function savePreset(preset){
+  try{ localStorage.setItem(EXP_PRESET_KEY, preset); }catch(_err){ /* private mode */ }
+}
+function defaultExpirySelection(expiries){
+  return new Set(presetDates(savedPreset(), expiries));
+}
+// The preset the selection matches exactly, if any (its button is lit).
+function matchingPreset(expiries, selected){
+  return EXP_PRESETS.map(p=>p[0]).find(preset=>{
+    const dates = presetDates(preset, expiries);
+    return dates.length===selected.size && dates.every(exp=>selected.has(exp));
+  }) || null;
+}
+function fmtExpiryLabel(exp){
+  const d = new Date(exp+'T12:00:00Z');
+  return `${d.toLocaleDateString('en-US',{month:'short',day:'numeric',timeZone:'UTC'})} (${daysOut(exp)}d)`;
+}
+// shares: optional Map of each date's share of the gamma (the GEX board shows it).
+function renderExpiryPicker(id, expiries=[], selected=new Set(), shares=null){
+  const el = byId(id);
+  if(!el) return;
+  expiries = expiries || []; selected = selected || new Set();
+  if(!expiries.length){ el.innerHTML = '<span class="xp-note">No expirations</span>'; return; }
+  const lit = matchingPreset(expiries, selected);
+  const presets = EXP_PRESETS.map(([key,label])=>
+    `<button type="button" class="xp-preset${key===lit?' active':''}" data-xp-preset="${key}" aria-pressed="${key===lit}">${label}</button>`).join('');
+  const dates = expiries.map(exp=>{
+    const on = selected.has(exp);
+    const share = shares ? `<small>${(shares.get(exp)||0).toFixed(1)}%</small>` : '';
+    return `<button type="button" class="xp-date${on?' active':''}" data-xp-date="${esc(exp)}" aria-pressed="${on}" title="${esc(exp)}">${esc(fmtExpiryLabel(exp))}${share}</button>`;
+  }).join('');
+  const count = selected.size ? `${selected.size} selected` : 'Pick at least one date';
+  el.innerHTML = `<div class="xp-presets">${presets}<span class="xp-note">${count}</span></div><div class="xp-dates">${dates}</div>`;
+}
+// Wires a picker's clicks: getState() -> {expiries, selected}; onChange(newSet).
+function bindExpiryPicker(id, getState, onChange){
+  bind(id,'click',event=>{
+    const state = getState();
+    if(!state) return;
+    const preset = event.target.closest?.('[data-xp-preset]')?.dataset.xpPreset;
+    if(preset){ savePreset(preset); onChange(new Set(presetDates(preset, state.expiries))); return; }
+    const exp = event.target.closest?.('[data-xp-date]')?.dataset.xpDate;
+    if(!exp) return;
+    const next = new Set(state.selected);
+    if(next.has(exp)) next.delete(exp); else next.add(exp);
+    onChange(next);
+  });
+}
+
+// Strike Chart dates.
 let homeExpiries = [];
 function populateExpirations(chain){
   homeExpiries = chainExpirations(chain);
   selectedExpirations = selectedExpirations
     ? new Set([...selectedExpirations].filter(exp=>homeExpiries.includes(exp)))
-    : new Set(homeExpiries.slice(0,1));
+    : defaultExpirySelection(homeExpiries);
   renderExpirationPicker();
 }
 function renderExpirationPicker(){
-  const chips = byId('expirationChips'), menu = byId('expirationMenu');
-  if(!chips || !menu) return;
-  const chosen = homeExpiries.filter(exp=>selectedExpirations?.has(exp));
-  chips.innerHTML = chosen.length
-    ? chosen.map(exp=>`<span class="ms-chip"><button type="button" class="ms-remove" data-exp-remove="${esc(exp)}" aria-label="Remove ${esc(exp)}">×</button>${esc(exp)}</span>`).join('')
-    : `<span class="ms-placeholder">${homeExpiries.length ? 'Select...' : 'No expirations available'}</span>`;
-  const rest = homeExpiries.filter(exp=>!selectedExpirations?.has(exp));
-  menu.innerHTML = rest.length
-    ? rest.map(exp=>`<li><button type="button" class="ms-option" data-exp-add="${esc(exp)}">${esc(exp)}</button></li>`).join('')
-    : '<li class="ms-none">No more dates</li>';
-  const clear = byId('expirationClear');
-  if(clear) clear.hidden = !chosen.length;
-}
-function setExpirationMenu(open){
-  const menu = byId('expirationMenu'), toggle = byId('expirationToggle');
-  if(!menu) return;
-  menu.hidden = !open;
-  byId('expirationSelect')?.classList.toggle('open', open);
-  toggle?.setAttribute('aria-expanded', String(open));
-}
-// A change of dates redraws the strike chart and the Price Lines from the loaded chain.
-function changeExpirations(update){
-  if(!selectedExpirations) return;
-  update(selectedExpirations);
-  renderExpirationPicker();
-  run();
-  drawPriceCharts(currentSymbol());
+  renderExpiryPicker('homeDates', homeExpiries, selectedExpirations || new Set());
 }
 
 // ---------- Navigation ----------
@@ -1092,7 +1138,7 @@ async function refreshHome(symbol, reuse=false){
   const previous=currentSymbol();
   if(activeView===HOME_VIEW) syncTickerInput(HOME_VIEW,symbol);
   setTickerStatus(HOME_VIEW,`Loading ${symbol}…`);
-  if(!homeRecord) showDatesLoading('expirationChips','<span class="ms-placeholder">Loading dates…</span>');
+  if(!homeRecord) showDatesLoading('homeDates','<span class="xp-note">Loading dates…</span>');
   // The dates and the strike chart draw as soon as the chain is in; the candles follow.
   const pricePromise=loadPriceData(symbol);
   const result=await loadCoreData(reuse);
@@ -1128,6 +1174,7 @@ const KEY_LEVELS_VIEW = 'key-levels';
 const KEY_LEVELS_CANDLES = {interval:'5m', range:'5d'};
 // The four Key Levels, in the colours Matrix already used for them.
 const KEY_LEVEL_STYLES = [
+  {key:'matrixStrike',   label:'Matrix',     color:'#e8ca01'},
   {key:'callWall',       label:'Call Wall',  color:'#22b5ff'},
   {key:'putWall',        label:'Put Wall',   color:'#ff453a'},
   {key:'flip',           label:'Zero Gamma', color:'#f5f5f5'},
@@ -1136,7 +1183,7 @@ const KEY_LEVEL_STYLES = [
 // Levels further than this from spot stay in the legend but off the chart,
 // so one far wall cannot squash the candles into a line.
 const KEY_LEVELS_MAX_DISTANCE = 0.08;
-let keyLevelsState = null;  // {symbol, R, candles}
+let keyLevelsState = null;  // {symbol, R, candles, expiries, selected}
 let _keyLevelsRequest = 0;
 
 function keyLevels(R){
@@ -1144,13 +1191,14 @@ function keyLevels(R){
     .map(style=>({...style, price:R?.[style.key]==null ? NaN : Number(R[style.key])}))
     .filter(level=>Number.isFinite(level.price) && level.price>0);
 }
-// No expiry choice on this screen: the GEX profile spans every open expiry (a guess;
-// his page has no expiry control).
-function keyLevelsGex(symbol){
+// The GEX profile of the chosen expirations (all open ones when none is given), with
+// the Matrix level: the highest Power Zone within 1% of spot.
+function keyLevelsGex(symbol, selected=null){
   const chain=buildChainReal(symbol);
-  const todayIso=new Date().toISOString().slice(0,10);
-  const open=chain.quotes.filter(q=>!q.exp || q.exp>=todayIso);
+  const todayIso=nyTodayIso();
+  const open=chain.quotes.filter(q=>selected ? selected.has(q.exp) : (!q.exp || q.exp>=todayIso));
   const R=calcGEX(open.length ? {...chain, quotes:open} : chain);
+  R.matrixStrike = matrixLine(R.strikes, R.spot)?.price ?? null;
   return R;
 }
 
@@ -1317,7 +1365,11 @@ function drawKeyLevelsChart(state){
     ctx.fillText(`No price data for ${R.symbol}`, padL+plotW/2, top+plotH/2);
   }
 
-  // the four Key Levels across the chart, labelled on the right
+  // Power Zone sideways from the left edge, as on the other price charts
+  drawPowerZoneSideways(ctx, R.strikes.filter(k=>Math.abs(k.strike-R.spot)/R.spot<=POWER_ZONE_WINDOW),
+    {left:padL, width:plotW*0.2, y, lo:minPrice, hi:maxPrice, top, bottom});
+
+  // the Key Levels across the chart, labelled on the right
   ctx.font = mobile ? "bold 10px Segoe UI" : "bold 12px Segoe UI";
   ctx.textAlign = "left"; ctx.textBaseline = "middle";
   const labelYs = [];
@@ -1374,6 +1426,7 @@ async function fetchKeyLevelsCandles(symbol){
 }
 function renderKeyLevels(){
   if(activeView!==KEY_LEVELS_VIEW || !keyLevelsState) return;
+  renderExpiryPicker('klDates', keyLevelsState.expiries, keyLevelsState.selected);
   drawKeyLevelsChart(keyLevelsState);
   const host = byId('forecast');
   if(host) host.innerHTML = forecastHtml(keyLevelsState.R);
@@ -1394,7 +1447,10 @@ async function loadKeyLevels(symbol, reuse=false){
     setTickerStatus(KEY_LEVELS_VIEW,result.detail || `${symbol}: no data.`,'error');
     return;
   }
-  keyLevelsState = {symbol, R:keyLevelsGex(symbol), candles:candles || []};
+  const expiries = chainExpirations(buildChainReal(symbol));
+  const kept = symbol===keyLevelsState?.symbol ? [...keyLevelsState.selected].filter(exp=>expiries.includes(exp)) : [];
+  const selected = kept.length ? new Set(kept) : defaultExpirySelection(expiries);
+  keyLevelsState = {symbol, R:keyLevelsGex(symbol, selected), candles:candles || [], expiries, selected};
   screenTickers[KEY_LEVELS_VIEW] = symbol;
   if(activeView===KEY_LEVELS_VIEW){
     syncTickerInput(KEY_LEVELS_VIEW);
@@ -1423,11 +1479,14 @@ const OIV_METRICS = {
   put_oi:        {label:'Put OI',        color:'#f32d35', kind:'area', val:s=>s.putOI},
   call_vol:      {label:'Call Vol',      color:'#003cfe', kind:'area', val:s=>s.callVol},
   put_vol:       {label:'Put Vol',       color:'#e55f04', kind:'area', val:s=>s.putVol},
+  // Power Zone within 1% of spot, on its own scale like each area here.
+  power:         {label:'Power Zone',    color:'#e8ca01', kind:'area', val:s=>s.powerZone||0, window:POWER_ZONE_WINDOW},
 };
-const OIV_ACTIVE = new Set(['volume_spread']);
+const OIV_ACTIVE = new Set(['volume_spread','power']);
 const MATRIX_CANDLES_URL = '/api/matrix/candles';
 // record: this screen's own copy of the chain, so other screens' ticker clicks leave it alone.
-const oiv = {symbol:null, record:null, expiry:null, candles:null, candlesError:''};
+// selected: the chosen expirations (a Set), null until a ticker's first load.
+const oiv = {symbol:null, record:null, expiries:[], selected:null, candles:null, candlesError:''};
 let _oivRequest = 0;
 
 // One expiration's chain summed per strike. No OI floor here: a strike that
@@ -1447,14 +1506,20 @@ function aggregateOiVolume(quotes){
     .sort((a,b)=>a.strike-b.strike);
 }
 function oiVolumeExpiries(chain){
-  const todayIso = new Date().toISOString().slice(0,10);
-  return [...new Set(chain.quotes.map(q=>q.exp).filter(exp=>exp && exp>=todayIso))].sort();
+  return chainExpirations(chain);
 }
-function computeOiVolume(symbol, expiry, record=oiv.record){
+// expiries: one date or a Set of them, summed per strike.
+function computeOiVolume(symbol, expiries, record=oiv.record){
+  const chosen = expiries instanceof Set ? expiries : new Set([expiries]);
   const chain = buildChainRealFromRecord(symbol, record);
-  const quotes = chain.quotes.filter(q=>q.exp===expiry);
+  const quotes = chain.quotes.filter(q=>chosen.has(q.exp));
   const scoped = {...chain, quotes};
-  return {symbol, spot:chain.spot, expiry, strikes:aggregateOiVolume(quotes), expectedMove:calcExpectedMove(scoped)};
+  // Power Zone per strike from the GEX engine, the same as the Strike Chart.
+  const pz = new Map(calcGEX(scoped).strikes.map(s=>[s.strike, s.powerZone]));
+  const strikes = aggregateOiVolume(quotes).map(s=>({...s, powerZone:pz.get(s.strike)||0}));
+  const dates = [...chosen].sort();
+  const expiry = dates.length===1 ? dates[0] : `${dates.length} expirations`;
+  return {symbol, spot:chain.spot, expiry, strikes, expectedMove:calcExpectedMove(scoped)};
 }
 // The strike of the largest value for each OI/volume series: these are the
 // lines on his price chart. Which lines he draws is not public, so this is our guess.
@@ -1467,16 +1532,17 @@ function oiVolumePriceLines(strikes){
     ['Put Vol','putVol',OIV_METRICS.put_vol.color],
   ].map(([label,key,color])=>{ const s=top(key); return s && {label, color, price:s.strike}; }).filter(Boolean);
 }
+// The Matrix level (highest Power Zone within 1% of spot) for a price chart.
+function matrixLine(strikes, spot){
+  const s = topStrikes(strikes.filter(k=>Math.abs(k.strike-spot)/spot<=POWER_ZONE_WINDOW), k=>k.powerZone||0, 1)[0];
+  return s ? {label:'Matrix', color:LEVEL_COLORS.Matrix, price:s.strike} : null;
+}
 function populateOiVolumeExpiries(symbol, record=oiv.record){
-  const select = byId('oivExpiry');
-  const expiries = oiVolumeExpiries(buildChainRealFromRecord(symbol, record));
-  if(!expiries.includes(oiv.expiry)) oiv.expiry = expiries[0] || null;
-  if(select){
-    select.innerHTML = expiries.length
-      ? expiries.map(exp=>`<option value="${esc(exp)}"${exp===oiv.expiry?' selected':''}>${esc(exp)}</option>`).join('')
-      : '<option value="">No expirations</option>';
-    select.disabled = !expiries.length;
-  }
+  oiv.expiries = oiVolumeExpiries(buildChainRealFromRecord(symbol, record));
+  oiv.selected = oiv.selected
+    ? new Set([...oiv.selected].filter(exp=>oiv.expiries.includes(exp)))
+    : defaultExpirySelection(oiv.expiries);
+  renderExpiryPicker('oivDates', oiv.expiries, oiv.selected);
 }
 function renderOiVolume(){
   const symbol = oiv.symbol;
@@ -1484,8 +1550,7 @@ function renderOiVolume(){
   // The chain may have changed since the list was built: refill it, and fall
   // back to the nearest expiration when the chosen one is gone.
   populateOiVolumeExpiries(symbol);
-  if(!oiv.expiry) return;
-  const R = computeOiVolume(symbol, oiv.expiry);
+  const R = computeOiVolume(symbol, oiv.selected);
   window._oivR = R;
   drawOiVolumeChart(R);
   drawOiVolumePriceChart(R);
@@ -1533,7 +1598,7 @@ function drawOiVolumeChart(R){
     lMin=-maxAbs; lMax=maxAbs;
     yL=v=>top+(lMax-v)/(lMax-lMin)*plotH; y0=yL(0);
   }
-  const ownMax={}; areas.forEach(m=>ownMax[m]=Math.max(...data.map(OIV_METRICS[m].val),1));
+  const ownMax={}; areas.forEach(m=>ownMax[m]=Math.max(...layerPoints(OIV_METRICS[m],data,R.spot).map(({s})=>OIV_METRICS[m].val(s)),1));
   const dom = areas.length ? areas.reduce((a,b)=>ownMax[b]>ownMax[a]?b:a,areas[0]) : null;
   const rMax = dom ? ownMax[dom]*1.08 : 1;
 
@@ -1550,15 +1615,18 @@ function drawOiVolumeChart(R){
   areas.forEach(m=>{
     const M=OIV_METRICS[m], own=ownMax[m];
     const yA=v=>bottom-(v/own)*0.92*plotH;
-    ctx.beginPath(); ctx.moveTo(xCenter(0),bottom);
-    data.forEach((s,i)=>ctx.lineTo(xCenter(i),yA(M.val(s))));
-    ctx.lineTo(xCenter(data.length-1),bottom); ctx.closePath();
+    // Power Zone keeps to its 1% window; the other areas span every strike.
+    const pts=layerPoints(M,data,R.spot);
+    if(!pts.length) return;
+    ctx.beginPath(); ctx.moveTo(xCenter(pts[0].i),bottom);
+    pts.forEach(({s,i})=>ctx.lineTo(xCenter(i),yA(M.val(s))));
+    ctx.lineTo(xCenter(pts[pts.length-1].i),bottom); ctx.closePath();
     ctx.fillStyle=hexA(M.color,.33); ctx.fill();
     ctx.beginPath();
-    data.forEach((s,i)=>{const x=xCenter(i),y=yA(M.val(s)); i?ctx.lineTo(x,y):ctx.moveTo(x,y);});
+    pts.forEach(({s,i},k)=>{const x=xCenter(i),y=yA(M.val(s)); k?ctx.lineTo(x,y):ctx.moveTo(x,y);});
     ctx.strokeStyle=M.color; ctx.lineWidth=1.6; ctx.stroke();
     ctx.fillStyle=M.color;
-    data.forEach((s,i)=>{ctx.beginPath(); ctx.arc(xCenter(i),yA(M.val(s)),1.8,0,7); ctx.fill();});
+    pts.forEach(({s,i})=>{ctx.beginPath(); ctx.arc(xCenter(i),yA(M.val(s)),1.8,0,7); ctx.fill();});
   });
 
   const hitBars = data.map((s,i)=>({x:padL+slot*i,y:top,w:slot,h:plotH,s}));
@@ -1618,7 +1686,7 @@ function showOiVolumeTooltip(ev){
   const row=(label,value,cls='')=>`<div class="tt-row"><span>${label}</span><span class="${cls}">${value}</span></div>`;
   const rows=Object.keys(OIV_METRICS).filter(m=>OIV_ACTIVE.has(m)).map(m=>{
     const v=OIV_METRICS[m].val(s);
-    const cls=m==='volume_spread' ? (v>=0?'pos':'neg') : (m.startsWith('call')?'pos':'neg');
+    const cls=m==='volume_spread' ? (v>=0?'pos':'neg') : m==='power' ? '' : (m.startsWith('call')?'pos':'neg');
     return row(OIV_METRICS[m].label, fmtNum(v), cls);
   }).join('');
   tt.innerHTML=`<div class="tt-title">${esc(window._oivR?.symbol||'')} Strike ${fmtPrice(s.strike)}</div>${rows || row('No metric selected','')}`;
@@ -1643,7 +1711,7 @@ function drawOiVolumePriceChart(R){
   const empty=byId('oivPriceEmpty');
   const label=byId('oivPriceLabel');
   const legend=byId('oivPriceLegend');
-  const lines=oiVolumePriceLines(R.strikes);
+  const lines=[matrixLine(R.strikes,R.spot), ...oiVolumePriceLines(R.strikes)].filter(Boolean);
   if(label) label.textContent=`${R.symbol} Price`;
   if(legend) legend.innerHTML=lines.map(l=>`<span class="sq" style="background:${l.color}"></span>${esc(l.label)} ${fmtPrice(l.price)}`).join('&nbsp;&nbsp;');
   const dpr=window.devicePixelRatio||1;
@@ -1680,6 +1748,9 @@ function drawOiVolumePriceChart(R){
     ctx.fillStyle='#c4c4c4'; ctx.fillText(fmtPrice(v), W-padR+6, yy);
   }
   cv._oivPrice={candles, padL, slot:step, top:padT, bottom:padT+plotH, plotW, symbol:R.symbol};
+  // Power Zone sideways from the left edge, under the candles.
+  drawPowerZoneSideways(ctx, R.strikes.filter(k=>Math.abs(k.strike-R.spot)/R.spot<=POWER_ZONE_WINDOW),
+    {left:padL, width:plotW*0.25, y, lo:yMin, hi:yMax, top:padT, bottom:padT+plotH});
   const bw=Math.max(1,Math.min(step*0.7,9));
   candles.forEach((c,i)=>{
     const color=c.close>=c.open ? '#17b65f' : '#ff2a17';
@@ -1746,7 +1817,7 @@ async function refreshOiVolume(symbol, reuse=false){
   const previous=oiv.symbol;
   syncTickerInput(OIV_VIEW,symbol);
   setTickerStatus(OIV_VIEW,`Loading ${symbol}…`);
-  if(!oiv.record) showDatesLoading('oivExpiry','<option value="">Loading dates…</option>');
+  if(!oiv.record) showDatesLoading('oivDates','<span class="xp-note">Loading dates…</span>');
   const pricePromise=loadOiVolumeCandles(symbol);
   const result=await loadCoreData(reuse);
   if(request!==_oivRequest) return;  // a newer click took over
@@ -1755,7 +1826,7 @@ async function refreshOiVolume(symbol, reuse=false){
     if(previous) syncTickerInput(OIV_VIEW,previous);
     return;
   }
-  if(symbol!==previous) oiv.expiry=null;
+  if(symbol!==previous) oiv.selected=null;
   const record=REAL[symbol];
   // The date list fills as soon as the chain is in; the charts wait for the candles.
   populateOiVolumeExpiries(symbol, record);
@@ -1790,6 +1861,7 @@ const GB_COLUMNS = [
   {key:'strike',        label:'Strike'},
   {key:'netGex',        label:'Net GEX', signed:true},
   {key:'ag',            label:'Abs GEX'},
+  {key:'powerZone',     label:'Power Zone'},
   {key:'notionalDelta', label:'Notional Delta', usd:true},
   {key:'totalOI',       label:'Total OI'},
   {key:'callOI',        label:'Call OI'},
@@ -1801,9 +1873,9 @@ const GB_COLUMNS = [
 ];
 // Columns whose largest value is marked, like his: a dot on the cell and the whole row
 // shaded. Net GEX counts by size, so its most negative strike can be the one.
-const GB_MAX_COLUMNS = ['netGex','ag','notionalDelta','totalOI','callOI','putOI','totalVol','callVol','putVol'];
+const GB_MAX_COLUMNS = ['netGex','ag','powerZone','notionalDelta','totalOI','callOI','putOI','totalVol','callVol','putVol'];
 // Text colours per column, as in his screenshot: calls blue, puts red, signed columns by sign.
-const GB_COLUMN_CLASS = {ag:'gb-call', callOI:'gb-call', callVol:'gb-call', putOI:'gb-put', putVol:'gb-put', totalOI:'gb-strong'};
+const GB_COLUMN_CLASS = {powerZone:'gb-pz', ag:'gb-call', callOI:'gb-call', callVol:'gb-call', putOI:'gb-put', putVol:'gb-put', totalOI:'gb-strong'};
 const GB_CHARTS = {
   Total: {canvas:'gbTotalChart', wrap:'gbTotalWrap'},
   Split: {canvas:'gbSplitChart', wrap:'gbSplitWrap'},
@@ -1834,17 +1906,17 @@ function gexBoardStrikes(chain){
     // Notional Delta: calls and puts both counted as positive, like AG.
     s.notionalDelta += Math.abs(delta) * q.oi * mult * spot;
   }
-  const rows = [...byStrike.values()].map(s=>({...s,
-    netGex:s.callGex+s.putGex, ag:Math.abs(s.callGex)+Math.abs(s.putGex),
-    totalOI:s.callOI+s.putOI, totalVol:s.callVol+s.putVol}));
+  const rows = [...byStrike.values()].map(s=>{
+    const ag = Math.abs(s.callGex)+Math.abs(s.putGex), totalVol = s.callVol+s.putVol;
+    // Power Zone, the same formula as the Strike Chart (calcGEX).
+    return {...s, netGex:s.callGex+s.putGex, ag, totalOI:s.callOI+s.putOI, totalVol,
+      powerZone: ag/8 + totalVol*spot*spot/20000};
+  });
   const totalAg = rows.reduce((sum,s)=>sum+s.ag,0);
   rows.forEach(s=>{ s.pct = totalAg ? s.netGex/totalAg*100 : 0; });
   return rows.sort((a,b)=>a.strike-b.strike);
 }
-// The six Price Lines over the board's strikes, with the GEX engine's Power Zone.
-function gexBoardPriceLines(rows, powerZone, spot){
-  return priceLines(rows.map(s=>({...s, powerZone:powerZone.get(s.strike)||0})), spot);
-}
+
 function computeGexBoard(symbol, record=gb.record, selected=gb.selected){
   const full = buildChainRealFromRecord(symbol, record);
   const chain = {...full, quotes:full.quotes.filter(q=>selected.has(q.exp))};
@@ -1855,8 +1927,12 @@ function computeGexBoard(symbol, record=gb.record, selected=gb.selected){
   const chartRows = all.filter(s=>Math.abs(s.strike-spot)/spot<=GB_CHART_WINDOW);
   // Total Gamma comes from the board's own rows, so it matches the table.
   const totalGex = all.reduce((sum,s)=>sum+s.netGex,0);
-  const powerZone = new Map(R.strikes.map(s=>[s.strike, s.powerZone||0]));
-  return {symbol, spot, R, rows, chartRows, totalGex, expiries:[...selected].sort(), lines:gexBoardPriceLines(rows, powerZone, spot)};
+  const lines = priceLines(rows, spot);
+  // Each strike's levels ("P1", "AG2", "Matrix"), shown in the table.
+  const levelsAt = new Map();
+  lines.forEach(l=>levelsAt.set(l.price, [...(levelsAt.get(l.price)||[]), l]));
+  const pzStrikes = rows.filter(s=>Math.abs(s.strike-spot)/spot<=POWER_ZONE_WINDOW);
+  return {symbol, spot, R, rows, chartRows, totalGex, expiries:[...selected].sort(), lines, levelsAt, pzStrikes};
 }
 // Each expiry's share of the gamma (AG) over all listed expiries, in percent: his expiry
 // buttons carry one, summing to 100%, with far-dated expiries near 0% (a guess at the base).
@@ -1902,14 +1978,8 @@ function renderGexBoardButtons(){
   const shown = screenTickers[GB_VIEW];
   if(tickers) tickers.innerHTML = GB_TICKERS.map(t=>
     `<button type="button" class="gb-btn${t===shown?' active':''}" data-gb-ticker="${t}" aria-pressed="${t===shown}">${t}</button>`).join('');
-  const expiries = byId('gbExpiries');
-  if(expiries) expiries.innerHTML = gb.expiries.length
-    ? gb.expiries.map(exp=>{
-        const on = gb.selected.has(exp);
-        const share = gb.shares.get(exp) || 0;
-        return `<button type="button" class="gb-exp${on?' active':''}" data-gb-expiry="${esc(exp)}" aria-pressed="${on}">${esc(exp)}<small>${share.toFixed(2)}%</small></button>`;
-      }).join('')
-    : '<span class="gb-status">No expirations</span>';
+  // The shared date picker, each date with its share of the gamma.
+  if(gb.symbol) renderExpiryPicker('gbDates', gb.expiries, gb.selected, gb.shares);
 }
 
 // ----- Spot line and table -----
@@ -1943,15 +2013,20 @@ function renderGexBoardTable(B, scrollToSpot){
   const size = (key,v)=>key==='netGex' ? Math.abs(v) : v;
   const colMax = Object.fromEntries(GB_MAX_COLUMNS.map(k=>[k, Math.max(...B.rows.map(s=>size(k,s[k])))]));
   const isMax = (key,s)=>GB_MAX_COLUMNS.includes(key) && colMax[key]>0 && size(key,s[key])===colMax[key];
+  // A row is shaded when it holds a level (P1-P3, N1-N3, AG1-AG2, Call/Put Vol, Matrix)
+  // or the largest value of a column; tags beside the strike name its levels.
   body.innerHTML = sortedBoardRows(B.rows).map(s=>{
-    const marked = GB_MAX_COLUMNS.some(k=>isMax(k,s));
+    const levels = B.levelsAt.get(s.strike) || [];
+    const marked = levels.length || GB_MAX_COLUMNS.some(k=>isMax(k,s));
     const cells = GB_COLUMNS.map(col=>{
       const v = s[col.key];
       const cls = [];
       if(col.signed) cls.push(v>=0 ? 'pos' : 'neg');
       else if(GB_COLUMN_CLASS[col.key]) cls.push(GB_COLUMN_CLASS[col.key]);
       const dot = isMax(col.key,s) ? '<span class="gb-dot" aria-label="largest"></span>' : '';
-      return `<td${cls.length?` class="${cls.join(' ')}"`:''}>${esc(fmtBoardCell(col, v))}${dot}</td>`;
+      const tags = col.key==='strike'
+        ? levels.map(l=>`<span class="gb-tag" style="--c:${l.color}">${esc(l.label)}</span>`).join('') : '';
+      return `<td${cls.length?` class="${cls.join(' ')}"`:''}>${esc(fmtBoardCell(col, v))}${tags}${dot}</td>`;
     }).join('');
     return `<tr data-strike="${s.strike}"${marked?' class="gb-max-row"':''}>${cells}</tr>`;
   }).join('');
@@ -2007,7 +2082,7 @@ function drawGexBoardBars(key, B){
   const sq = (color,label)=>`<span><span class="sq" style="background:${color}"></span>${label}</span>`;
   if(legend) legend.innerHTML = split
     ? line + sq(GB_PUT_COLOR,'Put Gamma') + sq(GB_CALL_COLOR,'Call Gamma')
-    : line + sq(GB_POS_COLOR,'Net Gamma');
+    : line + sq(GB_POS_COLOR,'Net Gamma') + `<span><i class="gb-line" style="border-color:#e8ca01"></i>Power Zone</span>`;
   const data = B.chartRows;
   setGbEmpty(key, data.length ? '' : (B.expiries.length ? 'No strikes within 10% of spot' : 'Select at least one expiration'));
   if(!data.length) return;
@@ -2019,7 +2094,8 @@ function drawGexBoardBars(key, B){
   const xCenter = i=>padL+slot*(i+0.5);
   const up = s=>split ? s.callGex : Math.max(s.netGex,0);
   const down = s=>split ? s.putGex : Math.min(s.netGex,0);
-  const maxAbs = Math.max(...data.map(s=>Math.max(up(s), -down(s))), 1)*1.08;
+  const inPz = s=>!split && Math.abs(s.strike-B.spot)/B.spot<=POWER_ZONE_WINDOW && s.powerZone>0;
+  const maxAbs = Math.max(...data.map(s=>Math.max(up(s), -down(s), inPz(s) ? s.powerZone : 0)), 1)*1.08;
   const y = v=>top+(maxAbs-v)/(2*maxAbs)*plotH;
   const y0 = y(0);
   // Abs GEX has its own scale from the bottom of the chart, as in his.
@@ -2060,6 +2136,20 @@ function drawGexBoardBars(key, B){
     if(split){ bar(s.callGex, GB_CALL_COLOR); bar(s.putGex, GB_PUT_COLOR); }
     else bar(s.netGex, s.netGex>=0 ? GB_POS_COLOR : GB_PUT_COLOR);
   });
+  // Power Zone (Net Gamma chart), translucent over the bars like his: yellow, on the Net GEX scale (that is what its /8 is
+  // for), within 1% of spot like his Strike Chart.
+  if(!split){
+    const pz = data.map((s,i)=>({s,i})).filter(({s})=>inPz(s));
+    if(pz.length>1){
+      const pzPts = pz.map(({s,i})=>[xCenter(i), y(s.powerZone)]);
+      ctx.beginPath(); ctx.moveTo(pzPts[0][0],y0);
+      pzPts.forEach(([x,yy])=>ctx.lineTo(x,yy));
+      ctx.lineTo(pzPts[pzPts.length-1][0],y0); ctx.closePath();
+      ctx.fillStyle = 'rgba(232,202,1,.35)'; ctx.fill();
+      ctx.beginPath(); pzPts.forEach(([x,yy],i)=>i ? ctx.lineTo(x,yy) : ctx.moveTo(x,yy));
+      ctx.strokeStyle = '#e8ca01'; ctx.lineWidth = 1.8; ctx.stroke();
+    }
+  }
   ctx.strokeStyle = 'rgba(255,255,255,.25)'; ctx.lineWidth = 1;
   ctx.beginPath(); ctx.moveTo(padL,y0); ctx.lineTo(W-padR,y0); ctx.stroke();
 
@@ -2099,12 +2189,7 @@ function drawGexBoardPrice(B){
   const legend = byId('gbPriceLegend');
   const onChart = l=>Math.abs(l.price-B.spot)/B.spot<=GB_PRICE_LINE_DISTANCE;
   if(legend) legend.innerHTML = B.lines.map(l=>`<span><span class="sq" style="background:${l.color}"></span>${esc(l.chartLabel)} ${esc(fmtLineValue(l.price))}${onChart(l)?'':' (off chart)'}</span>`).join('');
-  // Lines on the same strike share one dashed line and one label.
-  const groups = [];
-  B.lines.filter(onChart).forEach(l=>{
-    const g = groups.find(o=>o.price===l.price);
-    if(g) g.labels.push(l.chartLabel); else groups.push({price:l.price, color:l.color, labels:[l.chartLabel]});
-  });
+  const groups = groupLines(B.lines.filter(onChart));
   const candles = gb.candles || [];
   setGbEmpty('Price', candles.length ? '' : (gb.candlesError || `No intraday prices for ${B.symbol}`));
   if(!candles.length) return;
@@ -2134,18 +2219,10 @@ function drawGexBoardPrice(B){
     ctx.beginPath(); ctx.moveTo(x(i),y(k.high)); ctx.lineTo(x(i),y(k.low)); ctx.stroke();
     ctx.fillRect(x(i)-bw/2, Math.min(y(k.open),y(k.close)), bw, Math.max(1, Math.abs(y(k.open)-y(k.close))));
   });
-  // Price Lines, labelled on the left and nudged apart when two sit close together
-  const labelYs = [];
-  groups.sort((a,b)=>b.price-a.price).forEach(g=>{
-    const yy = y(g.price);
-    ctx.save(); ctx.setLineDash([6,4]); ctx.strokeStyle = g.color; ctx.lineWidth = 1.5;
-    ctx.beginPath(); ctx.moveTo(padL,yy); ctx.lineTo(W-padR,yy); ctx.stroke(); ctx.restore();
-    let ly = yy-2;
-    while(labelYs.some(o=>Math.abs(o-ly)<11)) ly += 11;
-    labelYs.push(ly);
-    ctx.fillStyle = g.color; ctx.textAlign = 'left'; ctx.textBaseline = 'bottom';
-    ctx.fillText(`${g.labels.join(' · ')} ${fmtLineValue(g.price)}`, padL+4, ly);
-  });
+  // Power Zone sideways from the left, then the Price Lines labelled on the right.
+  drawPowerZoneSideways(ctx, B.pzStrikes, {left:padL, width:plotW*0.25, y, lo, hi, top:padT, bottom:padT+plotH});
+  drawLineGroups(ctx, groups, {y, x0:padL, x1:W-padR, mobile});
+  ctx.font = mobile ? 'bold 9px Segoe UI' : 'bold 10px Segoe UI';
   ctx.fillStyle = '#c4c4c4'; ctx.textBaseline = 'top';
   const every = Math.max(1, Math.ceil(candles.length/(mobile?4:5)));
   for(let i=0;i<candles.length;i+=every){
@@ -2181,7 +2258,7 @@ function showGexBoardTooltip(ev){
     const s = list[i];
     const rows = (info.split
       ? row('Call Gamma', fmtNum(s.callGex), 'pos') + row('Put Gamma', fmtNum(s.putGex), 'neg')
-      : row('Net Gamma', fmtNum(s.netGex), s.netGex>=0?'pos':'neg')) + row('Abs GEX', fmtNum(s.ag));
+      : row('Net Gamma', fmtNum(s.netGex), s.netGex>=0?'pos':'neg') + row('Power Zone', fmtNum(s.powerZone||0))) + row('Abs GEX', fmtNum(s.ag));
     html = `<div class="tt-title">${esc(info.B.symbol)} Strike ${esc(fmtStrike(s.strike))}</div>${rows}`;
   }
   tt.innerHTML = html;
@@ -2230,7 +2307,7 @@ async function refreshGexBoard(symbol, reuse=false){
   screenTickers[GB_VIEW] = symbol;
   setGbStatus(`Loading ${symbol}…`);
   renderGexBoardButtons();
-  if(!gb.expiries.length) showDatesLoading('gbExpiries','<span class="gb-status">Loading dates…</span>');
+  if(!gb.expiries.length) showDatesLoading('gbDates','<span class="xp-note">Loading dates…</span>');
   // The dates, table and gamma charts draw as soon as the chain is in; the price chart follows.
   const pricePromise = loadOiVolumeCandles(symbol);
   const result = await loadCoreData(reuse);
@@ -2249,8 +2326,8 @@ async function refreshGexBoard(symbol, reuse=false){
   gb.expiries = oiVolumeExpiries(chain);
   gb.shares = gexBoardExpiryShares({...chain, quotes:chain.quotes.filter(q=>gb.expiries.includes(q.exp))});
   const kept = [...gb.selected].filter(exp=>gb.expiries.includes(exp));
-  // A new ticker starts on the nearest expiry only; the trader adds more (owner's choice).
-  gb.selected = new Set(changed || !kept.length ? gb.expiries.slice(0,1) : kept);
+  // A new ticker starts on the last preset used (Week at first).
+  gb.selected = changed || !kept.length ? defaultExpirySelection(gb.expiries) : new Set(kept);
   if(activeView===GB_VIEW) history.replaceState(null,'',screenUrl(GB_VIEW));
   renderGexBoard(true);
   setGbStatus(result.ok ? '' : `Refresh failed. Showing the last data for ${symbol}.`, result.ok ? '' : 'error');
@@ -2270,7 +2347,7 @@ function showGexBoard(){
 // Like his options-summary table: loads every time the screen opens, no ticker or
 // expiry input, one row per core ticker. Totals span all expiries and strikes and
 // come from the server, so they are not cut by the Strike Chart's strike range.
-const PC_TICKERS = ['SPX','NDX','SPY','QQQ'];
+const PC_TICKERS = SCREEN_TICKERS;  // only the three tickers, like every screen
 let _pcRequest=0;
 function pcRatio(put,call){
   return call>0 ? put/call : null;
@@ -2335,19 +2412,12 @@ document.querySelectorAll('.ticker-picker').forEach(picker=>{
   });
 });
 // Expiration picker: chips remove a date, the menu adds one, × clears them all.
-bind('expirationSelect','click',event=>{
-  const remove=event.target.closest?.('[data-exp-remove]');
-  if(remove){ changeExpirations(set=>set.delete(remove.dataset.expRemove)); return; }
-  const add=event.target.closest?.('[data-exp-add]');
-  if(add){ setExpirationMenu(false); changeExpirations(set=>set.add(add.dataset.expAdd)); return; }
-  if(event.target.closest?.('#expirationClear')){ setExpirationMenu(false); changeExpirations(set=>set.clear()); return; }
-  if(event.target.closest?.('.ms-control')) setExpirationMenu(byId('expirationMenu')?.hidden);
-});
-window.addEventListener('click',event=>{
-  if(!event.target.closest?.('#expirationSelect')) setExpirationMenu(false);
-});
-window.addEventListener('keydown',event=>{
-  if(event.key==='Escape') setExpirationMenu(false);
+// Strike Chart dates: a change redraws the strike chart and the Price Lines.
+bindExpiryPicker('homeDates', ()=>selectedExpirations && {expiries:homeExpiries, selected:selectedExpirations}, next=>{
+  selectedExpirations = next;
+  renderExpirationPicker();
+  run();
+  drawPriceCharts(currentSymbol());
 });
 // parameter buttons - toggle metrics on/off (multi-select overlay)
 document.querySelectorAll('.pbtn').forEach(btn=>{
@@ -2365,8 +2435,8 @@ window.addEventListener('resize',()=>{
   if(viewRenderer) viewRenderer(window._lastR);
 });
 // OI Volume: the date and the buttons redraw from the loaded chain; only a ticker button reloads.
-bind('oivExpiry','change',event=>{
-  oiv.expiry=event.target.value || null;
+bindExpiryPicker('oivDates', ()=>oiv.selected && {expiries:oiv.expiries, selected:oiv.selected}, next=>{
+  oiv.selected=next;
   renderOiVolume();
 });
 document.querySelectorAll('[data-oiv-metric]').forEach(btn=>{
@@ -2411,14 +2481,15 @@ bind('gbTickers','click',event=>{
   const symbol=event.target.closest?.('[data-gb-ticker]')?.dataset.gbTicker;
   if(symbol) refreshGexBoard(symbol);
 });
-bind('gbExpiries','click',event=>{
-  const exp=event.target.closest?.('[data-gb-expiry]')?.dataset.gbExpiry;
-  if(!exp) return;
-  if(gb.selected.has(exp)) gb.selected.delete(exp); else gb.selected.add(exp);
-  renderGexBoard();
+// Key Levels dates: the levels and the Forecast follow them; the candles stay.
+bindExpiryPicker('klDates', ()=>keyLevelsState && {expiries:keyLevelsState.expiries, selected:keyLevelsState.selected}, next=>{
+  keyLevelsState = {...keyLevelsState, selected:next, R:keyLevelsGex(keyLevelsState.symbol, next)};
+  renderKeyLevels();
 });
-bind('gbSelectAll','click',()=>{ gb.selected=new Set(gb.expiries); renderGexBoard(true); });
-bind('gbClearAll','click',()=>{ gb.selected=new Set(); renderGexBoard(); });
+bindExpiryPicker('gbDates', ()=>gb.symbol && {expiries:gb.expiries, selected:gb.selected}, next=>{
+  gb.selected=next;
+  renderGexBoard(true);
+});
 bind('gbTableHead','click',event=>{
   const key=event.target.closest?.('[data-gb-sort]')?.dataset.gbSort;
   if(!key) return;

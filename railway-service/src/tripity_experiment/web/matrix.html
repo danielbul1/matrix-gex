@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Matrix</title>
-<link rel="stylesheet" href="/matrix/matrix.css?v=20261027-faster-dates">
+<link rel="stylesheet" href="/matrix/matrix.css?v=20261027-levels-pz-dates">
 </head>
 <body>
 <header id="sidebar">
@@ -35,16 +35,8 @@
         <span class="ticker-status" aria-live="polite"></span>
       </div>
       <div class="ctrl exp-ctrl">
-        <span class="ctrl-label" id="expirationLabel">Expiration</span>
-        <!-- Like his Expiration dropdown: several dates, shown as removable chips. -->
-        <div class="multi-select" id="expirationSelect" role="group" aria-labelledby="expirationLabel">
-          <div class="ms-control">
-            <div class="ms-values" id="expirationChips"></div>
-            <button type="button" class="ms-clear" id="expirationClear" aria-label="Clear all expirations" title="Clear all" hidden>×</button>
-            <button type="button" class="ms-toggle" id="expirationToggle" aria-expanded="false" aria-controls="expirationMenu" aria-label="Choose expirations">▾</button>
-          </div>
-          <ul class="ms-menu" id="expirationMenu" hidden></ul>
-        </div>
+        <span class="ctrl-label">Expiration</span>
+        <div class="exp-picker" id="homeDates" role="group" aria-label="Expirations"></div>
       </div>
     </div>
 
@@ -56,7 +48,7 @@
       <button class="pbtn"        data-metric="put_oi"   style="--c:#f32d35">Put OI</button>
       <button class="pbtn"        data-metric="call_vol" style="--c:#003cfe">Call Volume</button>
       <button class="pbtn"        data-metric="put_vol"  style="--c:#e55f04">Put Volume</button>
-      <button class="pbtn"        data-metric="power"    style="--c:#e8ca01;--t:#000">Power Zone</button>
+      <button class="pbtn active" data-metric="power"    style="--c:#e8ca01;--t:#000">Power Zone</button>
     </div>
 
     <div class="card chartcard">
@@ -111,9 +103,9 @@
         <div class="gb-buttons ticker-buttons" role="group" aria-label="Ticker"></div>
         <span class="ticker-status" aria-live="polite"></span>
       </div>
-      <div class="ctrl">
-        <label for="oivExpiry">Expiration</label>
-        <select id="oivExpiry" aria-label="Expiration date"></select>
+      <div class="ctrl exp-ctrl">
+        <span class="ctrl-label">Expiration</span>
+        <div class="exp-picker" id="oivDates" role="group" aria-label="Expirations"></div>
       </div>
     </div>
 
@@ -124,6 +116,7 @@
       <button class="pbtn"        data-oiv-metric="put_oi"        style="--c:#f32d35">Put OI</button>
       <button class="pbtn"        data-oiv-metric="call_vol"      style="--c:#003cfe">Call Vol</button>
       <button class="pbtn"        data-oiv-metric="put_vol"       style="--c:#e55f04">Put Vol</button>
+      <button class="pbtn active" data-oiv-metric="power"         style="--c:#e8ca01;--t:#000">Power Zone</button>
     </div>
 
     <div class="card chartcard">
@@ -168,11 +161,7 @@
         <div class="gb-board">
           <h2 class="gb-title">Options Chain Board</h2>
           <div class="gb-spot" id="gbSpot"></div>
-          <div class="gb-expiries" id="gbExpiries" role="group" aria-label="Expirations"></div>
-          <div class="gb-select-row">
-            <button type="button" class="gb-small-btn" id="gbSelectAll">Select All</button>
-            <button type="button" class="gb-small-btn" id="gbClearAll">Clear All</button>
-          </div>
+          <div class="exp-picker gb-dates" id="gbDates" role="group" aria-label="Expirations"></div>
           <div class="gb-table-wrap" id="gbTableWrap">
             <table class="gb-table" id="gbTable">
               <thead><tr id="gbTableHead"></tr></thead>
@@ -234,6 +223,10 @@
         <div class="gb-buttons ticker-buttons" role="group" aria-label="Ticker"></div>
         <span class="ticker-status" aria-live="polite"></span>
       </div>
+      <div class="ctrl exp-ctrl">
+        <span class="ctrl-label">Expiration</span>
+        <div class="exp-picker" id="klDates" role="group" aria-label="Expirations"></div>
+      </div>
     </div>
 
     <div class="card chartcard kl-card">
@@ -294,22 +287,22 @@
 
       <h2>The screens</h2>
       <h3>Strike Chart (home)</h3>
-      <p>One ticker (SPX, SPY or QQQ) and one or more expirations, added together. Pick a ticker button; pressing the chosen one again reloads it. The nearest date is chosen at first; the menu lists every open expiry, so you add the ones you want and × removes a date. The chart shows strikes within about 1% of spot for SPX, and about 3% for SPY and QQQ. The buttons turn layers on and off: <strong>Net GEX</strong> as bars, and <strong>AG</strong>, OI, volume and <strong>Power Zone</strong> as areas. Beside it are the day's 1-minute candles and a simplified price line. The candle chart carries the Price Lines of the chosen expirations.</p>
+      <p>One ticker (SPX, SPY or QQQ) and one or more expirations, added together. Pick a ticker button; pressing the chosen one again reloads it. Dates work the same on every screen: <strong>0DTE</strong>, <strong>Week</strong>, <strong>Month</strong> and <strong>All</strong> pick a group of expirations, and a click on a date adds or removes it. A ticker starts on the last group you used (Week at first). The chart shows strikes within about 1% of spot for SPX, and about 3% for SPY and QQQ. The buttons turn layers on and off: <strong>Net GEX</strong> as bars, and <strong>AG</strong>, OI, volume and <strong>Power Zone</strong> as areas (Net GEX, AG and Power Zone start on). Beside it are the day's 1-minute candles and a simplified price line. The candle chart carries the Price Lines and the Power Zone of the chosen expirations.</p>
       <h3>OI Volume</h3>
-      <p>Open interest and today's volume per strike for one expiration. <strong>Volume Spread</strong> is call volume minus put volume: blue where calls traded more, red where puts did. The price chart marks the strikes with the most call OI, put OI, call volume and put volume.</p>
+      <p>Open interest and today's volume per strike for the chosen expirations, added together. <strong>Volume Spread</strong> is call volume minus put volume: blue where calls traded more, red where puts did. <strong>Power Zone</strong> shows within 1% of spot. The price chart marks the Matrix level and the strikes with the most call OI, put OI, call volume and put volume, with the Power Zone along its left edge.</p>
       <h3>GEX Analysis</h3>
-      <p>The board for SPX, SPY or QQQ over several expirations at once. Pick a ticker button; it starts on the nearest expiry. Click expiration buttons to add or remove dates, or use <strong>Select All</strong> and <strong>Clear All</strong>. Each expiration button shows its share of the ticker's gamma. The line above them gives spot, Total Gamma and the regime. It shows:</p>
+      <p>The board for SPX, SPY or QQQ over the chosen expirations. Each date shows its share of the ticker's gamma. The line above the table gives spot, Total Gamma and the regime. It shows:</p>
       <ul>
-        <li>A table of every strike within 5% of spot. Click a column header to sort. A green dot marks each column's largest value, and its row is shaded.</li>
-        <li><strong>Net Gamma</strong>: Net GEX per strike, with an Abs GEX line.</li>
+        <li>A table of every strike within 5% of spot, with a <strong>Power Zone</strong> column. Click a column header to sort. Rows holding a level are shaded and tagged: <strong>P1–P3</strong> (largest positive Net GEX), <strong>N1–N3</strong> (largest negative), <strong>AG1–AG2</strong> (largest Abs GEX), <strong>Call Vol</strong>, <strong>Put Vol</strong> and <strong>Matrix</strong> (highest Power Zone within 1% of spot). A green dot marks each column's largest value.</li>
+        <li><strong>Net Gamma</strong>: Net GEX per strike, with an Abs GEX line and the Power Zone.</li>
         <li><strong>Gamma Split</strong>: call gamma above zero and put gamma below it, with an Abs GEX line.</li>
-        <li>A price chart with the Price Lines.</li>
+        <li>A price chart with the Price Lines and the Power Zone.</li>
       </ul>
       <p>The ⛶ button opens a chart full screen. ✕ or Esc closes it.</p>
       <h3>Key Levels</h3>
-      <p>The four Key Levels of a ticker, drawn on five days of price, from every open expiration. Under the chart, the <strong>Forecast</strong> reads the same data as text.</p>
+      <p>The Key Levels of a ticker (Matrix, Call Wall, Put Wall, Zero Gamma, Max Gamma) for the chosen expirations, drawn on five days of price with the Power Zone. Under the chart, the <strong>Forecast</strong> reads the same data as text.</p>
       <h3>P/C Ratio</h3>
-      <p>Puts over calls for SPX, NDX, SPY and QQQ, across all expirations, by open interest and by volume. A ratio above 1 means more puts than calls.</p>
+      <p>Puts over calls for SPX, SPY and QQQ, across all expirations, by open interest and by volume. A ratio above 1 means more puts than calls.</p>
 
       <h2>What the numbers mean</h2>
       <div class="guide-table-wrap">
@@ -349,8 +342,8 @@
       </ul>
       <h3>0DTE</h3>
       <ul>
-        <li>Pick today's expiration on the Strike Chart. Same-day options carry the most gamma, so their levels matter most during the session.</li>
-        <li>Turn on <strong>Power Zone</strong> and watch the <strong>Matrix</strong> level: price often gravitates toward it into the afternoon.</li>
+        <li>Press <strong>0DTE</strong> on the Strike Chart. Same-day options carry the most gamma, so their levels matter most during the session.</li>
+        <li>Watch the <strong>Power Zone</strong> and the <strong>Matrix</strong> level: price often gravitates toward it into the afternoon.</li>
         <li>Data reloads only when you press a button, so refresh before you act.</li>
       </ul>
 
@@ -374,6 +367,6 @@
   </section>
 </main>
 
-<script src="/matrix/matrix.js?v=20261027-faster-dates"></script>
+<script src="/matrix/matrix.js?v=20261027-levels-pz-dates"></script>
 </body>
 </html>

@@ -1,6 +1,6 @@
 /* Smoke test: load matrix.js with DOM stubs (offline) and a synthetic chain,
-   then check the GEX engine, the Strike Chart (one-date dropdown, price charts), the P/C Ratio table, OI Volume
-   and the Key Levels screen (four levels only, the Forecast's h3/h4/h5 layout,
+   then check the GEX engine, the Strike Chart (date picker, price charts), the P/C Ratio table, OI Volume
+   and the Key Levels screen (Matrix and the four levels, the Forecast's h3/h4/h5 layout,
    the price chart). */
 const fs = require('fs');
 const vm = require('vm');
@@ -83,11 +83,11 @@ check('Strike Chart draws', noThrow(() => drawChart(R)));
 check('the dropdown lists every open date, not just the nearest few',
   JSON.stringify(chainExpirations({ quotes: ['2099-01-08', '2099-01-01', '2099-01-03', '2099-01-02', '2099-01-05', '2099-01-04', '2099-01-07', '2099-01-06'].map(exp => ({ exp })) }))
   === JSON.stringify(['2099-01-01', '2099-01-02', '2099-01-03', '2099-01-04', '2099-01-05', '2099-01-06', '2099-01-07', '2099-01-08']));
-check('AG and Power Zone share the GEX axis; OI and volume get their own',
-  METRICS.ag.axis === 'gex' && METRICS.power.axis === 'gex'
+check('AG, Power Zone, and OI/volume each get their own axis',
+  METRICS.ag.axis === 'gex' && METRICS.power.axis === 'pz'
   && ['call_oi', 'put_oi', 'call_vol', 'put_vol'].every(m => METRICS[m].axis === 'count'));
-check('Strike Chart draws with both right axes', noThrow(() => { ['call_oi', 'power'].forEach(m => ACTIVE.add(m)); drawChart(R); ['call_oi', 'power'].forEach(m => ACTIVE.delete(m)); }));
-check('Net GEX and AG start on', ACTIVE.has('net_gex') && ACTIVE.has('ag') && ACTIVE.size === 2);
+check('Strike Chart draws with every right axis', noThrow(() => { ['call_oi', 'power'].forEach(m => ACTIVE.add(m)); drawChart(R); ['call_oi'].forEach(m => ACTIVE.delete(m)); }));
+check('Net GEX, AG and Power Zone start on', ACTIVE.has('net_gex') && ACTIVE.has('ag') && ACTIVE.has('power') && ACTIVE.size === 3);
 // Each screen keeps its own chain: a Search elsewhere replacing REAL leaves the Strike Chart alone.
 homeRecord = REAL.SPX;
 REAL.SPX = { ...REAL.SPX, spot: 1234 };
@@ -119,8 +119,8 @@ check('price tooltip shows a candle', noThrow(() => showPriceTooltip({ currentTa
 // --- 4. Key Levels ---
 const KR = keyLevelsGex('SPX');
 const levels = keyLevels(KR);
-check('exactly the four Key Levels',
-  levels.map(l => l.label).sort().join() === 'Call Wall,Max Gamma,Put Wall,Zero Gamma',
+check('the Key Levels: Matrix and the four',
+  levels.map(l => l.label).sort().join() === 'Call Wall,Matrix,Max Gamma,Put Wall,Zero Gamma',
   levels.map(l => `${l.label} ${fmtPrice(l.price)}`).join(', '));
 check('a missing level is dropped, not drawn at 0',
   keyLevels({ ...KR, flip: null }).every(l => l.label !== 'Zero Gamma' && l.price > 0));
@@ -133,8 +133,8 @@ check('Forecast: one h3 title with ticker and date', (html.match(/<h3>/g) || [])
 check('Forecast: h4 sections Current position, Key levels, Target, Scenarios',
   JSON.stringify([...html.matchAll(/<h4>([^<]+)<\/h4>/g)].map(m => m[1])) === JSON.stringify(['Current position', 'Key levels', 'Target', 'Scenarios']));
 check('Forecast: one h5 per scenario', (html.match(/<h5>/g) || []).length === forecastScenarios(KR).length && forecastScenarios(KR).length === 3);
-check('Forecast lists the four levels and the AG Strike target only',
-  ['Call Wall', 'Put Wall', 'Zero Gamma', 'Max Gamma', 'AG Strike'].every(l => html.includes(l)) && !/max pain|P1|N1|Call Vol|Put Vol|Matrix/i.test(html));
+check('Forecast lists the Key Levels and the AG Strike target only',
+  ['Matrix', 'Call Wall', 'Put Wall', 'Zero Gamma', 'Max Gamma', 'AG Strike'].every(l => html.includes(l)) && !/max pain|P1|N1|Call Vol|Put Vol/i.test(html));
 check('Forecast gives each level its distance from spot', (html.match(/\([+-]\d+\.\d{2}%\)/g) || []).length >= 5);
 
 const candles = Array.from({ length: 120 }, (_, i) => {
@@ -146,7 +146,8 @@ check('Key Levels chart draws with candles', noThrow(() => drawKeyLevelsChart({ 
 check('Key Levels chart draws with no candles', noThrow(() => drawKeyLevelsChart({ R: KR, candles: [] })));
 check('legend lists the four levels',
   ['Call Wall', 'Put Wall', 'Zero Gamma', 'Max Gamma'].every(l => byId('klLegend').innerHTML.includes(l)));
-keyLevelsState = { symbol: 'SPX', R: KR, candles };
+keyLevelsState = { symbol: 'SPX', R: KR, candles, expiries: [], selected: new Set() };
+check('Key Levels with dates picks a subset', keyLevelsGex('SPX', new Set(['1999-01-01'])).strikes.length > 0);
 check('render fills the Forecast', noThrow(renderKeyLevels) && byId('forecast').innerHTML.includes('<h3>'));
 check('tooltip shows a candle', noThrow(() => {
   byId('keyLevelsChart')._klPlot = { ...byId('keyLevelsChart')._klPlot, candles };
@@ -154,22 +155,22 @@ check('tooltip shows a candle', noThrow(() => {
 }) && byId('klTooltip').innerHTML.includes('Close'));
 
 // --- 5. P/C Ratio table ---
-check('P/C rows follow SPX, NDX, SPY, QQQ', PC_TICKERS.join(',') === 'SPX,NDX,SPY,QQQ');
+check('P/C rows are the three tickers', PC_TICKERS.join(',') === 'SPX,SPY,QQQ');
 check('P/C ratio is put over call', Math.abs(pcRatio(150, 100) - 1.5) < 1e-12 && pcRatio(5, 0) === null);
 const pcData = {
   SPX: { spot: 6000.5, asof: '2026-10-26', totals: { call_oi: 1000, put_oi: 1500, call_vol: 400, put_vol: 200 } },
-  NDX: { spot: 21000, totals: { call_oi: 0, put_oi: 10, call_vol: 0, put_vol: 0 } },
+  SPY: { spot: 600, totals: { call_oi: 0, put_oi: 10, call_vol: 0, put_vol: 0 } },
 };
 renderPcTable(pcData);
 const pcHtml = document.getElementById('pcTableBody').innerHTML;
 const pcRows = pcHtml.split('<tr>').slice(1);
-check('P/C table has one row per ticker', pcRows.length === 4, `${pcRows.length} rows`);
+check('P/C table has one row per ticker', pcRows.length === 3, `${pcRows.length} rows`);
 const spxCells = [...pcRows[0].matchAll(/<td[^>]*>([^<]*)<\/td>/g)].map(m => m[1]);
 check('SPX row: ticker, spot, P/C OI, P/C Vol, call/put OI, call/put vol',
   JSON.stringify(spxCells) === JSON.stringify(['SPX', '6,000.50', '1.50', '0.50', '1,000', '1,500', '400', '200']),
   spxCells.join(' | '));
 check('No calls shows a dash, not Infinity', pcRows[1].includes('—') && !pcRows[1].includes('Infinity'));
-check('Missing ticker shows dashes', /SPY<\/td>(<td class="pc-missing">—<\/td>){7}/.test(pcRows[2]));
+check('Missing ticker shows dashes', /QQQ<\/td>(<td class="pc-missing">—<\/td>){7}/.test(pcRows[2]));
 
 
 // --- 6. OI Volume (synthetic SPX chain, two expirations) ---
@@ -186,9 +187,9 @@ function synthRecord(spot, exps) {
 const isoDay = n => new Date(Date.now() + n * 86400000).toISOString().slice(0, 10);
 const exp0 = isoDay(1), exp1 = isoDay(8);
 REAL.SPX = synthRecord(6000, [exp0, exp1]);
-check('OI Volume has his five buttons in his order',
-  JSON.stringify(Object.keys(OIV_METRICS)) === JSON.stringify(['volume_spread', 'call_oi', 'put_oi', 'call_vol', 'put_vol']));
-check('Volume Spread is on by default and drawn as bars', OIV_ACTIVE.has('volume_spread') && OIV_ACTIVE.size === 1 && OIV_METRICS.volume_spread.kind === 'bar');
+check('OI Volume has his five buttons in his order, then Power Zone',
+  JSON.stringify(Object.keys(OIV_METRICS)) === JSON.stringify(['volume_spread', 'call_oi', 'put_oi', 'call_vol', 'put_vol', 'power']));
+check('Volume Spread and Power Zone are on by default', OIV_ACTIVE.has('volume_spread') && OIV_ACTIVE.has('power') && OIV_ACTIVE.size === 2 && OIV_METRICS.volume_spread.kind === 'bar');
 const agg = aggregateOiVolume([
   { K: 100, isCall: true, oi: 10, vol: 7 }, { K: 100, isCall: false, oi: 4, vol: 9 },
   { K: 105, isCall: true, oi: 0, vol: 0 }, { K: 105, isCall: false, oi: 0, vol: 0 },
@@ -200,26 +201,29 @@ check('OI and volume sum per strike', agg[1].callOI === 5 && agg[1].callVol === 
 check('OI Volume lists future expirations only, sorted', JSON.stringify(oiVolumeExpiries(buildChainReal('SPX'))) === JSON.stringify([exp0, exp1]));
 const O = computeOiVolume('SPX', exp1, REAL.SPX);
 check('OI Volume uses one expiration', O.strikes.length === 21 && O.strikes.every(s => s.callOI > 0));
+const O2 = computeOiVolume('SPX', new Set([exp0, exp1]), REAL.SPX);
+check('OI Volume adds several expirations', O2.strikes[0].callOI === 2 * O.strikes[0].callOI && O2.expiry === '2 expirations');
+check('OI Volume strikes carry the Power Zone', O.strikes.some(s => s.powerZone > 0));
 const lines = oiVolumePriceLines(O.strikes);
 check('price chart lines: Call OI, Put OI, Call Vol, Put Vol', JSON.stringify(lines.map(l => l.label)) === JSON.stringify(['Call OI', 'Put OI', 'Call Vol', 'Put Vol']));
 check('Call Vol line sits at the top call-volume strike', lines[2].price === 6050);
 let oivOk = true;
 try {
   activeView = OIV_VIEW;
-  oiv.symbol = 'SPX'; oiv.record = REAL.SPX; oiv.expiry = exp0;
+  oiv.symbol = 'SPX'; oiv.record = REAL.SPX; oiv.selected = new Set([exp0]);
   oiv.candles = [{ time: 1761573000, open: 5990, high: 6010, low: 5985, close: 6005 }, { time: 1761573060, open: 6005, high: 6012, low: 6000, close: 6001 }];
   for (const m of Object.keys(OIV_METRICS)) OIV_ACTIVE.add(m);
   renderOiVolume();
   oiv.candles = null; renderOiVolume();
-  OIV_ACTIVE.clear(); renderOiVolume(); OIV_ACTIVE.add('volume_spread');
+  OIV_ACTIVE.clear(); renderOiVolume(); OIV_ACTIVE.add('volume_spread'); OIV_ACTIVE.add('power');
 } catch (e) { oivOk = false; console.log('oi volume draw error:', e.stack); }
 check('OI Volume strike and price charts draw (no-throw)', oivOk);
 oiv.record = REAL.SPX;
 REAL.SPX = synthRecord(5000, [exp0]);
 check('OI Volume reads its own copy of the chain', computeOiVolume('SPX', exp1).spot === 6000);
-oiv.symbol = 'SPX'; oiv.expiry = '2000-01-01';
+oiv.symbol = 'SPX'; oiv.selected = new Set(['2000-01-01', exp0]);
 renderOiVolume();
-check('a gone expiration falls back to the nearest one', oiv.expiry === exp0, oiv.expiry);
+check('a gone expiration drops out of the selection', [...oiv.selected].join() === exp0, [...oiv.selected].join());
 check('every ticker may have a price chart (no ticker list)', typeof CANDLE_SYMBOLS === 'undefined');
 const etSec = (h, m) => Date.UTC(2026, 9, 23, h + 4, m) / 1000;  // 2026-10-23, EDT = UTC-4
 const sess = latestSessionCandles([[9, 29], [9, 30], [15, 59], [16, 0]].map(([h, m]) => ({ time: etSec(h, m), open: 1, high: 2, low: 0.5, close: 1.5 })));
@@ -233,7 +237,7 @@ const B1 = computeGexBoard('SPX');
 gb.selected = new Set([exp0, exp1]);
 const B2 = computeGexBoard('SPX');
 check('GEX Board has the agreed columns in order',
-  GB_COLUMNS.map(c => c.label).join() === 'Strike,Net GEX,Abs GEX,Notional Delta,Total OI,Call OI,Put OI,Total Vol,cVol,pVol,%');
+  GB_COLUMNS.map(c => c.label).join() === 'Strike,Net GEX,Abs GEX,Power Zone,Notional Delta,Total OI,Call OI,Put OI,Total Vol,cVol,pVol,%');
 check('GEX Board has his three ticker buttons', GB_TICKERS.join() === 'SPX,SPY,QQQ');
 check('GEX Board keeps strikes within 5% of spot', B2.rows.length > 0 && B2.rows.every(s => Math.abs(s.strike - 6000) / 6000 <= 0.05));
 const s1 = B1.rows.find(s => s.strike === 6000), s2 = B2.rows.find(s => s.strike === 6000);
@@ -255,7 +259,9 @@ const lowOi = gexBoardStrikes({ spot: 100, mult: 100, quotes: [
   { K: 105, isCall: true, oi: 0, vol: 9, exp: 'x', T: 0.01, iv: 0.2, g: { gamma: 0.05, delta: 0.3 } },
 ] });
 check('the board keeps any strike with open interest and drops only OI = 0', lowOi.length === 1 && lowOi[0].strike === 100);
-check('price lines are the six Price Lines (or fewer)', B2.lines.every(l => ['P1', 'N1', 'Call Vol', 'Put Vol', 'Matrix', 'AG Strike'].includes(l.label)));
+check('price lines are his level set', B2.lines.every(l => ['Matrix', 'P1', 'P2', 'P3', 'N1', 'N2', 'N3', 'AG1', 'AG2', 'Call Vol', 'Put Vol'].includes(l.label)));
+check('board rows carry the Power Zone', B2.rows.every(s => Math.abs(s.powerZone - (s.ag / 8 + s.totalVol * 6000 * 6000 / 20000)) < 1e-6));
+check('every level is tagged on its row', B2.lines.every(l => (B2.levelsAt.get(l.price) || []).includes(l)));
 check('Matrix sits within 1% of spot', B2.lines.filter(l => l.label === 'Matrix').every(l => Math.abs(l.price - 6000) / 6000 <= 0.01));
 gb.sort = { key: 'strike', dir: 'desc' };
 check('table runs from the highest strike down', sortedBoardRows(B2.rows)[0].strike === Math.max(...B2.rows.map(s => s.strike)));
@@ -311,8 +317,8 @@ check('GEX Board reads its own copy of the chain', computeGexBoard('SPX').spot =
     { strike: 6070, netGex: 12, callVol: 60, putVol: 1, ag: 80, powerZone: 200 },
   ];
   const PL = priceLines(strikes, 6000);
-  check('six Price Lines in order', PL.map(l => l.label).join() === 'P1,N1,Call Vol,Put Vol,Matrix,AG Strike');
-  check('Price Lines pick the right strikes', PL.map(l => l.price).join() === '6070,5950,6070,5950,5995,6070', PL.map(l => l.price).join());
+  check('his level set in order (top 3 / top 2, fewer when strikes run out)', PL.map(l => l.label).join() === 'Matrix,P1,P2,N1,AG1,AG2,Call Vol,Put Vol', PL.map(l => l.label).join());
+  check('levels pick the right strikes', PL.map(l => l.price).join() === '5995,6070,5995,5950,6070,5950,6070,5950', PL.map(l => l.price).join());
   check('Matrix ignores strikes beyond 1% of spot', PL.find(l => l.label === 'Matrix').price === 5995);
   const zeroVol = calcGEX({ symbol: 'SPX', spot: 6000, mult: 100, quotes: [
     { K: 5990, isCall: false, oi: 400, vol: 0, exp: 'x', g: { gamma: 0.002 } },
@@ -321,8 +327,10 @@ check('GEX Board reads its own copy of the chain', computeGexBoard('SPX').spot =
   ] }).strikes;
   const pzPeak = zeroVol.reduce((b, s) => s.powerZone > b.powerZone ? s : b), agPeak = zeroVol.reduce((b, s) => s.ag > b.ag ? s : b);
   check('with no volume the Power Zone peak is the AG Strike', pzPeak.strike === agPeak.strike && pzPeak.strike === 6000);
-  check('his chart labels and two decimals', PL.map(l => l.chartLabel).join() === 'P1 Strike,N1 Strike,Call Vol Strike,Put Vol Strike,Matrix,AG Strike'
+  check('chart labels and two decimals', PL.map(l => l.chartLabel).join() === PL.map(l => l.label).join()
     && fmtLineValue(6800) === '6800.00');
+  check('date presets: 0DTE falls back to the nearest date, All takes every date',
+    presetDates('0dte', ['2099-01-01', '2099-02-01']).join() === '2099-01-01' && presetDates('all', ['a', 'b']).length === 2);
   check('the Strike Window is 1% for SPX and 3% for SPY',
     visibleStrikeData({ spot: 6000, strikes: [5900, 5945, 6000, 6060, 6100].map(strike => ({ strike })) }, strikeWindow('SPX')).map(s => s.strike).join() === '5945,6000,6060'
     && strikeWindow('SPY') === 0.03 && strikeWindow('NDX') === 0.01);
