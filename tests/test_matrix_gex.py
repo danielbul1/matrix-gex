@@ -245,3 +245,29 @@ def test_walls_and_expected_move():
     # ATM straddle is within 20% of the 0.8*S*sigma*sqrt(T) approximation.
     import math
     assert em == pytest.approx(0.8 * S * 0.2 * math.sqrt(T_row), rel=0.2)
+
+
+# ---------- Early closes (#71) ----------
+@pytest.mark.parametrize("day, early", [
+    ("2026-11-27", True),   # day after Thanksgiving (Nov 26)
+    ("2025-11-28", True),
+    ("2026-11-20", False),  # an ordinary Friday in November
+    ("2026-12-24", True),   # Thursday
+    ("2027-12-24", False),  # Friday: the observed Christmas holiday
+    ("2025-07-03", True),   # Thursday
+    ("2026-07-03", False),  # Friday: the observed Independence Day
+    ("2026-10-27", False),
+])
+def test_is_early_close(day, early):
+    assert mg.is_early_close(datetime.fromisoformat(day).date()) is early
+
+
+def test_years_to_expiry_pm_expiry_on_an_early_close_is_13_00():
+    valuation = ms(datetime(2026, 11, 27, 10, 0, tzinfo=ET))
+    assert mg.years_to_expiry("2026-11-27", "SPXW", valuation) == pytest.approx(
+        3 * 3600 * 1000 / mg._MS_PER_YEAR)
+    # AM-settled SPX keeps 9:30, and an ordinary day keeps 16:00.
+    assert mg.years_to_expiry("2026-11-27", "SPX", valuation) == mg.MIN_T
+    ordinary = ms(datetime(2026, 11, 20, 10, 0, tzinfo=ET))
+    assert mg.years_to_expiry("2026-11-20", "SPY", ordinary) == pytest.approx(
+        6 * 3600 * 1000 / mg._MS_PER_YEAR)

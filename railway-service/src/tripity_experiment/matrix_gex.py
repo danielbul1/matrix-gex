@@ -15,7 +15,8 @@ Conventions (SqueezeMetrics-style, matching web/matrix.js):
   so the exposure-level minus sign on puts is a single negation.
 - x0.01 factors express exposure per 1% move in spot / 1 vol-point move in IV.
 - years_to_expiry is US/Eastern aware: AM-settled roots (SPX/NDX/VIX/VIXW)
-  expire 9:30 ET, everything else 16:00 ET, with a 1-minute floor.
+  expire 9:30 ET, everything else 16:00 ET (13:00 ET on an NYSE early
+  close), with a 1-minute floor.
 - Gamma Flip uses the smooth method: BS-gamma profile over a spot ladder,
   the sign change nearest spot (not a cumulative-sum over strikes, and not
   the first crossing from the bottom of the ladder).
@@ -145,8 +146,20 @@ def bs_charm(S: float, K: float, T: float, sigma: float, r: float = DEFAULT_RATE
 
 
 # ---------- Time / IV helpers ----------
+def is_early_close(day) -> bool:
+    """NYSE early close (13:00 ET): the day after Thanksgiving, and July 3 and
+    December 24 when they fall Monday to Thursday (on a Friday they are the
+    observed holiday instead)."""
+    if day.month == 11 and day.weekday() == 4:
+        return 22 <= day.day - 1 <= 28  # the day before is the fourth Thursday
+    if (day.month, day.day) in ((7, 3), (12, 24)):
+        return day.weekday() <= 3
+    return False
+
+
 def years_to_expiry(exp: str, root: str, valuation_ms: float | None = None) -> float:
-    """Years until expiry; AM-settled index roots expire 9:30 ET, else 16:00 ET.
+    """Years until expiry; AM-settled index roots expire 9:30 ET, else 16:00 ET,
+    or 13:00 ET on an early-close day (#71).
 
     valuation_ms is epoch milliseconds (defaults to now). Result is floored
     at one minute.
@@ -157,7 +170,12 @@ def years_to_expiry(exp: str, root: str, valuation_ms: float | None = None) -> f
         year, month, day = (int(part) for part in str(exp)[:10].split("-"))
     except ValueError:
         return MIN_T
-    hour, minute = (9, 30) if root in AM_SETTLED_ROOTS else (16, 0)
+    if root in AM_SETTLED_ROOTS:
+        hour, minute = 9, 30
+    elif is_early_close(datetime(year, month, day).date()):
+        hour, minute = 13, 0
+    else:
+        hour, minute = 16, 0
     expiry = datetime(year, month, day, hour, minute, tzinfo=ET)
     return max((expiry.timestamp() * 1000 - valuation_ms) / _MS_PER_YEAR, MIN_T)
 

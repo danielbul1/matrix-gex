@@ -69,3 +69,20 @@ def test_dashboard_net_gex_ignores_vendor_greeks_for_every_source_tag():
     assert abs(vendor - expected) > abs(expected)  # the vendor greeks would move the answer
     for source, total in totals.items():
         assert total == pytest.approx(expected, rel=1e-3), source
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="needs Node to run matrix.js")
+def test_dashboard_early_closes_match_the_engine():
+    # Every July 3, Thanksgiving Friday and December 24 from 2024 to 2035.
+    from datetime import date, timedelta
+    days = []
+    for year in range(2024, 2036):
+        days += [date(year, 7, 3), date(year, 12, 24)]
+        days += [date(year, 11, d) for d in range(23, 30)]
+    script = HARNESS.split("const out = {};")[0] + (
+        "vm.runInContext('globalThis.__early=isEarlyClose;', ctx);"
+        "console.log(JSON.stringify(JSON.parse(payload).map(d => ctx.__early(...d))));")
+    run = subprocess.run(["node", "-e", script, str(MATRIX_JS),
+                          json.dumps([[d.year, d.month, d.day] for d in days])],
+                         capture_output=True, text=True, timeout=60, check=True)
+    assert json.loads(run.stdout.strip().splitlines()[-1]) == [mg.is_early_close(d) for d in days]

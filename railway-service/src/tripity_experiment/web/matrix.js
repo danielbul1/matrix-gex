@@ -42,11 +42,20 @@ function zonedDateTimeToUtc(year,month,day,hour,minute,timeZone){
   const represented=Date.UTC(get('year'),get('month')-1,get('day'),get('hour'),get('minute'),get('second'));
   return guess-(represented-guess);
 }
+// NYSE early close (13:00 ET), the same rule as matrix_gex.is_early_close (#71):
+// the day after Thanksgiving, and July 3 and December 24 from Monday to Thursday.
+function isEarlyClose(year,month,day){
+  const weekday=new Date(Date.UTC(year,month-1,day)).getUTCDay(); // 0 = Sunday
+  if(month===11 && weekday===5) return day-1>=22 && day-1<=28;
+  if((month===7 && day===3) || (month===12 && day===24)) return weekday>=1 && weekday<=4;
+  return false;
+}
 function preciseYearsToExpiry(exp,root,valuationMs){
   const [year,month,day]=String(exp).split('-').map(Number);
   // AM-settled index roots (9:30 AM ET expiry): SPX/NDX, plus VIX and its weeklies.
   const isAmSettled=root==='SPX'||root==='NDX'||root==='VIX'||root==='VIXW';
-  const expiryMs=zonedDateTimeToUtc(year,month,day,isAmSettled?9:16,isAmSettled?30:0,'America/New_York');
+  const [hour,minute]=isAmSettled ? [9,30] : isEarlyClose(year,month,day) ? [13,0] : [16,0];
+  const expiryMs=zonedDateTimeToUtc(year,month,day,hour,minute,'America/New_York');
   return Math.max((expiryMs-valuationMs)/(365.25*86400000),1/(365.25*24*60));
 }
 

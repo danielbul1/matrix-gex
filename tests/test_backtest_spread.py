@@ -947,3 +947,20 @@ def test_summary_lists_the_verdict_per_sign_convention(planted_report):
     assert planted_report["sign_convention_check"] in summary
     assert "| reverse_naive | positive_gamma |" in summary
     assert "| dealers_short_all | gex_percentile |" in summary
+
+
+# ---------------------------------------------------------------------------
+# IV coverage at the entry snapshot (#71)
+# ---------------------------------------------------------------------------
+def test_entry_snapshot_without_enough_iv_is_undecided(tmp_path):
+    covered = [_option(MONDAY, 10, 0, "C", 5050.0, 1000), _option(MONDAY, 10, 0, "P", 4950.0, 1000)]
+    missing = [_option(MONDAY, 10, 0, "P", 4900.0, 9000, iv=None)]  # 82% of the OI, no IV
+    assert bt.iv_coverage(covered) == 1.0
+    assert bt.iv_coverage(covered + missing) == pytest.approx(2000 / 11000)
+    assert bt.entry_strikes(covered + missing, MONDAY) is None
+    assert bt.entry_strikes(covered, MONDAY) is not None
+    path = _store(tmp_path, {MONDAY: covered + missing}, {MONDAY: SPOT})
+    report = _gex_run(path)
+    assert report["gex"] == []
+    (variant,) = [f for f in report["filters"] if f["filter"] == "positive_gamma"]
+    assert [u["reason"] for u in variant["undecided"]] == [bt.NO_GEX_REASON]

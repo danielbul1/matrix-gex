@@ -192,8 +192,9 @@ python tools\gex_crosscheck.py --store C:\path\chain.sqlite3
   `rejected` (the Rejected Sessions, replayed as their own strategy),
   `baseline` and `iv_matched_control`, each with its own Position Cap,
   metrics over the same calendar, trades and Skipped Sessions. A filter's
-  Undecided Sessions (no Naive GEX, no percentile yet, or no VIX close
-  before the session) are listed under `undecided` and sit in no row,
+  Undecided Sessions (no usable entry snapshot, no percentile yet, or no
+  VIX close before the session; a snapshot is unusable when rows with an IV
+  hold under 90% of its SOD Open Interest) are listed under `undecided` and sit in no row,
   `baseline` included, so `kept` + `rejected` = `baseline`. `gex` lists
   every session's Naive GEX, Gamma Regime and percentile; `covariates` its
   VIX, ATM IV and VRP.

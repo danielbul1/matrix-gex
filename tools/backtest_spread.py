@@ -166,6 +166,12 @@ SIGN_REVERSE = "reverse_naive"        # dealers short calls, long puts
 SIGN_CONVENTIONS = (SIGN_NAIVE, SIGN_SHORT_ALL, SIGN_REVERSE)
 CONVENTION_SAME_LINE = "The verdict does not depend on the Sign Convention."
 CONVENTION_DIFFERS_LINE = "The verdict depends on the Sign Convention: {}."
+# An entry snapshot counts only when rows with an IV hold at least this share
+# of its SOD Open Interest (#71): a row without IV would otherwise be priced
+# at matrix_gex's default IV.
+IV_COVERAGE_MIN = 0.9
+NO_GEX_REASON = ("no usable entry snapshot (none, stale, or IV on under"
+                 f" {IV_COVERAGE_MIN:.0%} of its open interest)")
 # The report's rows for every filter.
 ROW_KEPT = "kept"
 ROW_REJECTED = "rejected"
@@ -727,7 +733,8 @@ def run_grid(store_path, start=None, end=None,
 # ---------------------------------------------------------------------------
 def entry_strikes(rows, session):
     """Per-strike GEX rows (matrix_gex.aggregate_strikes) at a session's entry
-    snapshot, or None without one.
+    snapshot, or None without one, or when rows with an IV hold under
+    IV_COVERAGE_MIN of its SOD Open Interest.
 
     The dashboard's number: canonical-engine gamma over the whole SPX/SPXW
     chain (0DTE included), SOD Open Interest, calls + and puts -. Only the
@@ -742,10 +749,21 @@ def entry_strikes(rows, session):
     spots = [r.underlying for r in snapshot if r.underlying]
     if not spots:
         return None
+    if iv_coverage(snapshot) < IV_COVERAGE_MIN:
+        return None
     options = [{"t": r.right, "k": r.strike, "oi": r.sod_oi, "iv": r.iv,
                 "exp": r.expiry, "root": r.root} for r in snapshot]
     return matrix_gex.aggregate_strikes(options, statistics.median(spots),
                                         CONTRACT_MULTIPLIER, stamp)
+
+
+def iv_coverage(snapshot):
+    """Share of the snapshot's SOD Open Interest (rows at or above min_oi 10)
+    held by rows with an IV; 0 when it has none."""
+    counted = [r for r in snapshot if (r.sod_oi or 0) >= 10]
+    total = sum(r.sod_oi for r in counted)
+    covered = sum(r.sod_oi for r in counted if (r.iv or 0) > 0)
+    return covered / total if total else 0.0
 
 
 def signed_gex(strikes, convention=SIGN_NAIVE):
@@ -1094,12 +1112,12 @@ def _run_filters(series, percentiles, percentile_threshold, replay, with_regime=
 
     def positive_gamma(day):
         if day not in series:
-            return None, "no Naive GEX at the entry snapshot"
+            return None, NO_GEX_REASON
         return series[day] > 0, None
 
     def above_percentile(day):
         if day not in series:
-            return None, "no Naive GEX at the entry snapshot"
+            return None, NO_GEX_REASON
         if percentiles[day] is None:
             return None, (f"fewer than {GEX_PERCENTILE_MIN_HISTORY}"
                           " past sessions of Naive GEX")
