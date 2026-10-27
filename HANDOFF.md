@@ -94,6 +94,29 @@ Gotchas learned the hard way (2026-07-19):
 
 ## Session Log (every agent MUST append — newest first)
 
+### 2026-10-27 — Like gex_dashboard and Max Power: one date picker, Power Zone and his levels everywhere
+- **Owner ask:** Power Zone on every screen, only SPX/SPY/QQQ everywhere, easier date
+  choice, and several levels where values stand out (as Max Power has), after reading
+  `vlasenkoalexey/gex_dashboard` and its author's `gex_weekly_strategy_validator`
+  (`docs/power_zone_analysis.md`: Max Power, P1, N1, AG, Call Vol, Put Vol).
+- **Dates (every screen):** one picker like gex_dashboard: 0DTE / Week / Month / All
+  presets over a scrolling list of "Oct 27 (0d)" dates; a click adds or removes a date.
+  A ticker starts on the last preset used (Week at first, `localStorage`
+  `matrix.expiryPreset`). Replaces the Strike Chart dropdown, the OI Volume select (OI
+  Volume now sums several dates), the board's button grid with Select/Clear All, and
+  gives Key Levels a date choice (it used every open expiry).
+- **Power Zone:** on by default on the Strike Chart with its own right-hand scale (on
+  AG's scale it was an eighth of AG and invisible); a layer on OI Volume (on by
+  default); a column, a Net Gamma overlay and tooltip row on the board; drawn sideways
+  on every price chart (Strike Chart, OI Volume, board, Key Levels). Same formula
+  everywhere: AG/8 + volume × S²/20000, within 1% of spot.
+- **Levels:** `priceLines` returns Matrix (highest Power Zone within 1%), P1–P3,
+  N1–N3, AG1–AG2, Call Vol and Put Vol (was six). The board tags them on their rows
+  (shaded) next to the existing column-max dots. Key Levels adds Matrix to its four.
+- **Tickers:** P/C Ratio drops NDX (SPX, SPY, QQQ).
+- **Tests:** smoke and route/strike/key-level tests updated; checked against live
+  data in headless Chromium at 1400px and 390px, no page errors.
+
 ### 2026-10-27 — Dates load faster: one shared download, gzip, dates before candles
 - **Problem (measured live):** `cboe-data` sent 4.1 MB of uncompressed JSON; a cold
   server cache took 9–11 s; every screen downloaded it again; the date controls sat empty

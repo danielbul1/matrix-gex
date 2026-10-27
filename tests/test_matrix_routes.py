@@ -189,13 +189,14 @@ def test_every_screen_picks_from_three_ticker_buttons():
 
 
 def test_oi_volume_screen_is_built():
-    """OI Volume has his controls: ticker, one expiration date, and his five
-    buttons in his order with Volume Spread first and on (map #21, #35)."""
+    """OI Volume has his controls: ticker, the shared date picker, and his five
+    buttons in his order with Volume Spread first and on (map #21, #35), then Power
+    Zone, also on (owner, 2026-10-27)."""
     page = (host.MATRIX_WEB_DIR / "matrix.html").read_text(encoding="utf-8")
     section = page.split('id="view-oi-volume"', 1)[1].split("</section>", 1)[0]
     assert "Coming soon" not in section
     assert 'data-screen="oi-volume"' in section
-    assert '<select id="oivExpiry"' in section
+    assert 'id="oivDates"' in section
     buttons = re.findall(r'<button class="pbtn( active)?"\s+data-oiv-metric="([a-z_]+)"[^>]*>([^<]+)</button>', section)
     assert [(label, bool(on)) for on, _, label in buttons] == [
         ("Volume Spread", True),
@@ -203,6 +204,7 @@ def test_oi_volume_screen_is_built():
         ("Put OI", False),
         ("Call Vol", False),
         ("Put Vol", False),
+        ("Power Zone", True),
     ]
     assert 'id="oiVolumeChart"' in section
     assert 'id="oiVolumePriceChart"' in section
@@ -217,7 +219,7 @@ def test_gex_board_is_built_like_his():
     section = page[start:page.index("</section>", start)]
     assert "ticker-form" not in section
     assert "Coming soon" not in section
-    for element in ('id="gbTickers"', 'id="gbExpiries"', 'id="gbSelectAll"', 'id="gbClearAll"',
+    for element in ('id="gbTickers"', 'id="gbDates"',
                     'id="gbSpot"', 'id="gbTable"', 'id="gbTotalChart"', 'id="gbSplitChart"', 'id="gbPriceChart"'):
         assert element in section
     assert section.count('class="gb-expand"') == 3
@@ -231,9 +233,11 @@ def test_gex_board_like_his_screenshot():
     script = (host.MATRIX_WEB_DIR / "matrix.js").read_text(encoding="utf-8")
     assert "const SCREEN_TICKERS = ['SPX','SPY','QQQ'];" in script
     assert "const GB_TICKERS = SCREEN_TICKERS;" in script
-    labels = re.findall(r"\{key:'\w+',\s+label:'([^']+)'", script[script.index("const GB_COLUMNS"):])[:11]
-    assert labels == ["Strike", "Net GEX", "Abs GEX", "Notional Delta", "Total OI", "Call OI", "Put OI",
+    labels = re.findall(r"\{key:'\w+',\s+label:'([^']+)'", script[script.index("const GB_COLUMNS"):])[:12]
+    assert labels == ["Strike", "Net GEX", "Abs GEX", "Power Zone", "Notional Delta", "Total OI", "Call OI", "Put OI",
                       "Total Vol", "cVol", "pVol", "%"]
+    # Several levels like his (P1-P3, N1-N3, AG1-AG2...), tagged on their rows.
+    assert "gb-tag" in script and "topStrikes(strikes, s=>s.netGex, 3)" in script
     assert "gb-max-row" in script and "gb-dot" in script
     assert "gb-key-row" not in script and "gb-spot-row" not in script
     assert "key==='netGex' ? Math.abs(v) : v" in script
@@ -241,7 +245,7 @@ def test_gex_board_like_his_screenshot():
     assert "s.callGex, GB_CALL_COLOR" in bars and "s.putGex, GB_PUT_COLOR" in bars
     assert "byExpiry" not in script.split("// ---------- GEX Board", 1)[1]
     assert "Gamma Split - Total: " in script and "Net Gamma: " in script
-    assert "function gexBoardExpiryShares(" in script and "share.toFixed(2)" in script
+    assert "function gexBoardExpiryShares(" in script and "renderExpiryPicker('gbDates', gb.expiries, gb.selected, gb.shares)" in script
 
 
 @pytest.mark.parametrize("view, title", [("how-to-use-gex", "How to use GEX"), ("disclaimer", "Disclaimer")])

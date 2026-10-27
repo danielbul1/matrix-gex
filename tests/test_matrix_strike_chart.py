@@ -73,28 +73,29 @@ def _home_section():
     return page[start:page.index("</section>", start)]
 
 
-def test_several_expirations_from_one_dropdown():
-    """His Expiration dropdown holds several dates as chips (a whole week in his
-    screenshot); the old checkbox picker and its quick buttons stay gone."""
-    home = _home_section()
-    assert 'id="expirationSelect"' in home
-    assert 'id="expirationChips"' in home and 'id="expirationMenu"' in home
-    assert "<select" not in home
-    assert 'type="checkbox"' not in home
-    assert "expirationPicker" not in home
-    assert "data-expquick" not in home
+def test_one_date_picker_on_every_screen():
+    """Like gex_dashboard (owner, 2026-10-27): 0DTE / Week / Month / All presets over a
+    short list of dates, the same on every screen; the old dropdown and selects are gone."""
+    page = (host.MATRIX_WEB_DIR / "matrix.html").read_text(encoding="utf-8")
+    for picker in ("homeDates", "oivDates", "gbDates", "klDates"):
+        assert f'class="exp-picker' in page and f'id="{picker}"' in page
+    for old in ("expirationSelect", "expirationMenu", "oivExpiry", "gbExpiries", "gbSelectAll", "gbClearAll"):
+        assert old not in page
     script = (host.MATRIX_WEB_DIR / "matrix.js").read_text(encoding="utf-8")
+    assert "const EXP_PRESETS = [['0dte','0DTE',0],['week','Week',7],['month','Month',30],['all','All',Infinity]];" in script
+    for picker in ("homeDates", "oivDates", "gbDates", "klDates"):
+        assert f"bindExpiryPicker('{picker}'" in script
     run = script[script.index("function run(){"):script.index("// ---------- Data loading")]
     assert "selectedExpirations.has(q.exp)" in run
 
 
-def test_a_ticker_starts_on_the_nearest_expiry_only():
-    """The owner wants to choose the dates: a ticker starts on the nearest expiry,
-    and the trader adds more from the menu (both the Strike Chart and the board)."""
+def test_a_ticker_starts_on_the_last_preset():
+    """A new ticker starts on the last preset used, Week at first, remembered in the browser."""
     script = (host.MATRIX_WEB_DIR / "matrix.js").read_text(encoding="utf-8")
-    assert "new Set(homeExpiries.slice(0,1))" in script
-    assert "gb.selected = new Set(changed || !kept.length ? gb.expiries.slice(0,1) : kept);" in script
-    assert "weekExpirations" not in script
+    assert "return localStorage.getItem(EXP_PRESET_KEY) || 'week';" in script
+    assert ": defaultExpirySelection(homeExpiries);" in script
+    assert "defaultExpirySelection(gb.expiries)" in script
+    assert "defaultExpirySelection(oiv.expiries)" in script
 
 
 def test_his_seven_buttons_in_his_order():
@@ -113,8 +114,8 @@ def test_expiration_change_redraws_from_the_loaded_chain():
     """A date change redraws the strike chart and the Price Lines, which follow the
     chosen dates; it never reloads data."""
     script = (host.MATRIX_WEB_DIR / "matrix.js").read_text(encoding="utf-8")
-    start = script.index("function changeExpirations(")
-    handler = script[start:script.index("\n}\n", start)]
+    start = script.index("bindExpiryPicker('homeDates'")
+    handler = script[start:script.index("\n});\n", start)]
     assert "run();" in handler and "drawPriceCharts(" in handler
     assert "refreshHome" not in handler and "fetch" not in handler
     levels = script[script.index("function homePriceLevels("):script.index("function powerZoneProfile(")]
@@ -154,8 +155,8 @@ def test_power_zone_one_color_and_his_default_buttons():
     line = re.search(r'power:\s*\{label:"Power Zone",\s*color:"(#[0-9a-f]{6})"', script).group(1)
     assert button == line
     active = re.findall(r'<button class="pbtn active"[^>]*data-metric="([a-z_]+)"', page)
-    assert active == ["net_gex", "ag"]
-    assert 'let ACTIVE = new Set(["net_gex","ag"]);' in script
+    assert active == ["net_gex", "ag", "power"]
+    assert 'let ACTIVE = new Set(["net_gex","ag","power"]);' in script
 
 
 def test_home_price_message_is_not_hidden_by_oi_volume_rule():
@@ -175,12 +176,12 @@ def test_page_loads_each_asset_once():
 
 
 def test_right_axes_and_every_date_listed():
-    """AG and Power Zone share one GEX-unit axis; OI and volume get their own
-    scale (a guess). The date list holds every open expiry, so the trader can
-    add any of them (owner's choice), not just the nearest few."""
+    """AG has a GEX-unit axis, Power Zone its own (as on his chart, where it would
+    vanish at an eighth of AG), and OI and volume theirs. The date list holds every
+    open expiry, so the trader can add any of them, not just the nearest few."""
     script = (host.MATRIX_WEB_DIR / "matrix.js").read_text(encoding="utf-8")
     axes = dict(re.findall(r'\n  (\w+):\s+\{[^\n]*axis:"(\w+)"', script))
-    assert axes == {"ag": "gex", "power": "gex", "call_oi": "count", "put_oi": "count",
+    assert axes == {"ag": "gex", "power": "pz", "call_oi": "count", "put_oi": "count",
                     "call_vol": "count", "put_vol": "count"}
     assert "EXPIRATION_COUNT" not in script
     chain_exp = script[script.index("function chainExpirations("):script.index("let homeExpiries")]
