@@ -94,6 +94,20 @@ Gotchas learned the hard way (2026-07-19):
 
 ## Session Log (every agent MUST append — newest first)
 
+### 2026-10-27 — Dates load faster: one shared download, gzip, dates before candles
+- **Problem (measured live):** `cboe-data` sent 4.1 MB of uncompressed JSON; a cold
+  server cache took 9–11 s; every screen downloaded it again; the date controls sat empty
+  (the board even said "No expirations") and waited for the 1.5–2 s candle call.
+- **Server:** `cboe-data` is gzipped when the browser accepts it (4.1 MB → 0.5 MB,
+  `Vary: accept-encoding`). LSE spots now load alongside the chains (`asyncio.gather`)
+  instead of after them. No new background tasks, no new upstream calls.
+- **Frontend:** `loadCoreData(reuse)` joins a download already on its way, and opening
+  a screen reuses one from the last 2 minutes (P/C Ratio too); a ticker click always
+  downloads. Date controls show "Loading dates…". Strike Chart, OI Volume and the GEX
+  board draw dates and chain charts as soon as the chain is in; candles follow.
+- **Tests:** +2 route tests (gzip, spots alongside chains); smoke passes; checked in
+  headless Chromium against a local server with slowed candles (desktop and 390px).
+
 ### 2026-10-27 — Every screen picks SPX / SPY / QQQ with buttons, no Search box
 - **Owner ask:** "only 3 like his, without the extra search". Strike Chart, OI Volume and
   Key Levels lose the Ticker field and Search button; each gets the GEX board's

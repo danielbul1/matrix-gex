@@ -874,6 +874,11 @@ function setTickerStatus(view,text='',state=''){
   status.className=`ticker-status${state?' '+state:''}`;
 }
 // Draws the screen's three ticker buttons with the shown one lit.
+// A date control's placeholder while the first chain for its screen downloads.
+function showDatesLoading(id, html){
+  const el=byId(id);
+  if(el) el.innerHTML=html;
+}
 function syncTickerInput(view,value=screenTickers[view]){
   const buttons=screenForm(view)?.querySelector('.ticker-buttons');
   if(buttons) buttons.innerHTML=SCREEN_TICKERS.map(t=>
@@ -974,7 +979,7 @@ function applyLocation(){
   if(view===OIV_VIEW){
     const symbol=screenTickers[OIV_VIEW];
     if(symbol===oiv.symbol && oiv.record) renderOiVolume();
-    else refreshOiVolume(symbol);
+    else refreshOiVolume(symbol, true);
     return;
   }
   if(view===KEY_LEVELS_VIEW){
@@ -991,7 +996,7 @@ function applyLocation(){
     run();
     drawPriceCharts(symbol);
   }
-  else refreshHome(symbol);
+  else refreshHome(symbol, true);
 }
 function navigate(view){
   if(view===activeView){
@@ -1051,12 +1056,21 @@ function fetchLiveData(url){
 function validCboeData(d){
   return d && d.SPX && Array.isArray(d.SPX.opts) && Number.isFinite(Number(d.SPX.spot));
 }
-// The core tickers (NDX, SPX, SPY, QQQ, VIX) come in one call.
-async function loadCoreData(){
-  const data=await fetchLiveData(MATRIX_CBOE_DATA_URL + '?t=' + Date.now());
-  if(!validCboeData(data)) return {ok:false, detail:'Could not load market data. Press the ticker again to retry.'};
-  REAL=data;
-  return {ok:true};
+// The core tickers (NDX, SPX, SPY, QQQ, VIX) come in one call. Screens share it: a
+// download already on its way is joined, and opening a screen (reuse) takes one from the
+// last two minutes instead of downloading again. A ticker click always downloads.
+const CORE_REUSE_MS = 2*60*1000;
+let _coreLoad = null, _coreLoadedAt = 0;
+function loadCoreData(reuse=false){
+  if(_coreLoad) return _coreLoad;
+  if(reuse && Date.now()-_coreLoadedAt < CORE_REUSE_MS) return Promise.resolve({ok:true});
+  _coreLoad = fetchLiveData(MATRIX_CBOE_DATA_URL + '?t=' + Date.now()).then(data=>{
+    if(!validCboeData(data)) return {ok:false, detail:'Could not load market data. Press the ticker again to retry.'};
+    REAL=data;
+    _coreLoadedAt=Date.now();
+    return {ok:true};
+  }).finally(()=>{ _coreLoad=null; });
+  return _coreLoad;
 }
 // The latest session's 1-minute candles for the two price charts.
 async function loadPriceData(symbol){
@@ -1073,18 +1087,16 @@ async function loadPriceData(symbol){
 }
 // Refresh of the Strike Chart: a ticker button, or opening it with no data yet.
 // The chain and the price candles load together.
-async function refreshHome(symbol){
+async function refreshHome(symbol, reuse=false){
   const request=++_homeRequest;
   const previous=currentSymbol();
   if(activeView===HOME_VIEW) syncTickerInput(HOME_VIEW,symbol);
   setTickerStatus(HOME_VIEW,`Loading ${symbol}…`);
-  const [result,price]=await Promise.all([
-    loadCoreData(),
-    loadPriceData(symbol),
-  ]);
+  if(!homeRecord) showDatesLoading('expirationChips','<span class="ms-placeholder">Loading dates…</span>');
+  // The dates and the strike chart draw as soon as the chain is in; the candles follow.
+  const pricePromise=loadPriceData(symbol);
+  const result=await loadCoreData(reuse);
   if(request!==_homeRequest) return;  // a newer click took over
-  // Keep the last good candles if this refresh could not get new ones.
-  if(price.candles || !PRICE[symbol]?.candles) PRICE[symbol]=price;
   if(!REAL[symbol]){
     // Nothing to show for this ticker: fall back to the last ticker, or the default one.
     if(!REAL[previous] && symbol!==previous) await refreshHome(previous);
@@ -1099,8 +1111,12 @@ async function refreshHome(symbol){
     history.replaceState(null,'',screenUrl(HOME_VIEW));
   }
   run();
-  drawPriceCharts(symbol);
   setTickerStatus(HOME_VIEW,result.ok?'':`Refresh failed. Showing the last data for ${symbol}.`,result.ok?'':'error');
+  const price=await pricePromise;
+  if(request!==_homeRequest) return;
+  // Keep the last good candles if this refresh could not get new ones.
+  if(price.candles || !PRICE[symbol]?.candles) PRICE[symbol]=price;
+  drawPriceCharts(symbol);
 }
 
 // ---------- Key Levels ----------
@@ -1362,12 +1378,12 @@ function renderKeyLevels(){
   const host = byId('forecast');
   if(host) host.innerHTML = forecastHtml(keyLevelsState.R);
 }
-async function loadKeyLevels(symbol){
+async function loadKeyLevels(symbol, reuse=false){
   const request = ++_keyLevelsRequest;
   syncTickerInput(KEY_LEVELS_VIEW,symbol);
   setTickerStatus(KEY_LEVELS_VIEW,`Loading ${symbol}…`);
   const [result, candles] = await Promise.all([
-    loadCoreData(),
+    loadCoreData(reuse),
     fetchKeyLevelsCandles(symbol),
   ]);
   if(request!==_keyLevelsRequest) return;  // a newer click took over
@@ -1392,7 +1408,7 @@ async function loadKeyLevels(symbol){
 function showKeyLevels(){
   const symbol = screenTickers[KEY_LEVELS_VIEW];
   if(keyLevelsState?.symbol===symbol) renderKeyLevels();
-  else loadKeyLevels(symbol);
+  else loadKeyLevels(symbol, true);
 }
 
 // ---------- OI Volume ----------
@@ -1451,9 +1467,9 @@ function oiVolumePriceLines(strikes){
     ['Put Vol','putVol',OIV_METRICS.put_vol.color],
   ].map(([label,key,color])=>{ const s=top(key); return s && {label, color, price:s.strike}; }).filter(Boolean);
 }
-function populateOiVolumeExpiries(symbol){
+function populateOiVolumeExpiries(symbol, record=oiv.record){
   const select = byId('oivExpiry');
-  const expiries = oiVolumeExpiries(buildChainRealFromRecord(symbol, oiv.record));
+  const expiries = oiVolumeExpiries(buildChainRealFromRecord(symbol, record));
   if(!expiries.includes(oiv.expiry)) oiv.expiry = expiries[0] || null;
   if(select){
     select.innerHTML = expiries.length
@@ -1725,15 +1741,14 @@ async function loadOiVolumeCandles(symbol){
   return {candles, error:''};
 }
 // Refresh of OI Volume: a ticker button, or opening it with no data yet.
-async function refreshOiVolume(symbol){
+async function refreshOiVolume(symbol, reuse=false){
   const request=++_oivRequest;
   const previous=oiv.symbol;
   syncTickerInput(OIV_VIEW,symbol);
   setTickerStatus(OIV_VIEW,`Loading ${symbol}…`);
-  const [result,price]=await Promise.all([
-    loadCoreData(),
-    loadOiVolumeCandles(symbol),
-  ]);
+  if(!oiv.record) showDatesLoading('oivExpiry','<option value="">Loading dates…</option>');
+  const pricePromise=loadOiVolumeCandles(symbol);
+  const result=await loadCoreData(reuse);
   if(request!==_oivRequest) return;  // a newer click took over
   if(!REAL[symbol]){
     setTickerStatus(OIV_VIEW,result.detail,'error');
@@ -1741,13 +1756,17 @@ async function refreshOiVolume(symbol){
     return;
   }
   if(symbol!==previous) oiv.expiry=null;
+  const record=REAL[symbol];
+  // The date list fills as soon as the chain is in; the charts wait for the candles.
+  populateOiVolumeExpiries(symbol, record);
+  const price=await pricePromise;
+  if(request!==_oivRequest) return;
   oiv.symbol=symbol;
-  oiv.record=REAL[symbol];
+  oiv.record=record;
   oiv.candles=price.candles;
   oiv.candlesError=price.error;
   screenTickers[OIV_VIEW]=symbol;
   if(activeView===OIV_VIEW) history.replaceState(null,'',screenUrl(OIV_VIEW));
-  populateOiVolumeExpiries(symbol);
   renderOiVolume();
   setTickerStatus(OIV_VIEW,result.ok?'':`Refresh failed. Showing the last data for ${symbol}.`,result.ok?'':'error');
 }
@@ -2206,12 +2225,15 @@ function renderGexBoard(scrollToSpot=false){
 }
 // Refresh of the board: opening it with nothing loaded, or a ticker button.
 // Expiry buttons only redraw from the loaded chain.
-async function refreshGexBoard(symbol){
+async function refreshGexBoard(symbol, reuse=false){
   const request = ++_gbRequest;
   screenTickers[GB_VIEW] = symbol;
   setGbStatus(`Loading ${symbol}…`);
   renderGexBoardButtons();
-  const [result, price] = await Promise.all([loadCoreData(), loadOiVolumeCandles(symbol)]);
+  if(!gb.expiries.length) showDatesLoading('gbExpiries','<span class="gb-status">Loading dates…</span>');
+  // The dates, table and gamma charts draw as soon as the chain is in; the price chart follows.
+  const pricePromise = loadOiVolumeCandles(symbol);
+  const result = await loadCoreData(reuse);
   if(request!==_gbRequest) return;  // a newer click took over
   if(!REAL[symbol]){
     if(gb.symbol) screenTickers[GB_VIEW] = gb.symbol;
@@ -2222,8 +2244,7 @@ async function refreshGexBoard(symbol){
   const changed = symbol!==gb.symbol;
   gb.symbol = symbol;
   gb.record = REAL[symbol];
-  gb.candles = price.candles;
-  gb.candlesError = price.error;
+  if(changed){ gb.candles = null; gb.candlesError = 'Loading prices…'; }
   const chain = buildChainRealFromRecord(symbol, gb.record);
   gb.expiries = oiVolumeExpiries(chain);
   gb.shares = gexBoardExpiryShares({...chain, quotes:chain.quotes.filter(q=>gb.expiries.includes(q.exp))});
@@ -2233,11 +2254,16 @@ async function refreshGexBoard(symbol){
   if(activeView===GB_VIEW) history.replaceState(null,'',screenUrl(GB_VIEW));
   renderGexBoard(true);
   setGbStatus(result.ok ? '' : `Refresh failed. Showing the last data for ${symbol}.`, result.ok ? '' : 'error');
+  const price = await pricePromise;
+  if(request!==_gbRequest) return;
+  gb.candles = price.candles;
+  gb.candlesError = price.error;
+  renderGexBoard();
 }
 function showGexBoard(){
   const symbol = screenTickers[GB_VIEW];
   if(symbol===gb.symbol && gb.record) renderGexBoard();
-  else refreshGexBoard(symbol);
+  else refreshGexBoard(symbol, true);
 }
 
 // ---------- P/C Ratio ----------
@@ -2279,7 +2305,8 @@ function renderPcTable(data){
 async function loadPcRatio(){
   const request=++_pcRequest;
   setPcStatus('Loading…');
-  const data=await fetchLiveData(MATRIX_CBOE_DATA_URL + '?t=' + Date.now());
+  const result=await loadCoreData(true);
+  const data=result.ok ? REAL : null;
   if(request!==_pcRequest) return;
   if(!data || !PC_TICKERS.some(symbol=>data[symbol]?.totals)){
     setPcStatus('Could not load market data. Open the screen again to retry.','error');

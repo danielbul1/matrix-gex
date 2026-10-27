@@ -55,8 +55,8 @@ def _make_app():
     return host.PublicCompanyApp(connector, oauth=False, public_url="http://test")
 
 
-def _get(app, path, query=b""):
-    scope = {"type": "http", "method": "GET", "path": path, "query_string": query, "headers": []}
+def _get(app, path, query=b"", headers=()):
+    scope = {"type": "http", "method": "GET", "path": path, "query_string": query, "headers": list(headers)}
     sent = []
 
     async def receive():
@@ -275,3 +275,44 @@ def test_power_zone_is_the_new_definition_everywhere():
     for gone in ("AVG Power Zone", "avgPowerZone", "Power Range", "power-range"):
         assert gone not in script
         assert gone not in page
+
+
+def test_chain_data_is_gzipped_when_the_browser_accepts_it(monkeypatch):
+    """The 4 MB chain download goes out compressed; clients without gzip get plain JSON."""
+    import gzip
+    import json
+
+    data = {"SPX": {"spot": 6000.0, "opts": [{"k": 6000.0}] * 50}}
+
+    async def fake_market_data():
+        return data
+
+    monkeypatch.setattr(host, "_fetch_matrix_market_data", fake_market_data)
+    status, body = _get(_make_app(), "/api/matrix/cboe-data", headers=[(b"accept-encoding", b"gzip, br")])
+    assert status == 200
+    assert _get.headers[b"content-encoding"] == b"gzip"
+    assert json.loads(gzip.decompress(body)) == data
+    status, body = _get(_make_app(), "/api/matrix/cboe-data")
+    assert status == 200 and b"content-encoding" not in _get.headers
+    assert json.loads(body) == data
+
+
+def test_spots_and_chains_load_together(monkeypatch):
+    """Live spots no longer wait for the chains: both calls run at once."""
+    running = []
+
+    async def chains():
+        running.append("chains")
+        await asyncio.sleep(0.05)
+        assert "spots" in running
+        return {"SPY": {"spot": 1.0}}
+
+    async def spots():
+        running.append("spots")
+        await asyncio.sleep(0.05)
+        return {"SPY": {"spot": 2.0, "asof": "2026-10-27T14:00:00Z"}}
+
+    monkeypatch.setattr(host, "_fetch_matrix_market_data_cached", chains)
+    monkeypatch.setattr(host, "_fetch_matrix_lse_spots", spots)
+    data = asyncio.run(host._fetch_matrix_market_data())
+    assert data["SPY"]["spot"] == 2.0
