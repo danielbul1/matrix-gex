@@ -10,49 +10,49 @@
   "source": "Cboe delayed options snapshot",
   "state": "fresh",
   "summary": {
-    "latest_asof_et": "2026-10-27T13:46:32-04:00",
+    "latest_asof_et": "2026-10-27T14:26:34-04:00",
     "latest_symbol": "SPX",
-    "oldest_asof_et": "2026-10-27T13:46:14-04:00",
+    "oldest_asof_et": "2026-10-27T14:26:16-04:00",
     "oldest_symbol": "NDX",
     "symbols": 4,
-    "total_contracts": 36568
+    "total_contracts": 36571
   },
   "symbols": {
     "NDX": {
-      "asof": "2026-10-27T13:46:14",
-      "asof_et": "2026-10-27T13:46:14-04:00",
+      "asof": "2026-10-27T14:26:16",
+      "asof_et": "2026-10-27T14:26:16-04:00",
       "contracts": 5371,
       "expiries": 41,
       "first_expiry": "2026-10-27",
       "last_expiry": "2029-12-21",
-      "spot": 29648.92
+      "spot": 29630.21
     },
     "QQQ": {
-      "asof": "2026-10-27T13:46:20",
-      "asof_et": "2026-10-27T13:46:20-04:00",
+      "asof": "2026-10-27T14:26:21",
+      "asof_et": "2026-10-27T14:26:21-04:00",
       "contracts": 5763,
       "expiries": 30,
       "first_expiry": "2026-10-27",
       "last_expiry": "2029-01-19",
-      "spot": 721.16
+      "spot": 720.69
     },
     "SPX": {
-      "asof": "2026-10-27T13:46:32",
-      "asof_et": "2026-10-27T13:46:32-04:00",
-      "contracts": 18542,
+      "asof": "2026-10-27T14:26:34",
+      "asof_et": "2026-10-27T14:26:34-04:00",
+      "contracts": 18545,
       "expiries": 54,
       "first_expiry": "2026-10-27",
       "last_expiry": "2031-12-19",
-      "spot": 7724.02
+      "spot": 7719.3
     },
     "SPY": {
-      "asof": "2026-10-27T13:46:18",
-      "asof_et": "2026-10-27T13:46:18-04:00",
+      "asof": "2026-10-27T14:26:19",
+      "asof_et": "2026-10-27T14:26:19-04:00",
       "contracts": 6892,
       "expiries": 33,
       "first_expiry": "2026-10-27",
       "last_expiry": "2029-01-19",
-      "spot": 769.87
+      "spot": 769.43
     }
   }
 }
