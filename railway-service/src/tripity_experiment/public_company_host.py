@@ -7,6 +7,7 @@ import ipaddress
 import asyncio
 import csv
 import datetime
+import gzip
 import io
 import json
 import os
@@ -886,8 +887,10 @@ async def _fetch_matrix_lse_spots() -> dict[str, dict[str, Any]]:
 
 
 async def _fetch_matrix_market_data() -> dict[str, Any]:
-    data = deepcopy(await _fetch_matrix_market_data_cached())
-    for symbol, live in (await _fetch_matrix_lse_spots()).items():
+    # The chains and the live spots come from different calls, so fetch them together.
+    market, spots = await asyncio.gather(_fetch_matrix_market_data_cached(), _fetch_matrix_lse_spots())
+    data = deepcopy(market)
+    for symbol, live in spots.items():
         record = data.get(symbol)
         if not isinstance(record, dict):
             continue
@@ -902,6 +905,13 @@ async def _fetch_matrix_market_data() -> dict[str, Any]:
         elif record.get("source") == "tripity_cboe":
             record["source"] = "lse_live+cboe_oi"
     return data
+
+
+def _accepts_gzip(scope: dict[str, Any]) -> bool:
+    for name, value in scope.get("headers") or []:
+        if name.lower() == b"accept-encoding" and b"gzip" in value.lower():
+            return True
+    return False
 
 
 class PublicCompanyApp:
@@ -1235,14 +1245,17 @@ class PublicCompanyApp:
     async def _matrix_cboe_data(self, scope: dict[str, Any], send: Any) -> None:
         try:
             data = await _fetch_matrix_market_data()
-            await self._json(
-                send,
-                data,
-                headers=[
-                    *self._matrix_cors_headers(scope),
-                    (b"cache-control", b"public, max-age=30"),
-                ],
-            )
+            body = json.dumps(data, separators=(",", ":")).encode("utf-8")
+            headers = [
+                *self._matrix_cors_headers(scope),
+                (b"cache-control", b"public, max-age=30"),
+                (b"vary", b"accept-encoding"),
+            ]
+            # About 4 MB of JSON shrinks to about 0.5 MB, which matters on a phone.
+            if _accepts_gzip(scope):
+                body = gzip.compress(body, compresslevel=5)
+                headers.append((b"content-encoding", b"gzip"))
+            await self._response(send, 200, body, b"application/json", headers=headers)
         except Exception as exc:  # noqa: BLE001
             await self._json(
                 send,
