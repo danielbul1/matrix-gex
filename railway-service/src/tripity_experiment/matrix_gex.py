@@ -16,8 +16,9 @@ Conventions (SqueezeMetrics-style, matching web/matrix.js):
 - x0.01 factors express exposure per 1% move in spot / 1 vol-point move in IV.
 - years_to_expiry is US/Eastern aware: AM-settled roots (SPX/NDX/VIX/VIXW)
   expire 9:30 ET, everything else 16:00 ET, with a 1-minute floor.
-- Zero-gamma flip uses the smooth method: BS-gamma profile over a spot ladder
-  with sign-change interpolation (not a cumulative-sum over strikes).
+- Gamma Flip uses the smooth method: BS-gamma profile over a spot ladder,
+  the sign change nearest spot (not a cumulative-sum over strikes, and not
+  the first crossing from the bottom of the ladder).
 
 Option rows are mappings with keys: t ("C"/"P"), k (strike), oi, iv, g
 (vendor gamma), d (vendor delta), exp ("YYYY-MM-DD"), root.
@@ -25,6 +26,7 @@ Option rows are mappings with keys: t ("C"/"P"), k (strike), oi, iv, g
 
 import math
 from datetime import datetime
+from typing import NamedTuple
 from zoneinfo import ZoneInfo
 
 ET = ZoneInfo("America/New_York")
@@ -287,18 +289,20 @@ def walls(rows: list[dict]) -> tuple[float | None, float | None]:
     return call_wall, put_wall
 
 
-# ---------- Gamma profile / zero-gamma flip ----------
-def gamma_profile(
-    options,
-    levels,
-    mult: float = 100,
-    valuation_ms: float | None = None,
-    r: float = DEFAULT_RATE,
-    min_oi: float = 0,
-) -> list[float]:
-    """Net GEX ($, calls + puts -) at each spot level, using BS gamma from
-    each row's IV (vendor gamma is spot-stale, so the profile is model-based).
-    """
+# ---------- Gamma profile / Gamma Flip ----------
+FLIP_LOWER, FLIP_UPPER, FLIP_POINTS = 0.9, 1.1, 201  # spot grid: +/-10% in 201 points
+FLIP_NEGLIGIBLE = 1e-9  # profile values below this share of gross gamma count as zero
+FLIP_TOLERANCE = 1e-7   # bisection stops within this share of spot
+
+
+class GammaFlip(NamedTuple):
+    """The Gamma Flip: the crossing nearest spot, and every crossing found."""
+    level: float
+    crossings: list[float]
+
+
+def _profile_rows(options, min_oi: float, valuation_ms: float | None) -> list[tuple]:
+    """(K, T, iv, oi, sign) for each row that can be repriced (IV > 0)."""
     rows = []
     for option in options:
         try:
@@ -314,25 +318,98 @@ def gamma_profile(
         T = years_to_expiry(str(option.get("exp") or ""), str(option.get("root") or ""), valuation_ms)
         sign = 1.0 if option.get("t") == "C" else -1.0
         rows.append((K, T, iv, oi, sign))
-    profile = []
-    for S in levels:
-        total = 0.0
-        for K, T, iv, oi, sign in rows:
-            total += sign * bs_gamma(S, K, T, iv, r) * oi * mult * S * S * 0.01
-        profile.append(total)
-    return profile
+    return rows
 
 
-def zero_gamma_flip(levels, profile) -> float | None:
-    """First sign change in the gamma profile, linearly interpolated."""
-    for i in range(len(profile) - 1):
-        g0, g1 = profile[i], profile[i + 1]
-        if g0 == 0:
-            return float(levels[i])
-        if g0 * g1 < 0:
-            s0, s1 = levels[i], levels[i + 1]
-            return float(s0 - (s1 - s0) * g0 / (g1 - g0))
-    return None
+def _gex_at(rows, S: float, mult: float, r: float) -> float:
+    return sum(sign * bs_gamma(S, K, T, iv, r) * oi for K, T, iv, oi, sign in rows) * mult * S * S * 0.01
+
+
+def gamma_profile(
+    options,
+    levels,
+    mult: float = 100,
+    valuation_ms: float | None = None,
+    r: float = DEFAULT_RATE,
+    min_oi: float = 0,
+) -> list[float]:
+    """Net GEX ($, calls + puts -) at each spot level, using BS gamma from
+    each row's IV (vendor gamma is spot-stale, so the profile is model-based).
+    """
+    rows = _profile_rows(options, min_oi, valuation_ms)
+    return [_gex_at(rows, S, mult, r) for S in levels]
+
+
+def _sign_brackets(levels, profile, threshold: float = 0.0) -> list[tuple[int, int]]:
+    """(i, k) index pairs where the profile changes sign between two
+    neighbouring significant values (|value| > threshold)."""
+    significant = [(j, v < 0) for j, v in enumerate(profile) if abs(v) > threshold]
+    return [(i, k) for (i, i_neg), (k, k_neg) in zip(significant, significant[1:]) if i_neg != k_neg]
+
+
+def flip_from_profile(levels, profile, spot: float, threshold: float = 0.0) -> float | None:
+    """The sign change of a gamma profile nearest spot, linearly interpolated.
+    None when the profile never changes sign. Values within threshold of zero
+    count as zero, and a run of them between two signs puts the flip at its middle."""
+    best = None
+    for i, k in _sign_brackets(levels, profile, threshold):
+        if k == i + 1:
+            g0, g1 = profile[i], profile[k]
+            x = levels[i] - (levels[k] - levels[i]) * g0 / (g1 - g0)
+        else:
+            x = (levels[i + 1] + levels[k - 1]) / 2
+        if best is None or abs(x - spot) < abs(best - spot):
+            best = float(x)
+    return best
+
+
+def gamma_flip(
+    options,
+    spot: float,
+    mult: float = 100,
+    valuation_ms: float | None = None,
+    r: float = DEFAULT_RATE,
+    min_oi: float = 0,
+    lower: float = FLIP_LOWER,
+    upper: float = FLIP_UPPER,
+    points: int = FLIP_POINTS,
+) -> GammaFlip | None:
+    """The Gamma Flip: where Naive GEX, recomputed for the whole chain as if
+    spot stood there, changes sign; the crossing nearest spot. None when it
+    does not change sign within [lower, upper] x spot.
+
+    Sweeps a spot grid, ignores values below FLIP_NEGLIGIBLE of gross gamma
+    (so far-tail underflow cannot fake a crossing) and refines each crossing
+    by bisection. The method follows mervinj3546/gexkit (research: open-source
+    GEX survey, #69); no code is copied."""
+    rows = _profile_rows(options, min_oi, valuation_ms)
+    if not rows:
+        return None
+    gross = sum(oi * bs_gamma(K, K, T, iv, r) * K * K for K, T, iv, oi, _ in rows) * mult * 0.01
+    threshold = FLIP_NEGLIGIBLE * gross
+    levels = [spot * (lower + (upper - lower) * j / (points - 1)) for j in range(points)]
+    profile = [_gex_at(rows, S, mult, r) for S in levels]
+    tolerance = FLIP_TOLERANCE * spot
+    crossings = []
+    for i, k in _sign_brackets(levels, profile, threshold):
+        if k != i + 1:
+            crossings.append((levels[i + 1] + levels[k - 1]) / 2)
+            continue
+        lo, hi, lo_negative = levels[i], levels[k], profile[i] < 0
+        while hi - lo > tolerance:
+            mid = (lo + hi) / 2
+            value = _gex_at(rows, mid, mult, r)
+            if abs(value) <= threshold:
+                lo = hi = mid
+            elif (value < 0) == lo_negative:
+                lo = mid
+            else:
+                hi = mid
+        crossings.append((lo + hi) / 2)
+    if not crossings:
+        return None
+    level = min(crossings, key=lambda x: (abs(x - spot), x))
+    return GammaFlip(float(level), [float(x) for x in crossings])
 
 
 # ---------- Expected move ----------

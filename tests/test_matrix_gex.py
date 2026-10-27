@@ -84,13 +84,13 @@ def test_chex_is_per_trading_day_and_put_single_negation():
     assert calls["call_chex"] == pytest.approx(charm * 1000 * 100 * S / 252, rel=1e-9)
 
 
-# ---------- Zero-gamma flip (smooth method) ----------
+# ---------- Gamma Flip (smooth method, #69) ----------
 def test_flip_within_expected_interval():
     # Calls concentrated at 95, puts at 105: net gamma flips sign in between.
     chain = [_row("C", 95, oi=50000), _row("P", 105, oi=50000)]
     levels = [90 + i * 0.5 for i in range(41)]  # 90..110
     profile = mg.gamma_profile(chain, levels, 100, VALUATION)
-    flip = mg.zero_gamma_flip(levels, profile)
+    flip = mg.flip_from_profile(levels, profile, S)
     assert flip is not None
     assert 95 < flip < 105
     # Interpolation sanity: profile values straddle zero around the flip.
@@ -99,11 +99,59 @@ def test_flip_within_expected_interval():
     assert profile[levels.index(below[-1])] * profile[levels.index(above[0])] < 0
 
 
-def test_flip_none_when_no_sign_change():
+def test_flip_from_profile_none_and_linear_root():
     levels = [90, 100, 110]
-    assert mg.zero_gamma_flip(levels, [1.0, 2.0, 3.0]) is None
+    assert mg.flip_from_profile(levels, [1.0, 2.0, 3.0], 100) is None
     # Sign change between 90 (profile +2) and 100 (profile -4): linear root.
-    assert mg.zero_gamma_flip(levels, [2.0, -4.0, 1.0]) == pytest.approx(90 + 10 * 2 / 6)
+    assert mg.flip_from_profile(levels, [2.0, -4.0, -1.0], 100) == pytest.approx(90 + 10 * 2 / 6)
+
+
+def test_flip_from_profile_takes_the_crossing_nearest_spot_not_the_first():
+    # Crossings near 95 and near 145: spot at 140 must get the upper one
+    # (the old rule returned the first from the bottom).
+    levels = [90, 100, 140, 150]
+    profile = [1.0, -1.0, -1.0, 1.0]
+    assert mg.flip_from_profile(levels, profile, 140) == pytest.approx(145)
+    assert mg.flip_from_profile(levels, profile, 96) == pytest.approx(95)
+
+
+def test_flip_from_profile_threshold_skips_negligible_values():
+    # A tail value that is only underflow noise (-1e-12) must not create a crossing.
+    levels = [80, 90, 100, 110]
+    assert mg.flip_from_profile(levels, [1e-12, -1e-12, 5.0, 6.0], 100, threshold=1e-9) is None
+    # A run of negligible values between two signs: the flip is the run's middle.
+    assert mg.flip_from_profile(levels, [3.0, 0.0, 0.0, -3.0], 100, threshold=1e-9) == pytest.approx(95)
+
+
+def _two_flip_chain():
+    # Puts at 90, calls at 100, puts at 110: the profile is - / + / - around 100.
+    return [_row("P", 90, oi=40000), _row("C", 100, oi=60000), _row("P", 110, oi=40000)]
+
+
+def test_gamma_flip_reports_every_crossing_and_picks_the_nearest():
+    chain = _two_flip_chain()
+    flip = mg.gamma_flip(chain, 103.0, 100, VALUATION)
+    assert flip is not None
+    assert len(flip.crossings) == 2
+    low, high = sorted(flip.crossings)
+    assert 90 < low < 100 < high < 110
+    assert flip.level == high  # spot 103 sits nearer the upper crossing
+    assert mg.gamma_flip(chain, 97.0, 100, VALUATION).level == pytest.approx(low, abs=1e-4)
+
+
+def test_gamma_flip_matches_a_dense_grid_oracle():
+    # Oracle: a 4001-point profile over the same range, linear root nearest spot.
+    chain = _two_flip_chain()
+    spot = 103.0
+    levels = [spot * (0.9 + 0.2 * j / 4000) for j in range(4001)]
+    oracle = mg.flip_from_profile(levels, mg.gamma_profile(chain, levels, 100, VALUATION), spot)
+    assert mg.gamma_flip(chain, spot, 100, VALUATION).level == pytest.approx(oracle, abs=1e-3)
+
+
+def test_gamma_flip_none_without_a_sign_change_or_rows():
+    assert mg.gamma_flip([_row("C", 100), _row("C", 105)], S, 100, VALUATION) is None
+    assert mg.gamma_flip([_row("C", 100, iv=0.0)], S, 100, VALUATION) is None
+    assert mg.gamma_flip([], S, 100, VALUATION) is None
 
 
 # ---------- years_to_expiry ----------

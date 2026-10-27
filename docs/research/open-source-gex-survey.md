@@ -20,6 +20,7 @@ Ground rules, decided with the trader:
 3. **How finely the flip is searched barely matters here.** We tried our 201-point linear grid, Darthreign's ±8% 161-point grid, gexkit's threshold plus bisection, and puneet-chandna's exact root-finding. They agree to within 0.03 points, because every scope had a single crossing. Both projects run unmodified reproduce our profile at spot exactly once given our inputs.
    - Our existing `matrix_gex.zero_gamma_flip` still takes the **first crossing from the bottom** of the grid, the bug gammagrid documents (161 of 200 snapshots had several crossings). It is wrong whenever there are several. Only `server.py` calls it today.
    - gflows has the same rule, and on the 0DTE scope it put SPX's flip at 4,104, against a true crossing near 7,667.
+   - **Fixed in #69 (this PR):** `flip_from_profile` takes the crossing nearest spot. A new `gamma_flip` returns every crossing, ignores values below 1e-9 of gross gamma, and refines by bisection. On this snapshot it gives SPX 7,693.99, SPY 770.41 and QQQ 723.94. On a ±50% grid, SPY's 0DTE profile has a tail-noise crossing at 443.2, which the old rule would have returned; the new one gives 767.9.
 4. **Inputs matter more than method.** On SPX's total:
    - r and q move it by 10 $bn: our 5% and 0% against 3.63% and 1.5%.
    - Volume-for-OI on short expiries and whole-day time to expiry move it by 20 $bn, as in gflows.
