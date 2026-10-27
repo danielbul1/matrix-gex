@@ -52,6 +52,7 @@ Owner + his father are the only users. Live dashboard: https://matrixgex.app/ (r
   - `GET /api/matrix/candles?symbol=&interval=&range=` — intraday candles.
   - `GET /api/matrix/spx-quote` — Cboe delayed SPX quote.
   - `GET /api/matrix/symbol-data?symbol=MSFT` — daily-cached on-demand Cboe
+    (no longer called by the dashboard since 2026-10-27: every screen picks SPX/SPY/QQQ)
     OI/IV chain (Cboe delayed spot).
 
 ## How to deploy (any machine)
@@ -92,6 +93,19 @@ Gotchas learned the hard way (2026-07-19):
    b. Always append an entry to the Session Log below (newest on top).
 
 ## Session Log (every agent MUST append — newest first)
+
+### 2026-10-27 — Every screen picks SPX / SPY / QQQ with buttons, no Search box
+- **Owner ask:** "only 3 like his, without the extra search". Strike Chart, OI Volume and
+  Key Levels lose the Ticker field and Search button; each gets the GEX board's
+  "Select Ticker:" buttons (`SCREEN_TICKERS`, shared with `GB_TICKERS`). Clicking the shown
+  ticker again reloads it (the old Search's job). Default ticker NDX → SPX. A link with any
+  other `?ticker=` opens SPX and fixes the address.
+- **Removed:** the frontend path for arbitrary tickers (`loadDynamicSymbol`, `validTicker`).
+  The backend `symbol-data` endpoint stays but nothing calls it. P/C Ratio still lists NDX.
+- **Research (no code):** his board's highlighted rows are each column's largest value
+  (Net GEX by size), as we already do; see `docs/research/quant-power-design.md`.
+- **Tests:** route tests updated (+1 test for the buttons); smoke script passes; checked in
+  headless Chromium against live data at 1400px and 390px, no page errors. Not deployed.
 
 ### 2026-10-26 — New domain matrixgex.app; dashboard served at the root
 - **Domain:** the site moved to **matrixgex.app** (owner registered it on Cloudflare).

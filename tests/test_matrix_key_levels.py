@@ -89,7 +89,7 @@ def test_key_levels_screen_has_chart_and_forecast():
     assert 'id="forecast"' in section
     assert section.index('id="keyLevelsChart"') < section.index('id="forecast"')
     assert "Coming soon" not in section
-    # Ticker and Search only: no expiry choice on this screen.
+    # Ticker buttons only: no expiry choice on this screen.
     assert 'data-screen="key-levels"' in section
     assert "expir" not in section.lower()
 
