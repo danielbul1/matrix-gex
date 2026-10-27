@@ -16,9 +16,14 @@ Ground rules, decided with the trader:
      - The dashboard (`matrix.js::buildChainRealFromRecord`) prefers Cboe's gamma unless the record is tagged `lse_live_index` or `dynamic`. Live SPX and NDX are tagged; live SPY and QQQ are tagged `lse_live+cboe_oi`. So SPY and QQQ pair Cboe's gamma with the live LSE spot.
 2. **Per-strike Zero Gamma and the repriced Gamma Flip are different levels.** On this snapshot they sit 10 points apart on SPX, 2.8 on SPY and 8.5 on QQQ (1.2% of spot).
    - Both are now glossary terms. Zero Gamma stays the Key Level, as Quant Power reads it.
-3. **How finely the flip is searched barely matters here.** We tried our 201-point linear grid, Darthreign's ±8% 161-point grid, and gexkit's threshold plus bisection. They agree to within 0.03 points, because every scope had a single crossing.
+3. **How finely the flip is searched barely matters here.** We tried our 201-point linear grid, Darthreign's ±8% 161-point grid, gexkit's threshold plus bisection, and puneet-chandna's exact root-finding. They agree to within 0.03 points, because every scope had a single crossing. Both projects run unmodified reproduce our profile at spot exactly once given our inputs.
    - Our existing `matrix_gex.zero_gamma_flip` still takes the **first crossing from the bottom** of the grid, the bug gammagrid documents (161 of 200 snapshots had several crossings). It is wrong whenever there are several. Only `server.py` calls it today.
-4. **The research null to beat already exists.** marcusdrewry/gex-forward-returns finds that GEX's return effect disappears once VIX and realised vol are controlled for. Our IV-Matched Control is built to test exactly that.
+   - gflows has the same rule, and on the 0DTE scope it put SPX's flip at 4,104, against a true crossing near 7,667.
+4. **Inputs matter more than method.** On SPX's total:
+   - r and q move it by 10 $bn: our 5% and 0% against 3.63% and 1.5%.
+   - Volume-for-OI on short expiries and whole-day time to expiry move it by 20 $bn, as in gflows.
+5. **The near expiries decide today's flip.** With everything through the 11-20 OPEX removed, SPX's flip drops 141 points, and spot moves into positive gamma. That is the regime a multi-day spread meets after expiry.
+6. **The research null to beat already exists.** marcusdrewry/gex-forward-returns finds that GEX's return effect disappears once VIX and realised vol are controlled for. Our IV-Matched Control is built to test exactly that.
    - federrico12's thesis adds what the spread experiment lacks: every result rerun under each Sign Convention.
 
 ## The snapshot used
@@ -74,7 +79,47 @@ The later expiries agree much better (2026-11-20 ATM gammas within 5%), so the p
 
 ## 0DTE-dealer-gamma and gflows on our data
 
-Pending: these two are being run on the same snapshot.
+Both were run unmodified, in their own virtualenvs, with every network and app import stubbed out. Each one, fed our inputs (OI, OI ≥ 10, our T, r = 0.05), **reproduces our profile at spot exactly and our Gamma Flip to within 0.1**. That validates `matrix_gex.gamma_profile`. The gaps come from their defaults.
+
+### puneet-chandna/0DTE-dealer-gamma
+
+| All expiries | SPX | SPY | QQQ |
+|---|---|---|---|
+| Their GEX with our inputs | −21.12 | −4.09 | −3.36 |
+| Their zero gamma with our inputs | 7,693.99 | 770.41 | 723.94 |
+| Their GEX with their defaults (r 3.63%, q 1.5%, ±20% strikes) | −30.33 | −4.98 | −3.80 |
+| Their zero gamma with their defaults | 7,701.39 | 770.94 | 725.38 |
+
+- **Rate and dividend yield alone move SPX's total by 10 $bn**: −20.16 to −30.40, changing one setting at a time. Our r = 0.05 and q = 0 are fixed constants. FRED's bills on 2026-10-23 were 4.11% at 1 month and 4.22% at 3 months.
+- Their charm (+30 minutes) and vanna (−1 vol point) hedge flows, in notional $bn, positive meaning dealers buy:
+  - Charm: SPX +0.97, SPY +0.15, QQQ +0.08.
+  - Vanna: SPX +58.3, SPY +6.0, QQQ +3.2.
+- Matrix has no equivalent for these.
+- Their grid is 257 log-spaced points over ±20%, plus every strike and each contract's ±1σ flanks, with each bracket then solved exactly.
+  - Our linear interpolation is off by at most 0.016 points.
+  - Flank sampling only matters when a gamma spike is narrower than the grid step. Here the 0DTE ±1σ is 31–36 SPX points, against our 7.7-point step.
+
+### aaguiar10/gflows
+
+| All expiries, their method as written | SPX | SPY | QQQ |
+|---|---|---|---|
+| Bar total (Cboe γ, volume for ≤ 1 DTE) | +35.98 | +2.56 | −2.31 |
+| Profile at spot | −1.77 | −1.21 | −3.36 |
+| Gamma flip | 7,678.5 | 769.10 | 724.07 |
+| Delta flip | 7,514.9 | 765.01 | 717.85 |
+
+- **Volume instead of OI for anything ≤ 1 day out.** SPY's 10-27 volume is 1.07M against 367k OI, which by itself flips SPY's sign and pulls the walls onto spot. With OI everywhere, every wall matches ours.
+- **Whole business days, floored at 1/252**, so 0DTE and 1DTE both get a full day. That is most of why their SPX profile at spot reads −1.8 against our −21.1.
+- **Their flip takes the first crossing from the bottom**, the same as our `zero_gamma_flip`. That is harmless with one crossing. On the 0DTE scope it gives SPX 4,104 and SPY 627.8, against true crossings near 7,667 and 763.
+- **Removing expiries, the lesson for spreads held for days.** Their `ex_next` / `ex_fri` profiles hold only those expiries, despite the names, so the "removed" profiles below are the total minus those.
+
+| Gamma Flip | All | Next expiry removed | Through 11-20 OPEX removed |
+|---|---|---|---|
+| SPX | 7,678.5 | 7,682.5 | **7,537.1 (−141, −1.8%)** |
+| SPY | 769.1 | 772.0 | 761.1 |
+| QQQ | 724.1 | 728.6 | 730.0 |
+
+With our inputs SPX moves 7,693.9 → 7,691.4 → 7,545.4. Once everything through OPEX is gone, SPX's profile at spot turns from negative to **+22.7 $bn**. The structural regime beneath today's is the opposite one, sitting 2% away.
 
 ## The projects
 
@@ -121,12 +166,15 @@ Each needs the trader's go-ahead before an issue is opened.
    - Coverage and OI-freshness checks before a snapshot is used.
    - Exchange early closes in `years_to_expiry`.
    - Find out why the `data` branch stopped on 2026-07-16.
-7. **Backtest rules for any level study.** Levels taken from the session start only; an untouched level is not "held"; a break needs a margin (Darthreign). Pre-registered hypotheses with FDR correction (emlama).
+7. **Rate and dividend yield from data, not constants.**
+   - Use a tenor-matched bill rate (gflows) and a dividend yield per underlying.
+   - On SPX they move Naive GEX by up to 10 $bn on this snapshot.
+8. **Backtest rules for any level study.** Levels taken from the session start only; an untouched level is not "held"; a break needs a margin (Darthreign). Pre-registered hypotheses with FDR correction (emlama).
 
 ## Ideas that would add a screen (each needs ADR 0001 reopened)
 
 - Profiles and flip **without the next expiry** and **through the next monthly OPEX** (gflows). This is what a multi-day spread lives through.
-- Vanna flip, and charm and vanna hedge flow as "+N minutes" and "−1 vol point" scenarios (puneet-chandna, Darthreign).
+- Vanna flip and delta flip (gflows), and charm and vanna hedge flow as "+N minutes" and "−1 vol point" scenarios (puneet-chandna, Darthreign).
 - Volume-weighted flip ("HVL") beside the OI flip (Darthreign).
 - A price×time exposure surface, with the displayed value stored each minute (EzOptions-Schwab), and an intraday level-drift chart (DarkHorseTrading).
 - Levels drawn as zones of about $2–5 rather than lines (DarkHorseTrading).
@@ -141,4 +189,6 @@ The scripts live outside the repo, in the session scratchpad, and are not commit
 - `methods_reimpl.py`: our own implementations of the Darthreign and gexkit flip and wall methods, written from reading their code.
 - `zg_bs.py`: the per-strike levels with Black-Scholes gamma.
 
-Running Darthreign's and gexkit's code directly was blocked by the session's sandbox (external code), so both were reimplemented.
+How each project was checked:
+- **Reimplemented:** running Darthreign's and gexkit's code directly was blocked by the session's sandbox (external code), so both were reimplemented from their code.
+- **Run unmodified:** 0DTE-dealer-gamma and gflows ran in isolated virtualenvs, with network imports stubbed. Their adapters and result files (`results_odte.json`, `results_gflows.json`) are in the same scratchpad.
