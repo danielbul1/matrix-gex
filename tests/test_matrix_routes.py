@@ -176,6 +176,18 @@ def test_old_shell_is_gone():
     assert "symbol-search" not in script
 
 
+def test_every_screen_picks_from_three_ticker_buttons():
+    """Like his GEX board, every ticker screen has SPX/SPY/QQQ buttons and no
+    search box (owner, 2026-10-27)."""
+    page = (host.MATRIX_WEB_DIR / "matrix.html").read_text(encoding="utf-8")
+    script = (host.MATRIX_WEB_DIR / "matrix.js").read_text(encoding="utf-8")
+    assert "<input" not in page and ">Search<" not in page and "ticker-form" not in page
+    for view in ("gex", "oi-volume", "key-levels"):
+        assert f'<div class="ticker-picker" data-screen="{view}">' in page
+    assert "symbol-data" not in script and "loadDynamicSymbol" not in script
+    assert "const DEFAULT_SYMBOL = 'SPX';" in script
+
+
 def test_oi_volume_screen_is_built():
     """OI Volume has his controls: ticker, one expiration date, and his five
     buttons in his order with Volume Spread first and on (map #21, #35)."""
@@ -217,7 +229,8 @@ def test_gex_board_like_his_screenshot():
     largest cell with its row shaded; Gamma Split by calls and puts with an Abs GEX
     line; and expiry buttons that show each date's share of the gamma."""
     script = (host.MATRIX_WEB_DIR / "matrix.js").read_text(encoding="utf-8")
-    assert "const GB_TICKERS = ['SPX','SPY','QQQ'];" in script
+    assert "const SCREEN_TICKERS = ['SPX','SPY','QQQ'];" in script
+    assert "const GB_TICKERS = SCREEN_TICKERS;" in script
     labels = re.findall(r"\{key:'\w+',\s+label:'([^']+)'", script[script.index("const GB_COLUMNS"):])[:11]
     assert labels == ["Strike", "Net GEX", "Abs GEX", "Notional Delta", "Total OI", "Call OI", "Put OI",
                       "Total Vol", "cVol", "pVol", "%"]

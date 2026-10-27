@@ -88,11 +88,13 @@ def test_several_expirations_from_one_dropdown():
     assert "selectedExpirations.has(q.exp)" in run
 
 
-def test_a_ticker_starts_on_its_week():
-    """Both of his screenshots show the current week through Friday chosen."""
+def test_a_ticker_starts_on_the_nearest_expiry_only():
+    """The owner wants to choose the dates: a ticker starts on the nearest expiry,
+    and the trader adds more from the menu (both the Strike Chart and the board)."""
     script = (host.MATRIX_WEB_DIR / "matrix.js").read_text(encoding="utf-8")
-    assert "new Set(weekExpirations(homeExpiries))" in script
-    assert "gb.selected = new Set(changed || !kept.length ? weekExpirations(gb.expiries) : kept);" in script
+    assert "new Set(homeExpiries.slice(0,1))" in script
+    assert "gb.selected = new Set(changed || !kept.length ? gb.expiries.slice(0,1) : kept);" in script
+    assert "weekExpirations" not in script
 
 
 def test_his_seven_buttons_in_his_order():
@@ -172,12 +174,14 @@ def test_page_loads_each_asset_once():
     assert "<<<<<<<" not in page and ">>>>>>>" not in page
 
 
-def test_right_axes_and_six_dates():
+def test_right_axes_and_every_date_listed():
     """AG and Power Zone share one GEX-unit axis; OI and volume get their own
-    scale (a guess). The date list holds the six nearest dates (a guess)."""
+    scale (a guess). The date list holds every open expiry, so the trader can
+    add any of them (owner's choice), not just the nearest few."""
     script = (host.MATRIX_WEB_DIR / "matrix.js").read_text(encoding="utf-8")
     axes = dict(re.findall(r'\n  (\w+):\s+\{[^\n]*axis:"(\w+)"', script))
     assert axes == {"ag": "gex", "power": "gex", "call_oi": "count", "put_oi": "count",
                     "call_vol": "count", "put_vol": "count"}
-    assert "const EXPIRATION_COUNT = 6;" in script
-    assert ".slice(0,EXPIRATION_COUNT)" in script
+    assert "EXPIRATION_COUNT" not in script
+    chain_exp = script[script.index("function chainExpirations("):script.index("let homeExpiries")]
+    assert ".sort();" in chain_exp and ".sort().slice(" not in chain_exp

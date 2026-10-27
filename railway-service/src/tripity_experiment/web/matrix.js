@@ -56,7 +56,7 @@ const RISK_FREE = 0.05;
 const SPX_SPY_RATIO = 10.03657299922611;
 // User-provided conversion example: QQQ 752.00 = NDX 30,916.24.
 const NDX_QQQ_RATIO = 30916.24 / 752;
-const DEFAULT_SYMBOL = 'NDX';
+const DEFAULT_SYMBOL = 'SPX';
 
 // ---------- Real chain from Tripity ----------
 // Uses official daily OI plus the freshest available gamma/delta/IV/volume fields.
@@ -591,7 +591,7 @@ function priceLines(strikes, spot){
 // Two charts of the searched ticker's latest session, beside the strike chart:
 // 1-minute candles, and a "simplified" close-price line. What his simplified
 // chart holds is not public; a close line is our guess. Neither chart reads the
-// expiration, so only Search or Enter reloads them.
+// expiration, so only a ticker button reloads them.
 const PRICE_CHARTS = {
   priceChart:       {kind:'candles', symbolId:'priceSymLabel',       tooltipId:'priceTooltip',       crosshairId:'priceCrosshairX',       emptyId:'priceEmpty',       legendId:'priceLegend',       legend:'Price'},
   priceSimpleChart: {kind:'line',    symbolId:'priceSimpleSymLabel', tooltipId:'priceSimpleTooltip', crosshairId:'priceSimpleCrosshairX', emptyId:'priceSimpleEmpty', legendId:'priceSimpleLegend', legend:'Simplified price'},
@@ -840,8 +840,8 @@ const CORE_SYMBOL_INFO = {
   QQQ:'Invesco QQQ Trust',
   VIX:'Cboe Volatility Index',
 };
-const TICKER_PATTERN = /^[A-Z][A-Z0-9.-]{0,5}$/;
-const DYNAMIC_SYMBOLS = new Set();
+// Like his GEX board: every screen picks from these three buttons, with no search box.
+const SCREEN_TICKERS = ['SPX','SPY','QQQ'];
 let activeView = null;
 // Each screen keeps its own ticker, the way each of his screens has its own ticker input.
 const screenTickers = Object.fromEntries(
@@ -852,12 +852,6 @@ let selectedExpirations = null;
 
 function normalizeSymbol(value){
   return String(value||'').trim().toUpperCase();
-}
-function validTicker(value){
-  return TICKER_PATTERN.test(value);
-}
-function isCoreSymbol(symbol){
-  return Object.prototype.hasOwnProperty.call(CORE_SYMBOL_INFO,symbol);
 }
 function viewFromPath(pathname){
   const rest=String(pathname||'').replace(/^\/matrix\/?/,'').replace(/\/+$/,'');
@@ -871,7 +865,7 @@ function currentSymbol(){
   return screenTickers[HOME_VIEW];
 }
 function screenForm(view){
-  return document.querySelector(`.ticker-form[data-screen="${view}"]`);
+  return document.querySelector(`.ticker-picker[data-screen="${view}"]`);
 }
 function setTickerStatus(view,text='',state=''){
   const status=screenForm(view)?.querySelector('.ticker-status');
@@ -879,40 +873,27 @@ function setTickerStatus(view,text='',state=''){
   status.textContent=text;
   status.className=`ticker-status${state?' '+state:''}`;
 }
+// Draws the screen's three ticker buttons with the shown one lit.
 function syncTickerInput(view,value=screenTickers[view]){
-  const input=screenForm(view)?.elements.ticker;
-  if(input && value) input.value=value;
+  const buttons=screenForm(view)?.querySelector('.ticker-buttons');
+  if(buttons) buttons.innerHTML=SCREEN_TICKERS.map(t=>
+    `<button type="button" class="gb-btn${t===value?' active':''}" data-ticker="${t}" aria-pressed="${t===value}">${t}</button>`).join('');
 }
 
 // ---------- Expiration (Strike Chart) ----------
 // Like his Expiration dropdown: several dates at once, shown as removable chips, summed
-// per strike. The list holds the six nearest dates (a guess from one sample of his list).
-// A ticker starts on the dates of the current week through Friday, as both of his
-// screenshots show (14-18 Sep on the Strike Chart, 28 Sep-2 Oct on the GEX board).
-const EXPIRATION_COUNT = 6;
+// per strike. The menu lists every open expiry, so the trader can add any of them. A
+// ticker starts on the nearest expiry only, and the trader adds more (owner's choice).
 function chainExpirations(chain){
   const todayIso = new Date().toISOString().slice(0,10);
-  return [...new Set(chain.quotes.map(q=>q.exp).filter(exp=>exp && exp >= todayIso))].sort().slice(0,EXPIRATION_COUNT);
-}
-function marketTodayIso(){
-  return new Intl.DateTimeFormat('en-CA',{timeZone:'America/New_York',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
-}
-// The expiries of the current trading week through Friday (next week's on a weekend),
-// or the nearest one when the week has none left.
-function weekExpirations(expiries){
-  const [y,m,d] = marketTodayIso().split('-').map(Number);
-  const dow = new Date(Date.UTC(y,m-1,d)).getUTCDay();
-  const toFriday = dow===6 ? 6 : dow===0 ? 5 : 5-dow;
-  const friday = new Date(Date.UTC(y,m-1,d+toFriday)).toISOString().slice(0,10);
-  const week = expiries.filter(exp=>exp<=friday);
-  return week.length ? week : expiries.slice(0,1);
+  return [...new Set(chain.quotes.map(q=>q.exp).filter(exp=>exp && exp >= todayIso))].sort();
 }
 let homeExpiries = [];
 function populateExpirations(chain){
   homeExpiries = chainExpirations(chain);
   selectedExpirations = selectedExpirations
     ? new Set([...selectedExpirations].filter(exp=>homeExpiries.includes(exp)))
-    : new Set(weekExpirations(homeExpiries));
+    : new Set(homeExpiries.slice(0,1));
   renderExpirationPicker();
 }
 function renderExpirationPicker(){
@@ -979,12 +960,15 @@ function setView(view){
   if(changed) window.scrollTo({top:0,left:0});
 }
 // Shows the screen the address bar names. The Strike Chart loads data only when
-// it has none for its ticker; after that, data reloads only on Search or Enter.
+// it has none for its ticker; after that, data reloads only on a ticker button.
 function applyLocation(){
   const view=viewFromPath(window.location.pathname);
   const fromUrl=normalizeSymbol(new URLSearchParams(window.location.search).get('ticker'));
-  const urlTicker=SCREENS[view].ticker && validTicker(fromUrl) ? fromUrl : null;
+  // Only the three button tickers count; an old link to another ticker opens SPX.
+  const urlTicker=SCREENS[view].ticker && SCREEN_TICKERS.includes(fromUrl) ? fromUrl : null;
   if(urlTicker && view!==HOME_VIEW) screenTickers[view]=urlTicker;
+  if(SCREENS[view].ticker && !SCREEN_TICKERS.includes(screenTickers[view])) screenTickers[view]=SCREEN_TICKERS[0];
+  if(SCREENS[view].ticker && fromUrl && !urlTicker) history.replaceState(null,'',screenUrl(view));
   setView(view);
   if(view==='options-summary') loadPcRatio();
   if(view===OIV_VIEW){
@@ -998,9 +982,6 @@ function applyLocation(){
     return;
   }
   if(view===GB_VIEW){
-    // His board has ticker buttons only: a link's ticker counts when it is one of them.
-    if(!GB_TICKERS.includes(screenTickers[GB_VIEW])) screenTickers[GB_VIEW]=GB_TICKERS[0];
-    if(urlTicker && urlTicker!==screenTickers[GB_VIEW]) history.replaceState(null,'',screenUrl(GB_VIEW));
     showGexBoard();
     return;
   }
@@ -1022,10 +1003,7 @@ function navigate(view){
 }
 function search(view,raw){
   const symbol=normalizeSymbol(raw);
-  if(!validTicker(symbol)){
-    setTickerStatus(view,'Enter a ticker, e.g. SPX','error');
-    return;
-  }
+  if(!SCREEN_TICKERS.includes(symbol)) return;
   if(view===HOME_VIEW){
     refreshHome(symbol);
     return;
@@ -1045,13 +1023,13 @@ function search(view,raw){
 }
 
 // ---------- Strike Chart ----------
-// The Strike Chart keeps its own copy of the chain it loaded, so a Search on
+// The Strike Chart keeps its own copy of the chain it loaded, so a ticker click on
 // another screen never changes what it shows (each screen has its own ticker).
 let homeRecord = null;
 function run(){
   const sym=currentSymbol();
   if(!homeRecord){
-    setTickerStatus(HOME_VIEW,`${sym}: no data yet. Press Search to try again.`,'error');
+    setTickerStatus(HOME_VIEW,`${sym}: no data yet. Press the ticker again to retry.`,'error');
     return;
   }
   let chain = buildChainRealFromRecord(sym,homeRecord);
@@ -1062,9 +1040,8 @@ function run(){
   renderImpl(R);
 }
 
-// ---------- Data loading (only on Search or Enter) ----------
-const MATRIX_CBOE_DATA_URL = 'https://api.trytripity.site/api/matrix/cboe-data';
-const MATRIX_SYMBOL_DATA_URL = 'https://api.trytripity.site/api/matrix/symbol-data';
+// ---------- Data loading (only on a ticker button) ----------
+const MATRIX_CBOE_DATA_URL = '/api/matrix/cboe-data';
 let _homeRequest=0;
 function fetchLiveData(url){
   return fetch(url, {cache:'no-store'})
@@ -1077,25 +1054,8 @@ function validCboeData(d){
 // The core tickers (NDX, SPX, SPY, QQQ, VIX) come in one call.
 async function loadCoreData(){
   const data=await fetchLiveData(MATRIX_CBOE_DATA_URL + '?t=' + Date.now());
-  if(!validCboeData(data)) return {ok:false, detail:'Could not load market data. Press Search to try again.'};
-  const dynamicRecords=Object.fromEntries([...DYNAMIC_SYMBOLS].filter(symbol=>REAL[symbol]).map(symbol=>[symbol,REAL[symbol]]));
-  REAL={...data,...dynamicRecords};
-  return {ok:true};
-}
-// Any other ticker loads its own Cboe chain through symbol-data.
-async function loadDynamicSymbol(symbol){
-  let response=null, payload=null;
-  try{
-    response=await fetch(`${MATRIX_SYMBOL_DATA_URL}?symbol=${encodeURIComponent(symbol)}`,{cache:'no-store'});
-    payload=await response.json();
-  }catch(_err){
-    payload=null;
-  }
-  if(!response?.ok || !payload?.ok || !payload.record){
-    return {ok:false, detail:payload?.detail || `${symbol}: option chain is unavailable`};
-  }
-  REAL[symbol]=payload.record;
-  DYNAMIC_SYMBOLS.add(symbol);
+  if(!validCboeData(data)) return {ok:false, detail:'Could not load market data. Press the ticker again to retry.'};
+  REAL=data;
   return {ok:true};
 }
 // The latest session's 1-minute candles for the two price charts.
@@ -1111,7 +1071,7 @@ async function loadPriceData(symbol){
   const candles=latestSessionCandles(payload.candles);
   return candles.length ? {candles} : {error:`No intraday prices for ${symbol}`};
 }
-// Refresh of the Strike Chart: Search, Enter, or opening it with no data yet.
+// Refresh of the Strike Chart: a ticker button, or opening it with no data yet.
 // The chain and the price candles load together.
 async function refreshHome(symbol){
   const request=++_homeRequest;
@@ -1119,10 +1079,10 @@ async function refreshHome(symbol){
   if(activeView===HOME_VIEW) syncTickerInput(HOME_VIEW,symbol);
   setTickerStatus(HOME_VIEW,`Loading ${symbol}…`);
   const [result,price]=await Promise.all([
-    isCoreSymbol(symbol) ? loadCoreData() : loadDynamicSymbol(symbol),
+    loadCoreData(),
     loadPriceData(symbol),
   ]);
-  if(request!==_homeRequest) return;  // a newer Search took over
+  if(request!==_homeRequest) return;  // a newer click took over
   // Keep the last good candles if this refresh could not get new ones.
   if(price.candles || !PRICE[symbol]?.candles) PRICE[symbol]=price;
   if(!REAL[symbol]){
@@ -1145,7 +1105,7 @@ async function refreshHome(symbol){
 
 // ---------- Key Levels ----------
 // Price for the searched ticker with its four Key Levels, and the Forecast under it.
-// One Search loads both, the way his Key Levels page fills chart and text together.
+// One ticker click loads both, the way his Key Levels page fills chart and text together.
 const KEY_LEVELS_VIEW = 'key-levels';
 // Guess: his bar size and time span are not public. 5-minute bars over five days
 // show where price sits against levels built from every open expiry.
@@ -1389,7 +1349,7 @@ function hideKeyLevelsTooltip(){
   ['klTooltip','klCrosshairX'].forEach(id=>{const el=byId(id); if(el) el.style.display='none';});
 }
 
-// ----- Loading (Search, Enter, or opening the screen with nothing loaded) -----
+// ----- Loading (a ticker button, or opening the screen with nothing loaded) -----
 async function fetchKeyLevelsCandles(symbol){
   const {interval, range} = KEY_LEVELS_CANDLES;
   const data = await fetchLiveData(`${MATRIX_CANDLES_URL}?symbol=${encodeURIComponent(symbol)}&interval=${interval}&range=${range}&t=${Date.now()}`);
@@ -1407,10 +1367,10 @@ async function loadKeyLevels(symbol){
   syncTickerInput(KEY_LEVELS_VIEW,symbol);
   setTickerStatus(KEY_LEVELS_VIEW,`Loading ${symbol}…`);
   const [result, candles] = await Promise.all([
-    isCoreSymbol(symbol) ? loadCoreData() : loadDynamicSymbol(symbol),
+    loadCoreData(),
     fetchKeyLevelsCandles(symbol),
   ]);
-  if(request!==_keyLevelsRequest) return;  // a newer Search took over
+  if(request!==_keyLevelsRequest) return;  // a newer click took over
   if(!REAL[symbol]){
     // Nothing to show: keep the ticker that is on screen.
     if(keyLevelsState) screenTickers[KEY_LEVELS_VIEW] = keyLevelsState.symbol;
@@ -1436,7 +1396,7 @@ function showKeyLevels(){
 }
 
 // ---------- OI Volume ----------
-// His OI Volume page: ticker + Search, one expiration date, five multi-select
+// His OI Volume page: ticker buttons, one expiration date, five multi-select
 // buttons over a per-strike chart, and a price chart with OI/volume strike lines.
 const OIV_VIEW = 'oi-volume';
 // Volume Spread = call volume minus put volume per strike, for the session so far
@@ -1449,8 +1409,8 @@ const OIV_METRICS = {
   put_vol:       {label:'Put Vol',       color:'#e55f04', kind:'area', val:s=>s.putVol},
 };
 const OIV_ACTIVE = new Set(['volume_spread']);
-const MATRIX_CANDLES_URL = 'https://api.trytripity.site/api/matrix/candles';
-// record: this screen's own copy of the chain, so other screens' Searches leave it alone.
+const MATRIX_CANDLES_URL = '/api/matrix/candles';
+// record: this screen's own copy of the chain, so other screens' ticker clicks leave it alone.
 const oiv = {symbol:null, record:null, expiry:null, candles:null, candlesError:''};
 let _oivRequest = 0;
 
@@ -1764,17 +1724,17 @@ async function loadOiVolumeCandles(symbol){
   if(!candles.length) return {candles:null, error:`No intraday prices for ${symbol}`};
   return {candles, error:''};
 }
-// Refresh of OI Volume: Search, Enter, or opening it with no data yet.
+// Refresh of OI Volume: a ticker button, or opening it with no data yet.
 async function refreshOiVolume(symbol){
   const request=++_oivRequest;
   const previous=oiv.symbol;
   syncTickerInput(OIV_VIEW,symbol);
   setTickerStatus(OIV_VIEW,`Loading ${symbol}…`);
   const [result,price]=await Promise.all([
-    isCoreSymbol(symbol) ? loadCoreData() : loadDynamicSymbol(symbol),
+    loadCoreData(),
     loadOiVolumeCandles(symbol),
   ]);
-  if(request!==_oivRequest) return;  // a newer Search took over
+  if(request!==_oivRequest) return;  // a newer click took over
   if(!REAL[symbol]){
     setTickerStatus(OIV_VIEW,result.detail,'error');
     if(previous) syncTickerInput(OIV_VIEW,previous);
@@ -1800,7 +1760,7 @@ async function refreshOiVolume(symbol){
 // (Net Gamma, Gamma Split, price), each with a full-screen button. The 5% table window
 // and the 10% chart window are guesses.
 const GB_VIEW = 'gex-analysis';
-const GB_TICKERS = ['SPX','SPY','QQQ'];
+const GB_TICKERS = SCREEN_TICKERS;
 screenTickers[GB_VIEW] = GB_TICKERS[0];
 const GB_WINDOW = 0.05;         // the table: strikes within 5% of spot
 const GB_CHART_WINDOW = 0.10;   // Net Gamma and Gamma Split: his draw a much wider range
@@ -1830,7 +1790,7 @@ const GB_CHARTS = {
   Split: {canvas:'gbSplitChart', wrap:'gbSplitWrap'},
   Price: {canvas:'gbPriceChart', wrap:'gbPriceWrap'},
 };
-// The screen's own copy of its chain, so a Search on another screen leaves it alone.
+// The screen's own copy of its chain, so a ticker click on another screen leaves it alone.
 const gb = {symbol:null, record:null, candles:null, candlesError:'', expiries:[], shares:new Map(), selected:new Set(), sort:{key:'strike', dir:'desc'}};
 let _gbRequest = 0;
 
@@ -2268,8 +2228,8 @@ async function refreshGexBoard(symbol){
   gb.expiries = oiVolumeExpiries(chain);
   gb.shares = gexBoardExpiryShares({...chain, quotes:chain.quotes.filter(q=>gb.expiries.includes(q.exp))});
   const kept = [...gb.selected].filter(exp=>gb.expiries.includes(exp));
-  // A new ticker starts on the current week through Friday, as his screenshot shows.
-  gb.selected = new Set(changed || !kept.length ? weekExpirations(gb.expiries) : kept);
+  // A new ticker starts on the nearest expiry only; the trader adds more (owner's choice).
+  gb.selected = new Set(changed || !kept.length ? gb.expiries.slice(0,1) : kept);
   if(activeView===GB_VIEW) history.replaceState(null,'',screenUrl(GB_VIEW));
   renderGexBoard(true);
   setGbStatus(result.ok ? '' : `Refresh failed. Showing the last data for ${symbol}.`, result.ok ? '' : 'error');
@@ -2340,10 +2300,11 @@ document.querySelectorAll('a[data-view]').forEach(link=>{
 });
 window.addEventListener('popstate',applyLocation);
 bind('menuToggle','click',toggleMenu);
-document.querySelectorAll('.ticker-form').forEach(form=>{
-  form.addEventListener('submit',event=>{
-    event.preventDefault();
-    search(form.dataset.screen,form.elements.ticker.value);
+// Ticker buttons: a click loads that ticker; the shown one reloads, the old Search button's job.
+document.querySelectorAll('.ticker-picker').forEach(picker=>{
+  picker.addEventListener('click',event=>{
+    const ticker=event.target.closest?.('[data-ticker]')?.dataset.ticker;
+    if(ticker) search(picker.dataset.screen,ticker);
   });
 });
 // Expiration picker: chips remove a date, the menu adds one, × clears them all.
@@ -2376,7 +2337,7 @@ window.addEventListener('resize',()=>{
   const viewRenderer=VIEW_RENDERERS[activeView];
   if(viewRenderer) viewRenderer(window._lastR);
 });
-// OI Volume: the date and the buttons redraw from the loaded chain; only Search reloads.
+// OI Volume: the date and the buttons redraw from the loaded chain; only a ticker button reloads.
 bind('oivExpiry','change',event=>{
   oiv.expiry=event.target.value || null;
   renderOiVolume();

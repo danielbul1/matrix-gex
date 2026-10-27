@@ -8,7 +8,7 @@
 A market-analytics stack for 5 US symbols — **NDX, SPX, SPY, QQQ, VIX**. The dashboard copies
 Quant Power's screens and nothing else (ADR `docs/adr/0001-matrix-mirrors-quant-power-screens.md`,
 map issue #21); data reloads only on Refresh, never on a timer.
-Owner + his father are the only users. Live dashboard: https://api.trytripity.site/matrix/
+Owner + his father are the only users. Live dashboard: https://matrixgex.app/ (redirects to /matrix/)
 
 ## Repository layout
 
@@ -52,6 +52,7 @@ Owner + his father are the only users. Live dashboard: https://api.trytripity.si
   - `GET /api/matrix/candles?symbol=&interval=&range=` — intraday candles.
   - `GET /api/matrix/spx-quote` — Cboe delayed SPX quote.
   - `GET /api/matrix/symbol-data?symbol=MSFT` — daily-cached on-demand Cboe
+    (no longer called by the dashboard since 2026-10-27: every screen picks SPX/SPY/QQQ)
     OI/IV chain (Cboe delayed spot).
 
 ## How to deploy (any machine)
@@ -92,6 +93,37 @@ Gotchas learned the hard way (2026-07-19):
    b. Always append an entry to the Session Log below (newest on top).
 
 ## Session Log (every agent MUST append — newest first)
+
+### 2026-10-27 — Every screen picks SPX / SPY / QQQ with buttons, no Search box
+- **Owner ask:** "only 3 like his, without the extra search". Strike Chart, OI Volume and
+  Key Levels lose the Ticker field and Search button; each gets the GEX board's
+  "Select Ticker:" buttons (`SCREEN_TICKERS`, shared with `GB_TICKERS`). Clicking the shown
+  ticker again reloads it (the old Search's job). Default ticker NDX → SPX. A link with any
+  other `?ticker=` opens SPX and fixes the address.
+- **Removed:** the frontend path for arbitrary tickers (`loadDynamicSymbol`, `validTicker`).
+  The backend `symbol-data` endpoint stays but nothing calls it. P/C Ratio still lists NDX.
+- **Research (no code):** his board's highlighted rows are each column's largest value
+  (Net GEX by size), as we already do; see `docs/research/quant-power-design.md`.
+- **Tests:** route tests updated (+1 test for the buttons); smoke script passes; checked in
+  headless Chromium against live data at 1400px and 390px, no page errors. Not deployed.
+
+### 2026-10-26 — New domain matrixgex.app; dashboard served at the root
+- **Domain:** the site moved to **matrixgex.app** (owner registered it on Cloudflare).
+  Added as a Railway custom domain on `backend`; DNS in Cloudflare is an apex CNAME
+  (DNS-only) to the Railway target plus the `_railway-verify` TXT. Cert is valid.
+- **Code:** the dashboard's API calls (`cboe-data`, `symbol-data`, `candles`) are now
+  relative paths, so they work on whatever domain serves the page (no CORS, no hardcoded
+  host). `GET /` now 307-redirects to `/matrix/`, so matrixgex.app opens the dashboard.
+- **trytripity:** `mcp.trytripity.site` was deleted (connector landing, unused). Railway
+  caps the service at 2 custom domains, so `api.trytripity.site` stays attached until the
+  new domain is verified live, then it is removed too (owner: throw out trytripity).
+- **Deploy:** production is pinned to this branch commit so it is live now, before #63 merges.
+
+### 2026-10-26 — Expirations: start on the nearest only, list every date (owner)
+- The owner wants to choose the dates: the Strike Chart and the GEX board now start on
+  the nearest expiry alone, not the current week, and the menu lists every open expiry
+  (the Strike Chart's six-date cap is gone). `weekExpirations`/`marketTodayIso` removed.
+- Tests and the smoke script updated; 228 pytest green, smoke green. Deployed after merge.
 
 ### 2026-10-26 — Like his: shell, multi-date Strike Chart, GEX board from his screenshot
 - **Evidence:** three frames from his videos (sent by the owner) show the Strike Chart's

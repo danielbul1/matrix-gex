@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Matrix</title>
-<link rel="stylesheet" href="/matrix/matrix.css?v=20261026-like-his-2">
+<link rel="stylesheet" href="/matrix/matrix.css?v=20261027-ticker-buttons">
 </head>
 <body>
 <header id="sidebar">
@@ -27,13 +27,13 @@
 <main>
   <section class="app-view" id="view-gex" data-title="Strike Chart">
     <div class="screen-bar">
-      <form class="ticker-form" data-screen="gex" autocomplete="off">
-        <label>Ticker
-          <input name="ticker" type="text" placeholder="e.g. SPX" spellcheck="false" autocapitalize="characters" aria-label="Ticker">
-        </label>
-        <button type="submit">Search</button>
+      <!-- Like his GEX board: three ticker buttons, no search box. Pressing the shown
+           ticker again reloads it. -->
+      <div class="ticker-picker" data-screen="gex">
+        <span class="ctrl-label">Select Ticker:</span>
+        <div class="gb-buttons ticker-buttons" role="group" aria-label="Ticker"></div>
         <span class="ticker-status" aria-live="polite"></span>
-      </form>
+      </div>
       <div class="ctrl exp-ctrl">
         <span class="ctrl-label" id="expirationLabel">Expiration</span>
         <!-- Like his Expiration dropdown: several dates, shown as removable chips. -->
@@ -104,13 +104,13 @@
 
   <section class="app-view" id="view-oi-volume" data-title="OI Volume">
     <div class="screen-bar">
-      <form class="ticker-form" data-screen="oi-volume" autocomplete="off">
-        <label>Ticker
-          <input name="ticker" type="text" placeholder="e.g. SPX" spellcheck="false" autocapitalize="characters" aria-label="Ticker">
-        </label>
-        <button type="submit">Search</button>
+      <!-- Like his GEX board: three ticker buttons, no search box. Pressing the shown
+           ticker again reloads it. -->
+      <div class="ticker-picker" data-screen="oi-volume">
+        <span class="ctrl-label">Select Ticker:</span>
+        <div class="gb-buttons ticker-buttons" role="group" aria-label="Ticker"></div>
         <span class="ticker-status" aria-live="polite"></span>
-      </form>
+      </div>
       <div class="ctrl">
         <label for="oivExpiry">Expiration</label>
         <select id="oivExpiry" aria-label="Expiration date"></select>
@@ -227,13 +227,13 @@
 
   <section class="app-view" id="view-key-levels" data-title="Key Levels">
     <div class="screen-bar">
-      <form class="ticker-form" data-screen="key-levels" autocomplete="off">
-        <label>Ticker
-          <input name="ticker" type="text" placeholder="e.g. SPX" spellcheck="false" autocapitalize="characters" aria-label="Ticker">
-        </label>
-        <button type="submit">Search</button>
+      <!-- Like his GEX board: three ticker buttons, no search box. Pressing the shown
+           ticker again reloads it. -->
+      <div class="ticker-picker" data-screen="key-levels">
+        <span class="ctrl-label">Select Ticker:</span>
+        <div class="gb-buttons ticker-buttons" role="group" aria-label="Ticker"></div>
         <span class="ticker-status" aria-live="polite"></span>
-      </form>
+      </div>
     </div>
 
     <div class="card chartcard kl-card">
@@ -294,11 +294,11 @@
 
       <h2>The screens</h2>
       <h3>Strike Chart (home)</h3>
-      <p>One ticker and one or more expirations, added together. Type a ticker and press <strong>Search</strong> or Enter. The expirations of the current week are chosen at first; × removes a date and the menu adds one. The chart shows strikes within about 1% of spot for SPX and NDX, and about 3% for other tickers. The buttons turn layers on and off: <strong>Net GEX</strong> as bars, and <strong>AG</strong>, OI, volume and <strong>Power Zone</strong> as areas. Beside it are the day's 1-minute candles and a simplified price line. The candle chart carries the Price Lines of the chosen expirations.</p>
+      <p>One ticker (SPX, SPY or QQQ) and one or more expirations, added together. Pick a ticker button; pressing the chosen one again reloads it. The nearest date is chosen at first; the menu lists every open expiry, so you add the ones you want and × removes a date. The chart shows strikes within about 1% of spot for SPX, and about 3% for SPY and QQQ. The buttons turn layers on and off: <strong>Net GEX</strong> as bars, and <strong>AG</strong>, OI, volume and <strong>Power Zone</strong> as areas. Beside it are the day's 1-minute candles and a simplified price line. The candle chart carries the Price Lines of the chosen expirations.</p>
       <h3>OI Volume</h3>
       <p>Open interest and today's volume per strike for one expiration. <strong>Volume Spread</strong> is call volume minus put volume: blue where calls traded more, red where puts did. The price chart marks the strikes with the most call OI, put OI, call volume and put volume.</p>
       <h3>GEX Analysis</h3>
-      <p>The board for SPX, SPY or QQQ over several expirations at once. Pick a ticker button, then click expiration buttons, or use <strong>Select All</strong> and <strong>Clear All</strong>. Each expiration button shows its share of the ticker's gamma. The line above them gives spot, Total Gamma and the regime. It shows:</p>
+      <p>The board for SPX, SPY or QQQ over several expirations at once. Pick a ticker button; it starts on the nearest expiry. Click expiration buttons to add or remove dates, or use <strong>Select All</strong> and <strong>Clear All</strong>. Each expiration button shows its share of the ticker's gamma. The line above them gives spot, Total Gamma and the regime. It shows:</p>
       <ul>
         <li>A table of every strike within 5% of spot. Click a column header to sort. A green dot marks each column's largest value, and its row is shaded.</li>
         <li><strong>Net Gamma</strong>: Net GEX per strike, with an Abs GEX line.</li>
@@ -351,7 +351,7 @@
       <ul>
         <li>Pick today's expiration on the Strike Chart. Same-day options carry the most gamma, so their levels matter most during the session.</li>
         <li>Turn on <strong>Power Zone</strong> and watch the <strong>Matrix</strong> level: price often gravitates toward it into the afternoon.</li>
-        <li>Data reloads only when you press Search or a button, so refresh before you act.</li>
+        <li>Data reloads only when you press a button, so refresh before you act.</li>
       </ul>
 
       <h2>Limits</h2>
@@ -374,6 +374,6 @@
   </section>
 </main>
 
-<script src="/matrix/matrix.js?v=20261026-like-his-2"></script>
+<script src="/matrix/matrix.js?v=20261027-ticker-buttons"></script>
 </body>
 </html>

@@ -54,8 +54,9 @@ computed twice a day, which is why the chains and OI stay on Cboe.
 
 ### On-demand US option symbols
 
-Typing any other ticker, such as `MSFT` or `AVGO`, into a Matrix screen and
-pressing Search loads it on demand (`/api/matrix/symbol-data`). These symbols use
+Since 2026-10-27 the dashboard offers only SPX, SPY and QQQ buttons, so it no
+longer calls this endpoint. `/api/matrix/symbol-data?symbol=MSFT` still loads
+any other ticker on demand. These symbols use
 a delayed Cboe option-chain snapshot and do not consume LSE historical-download
 quota. Each option chain is cached for the current ET calendar day; new uncached
 chains are capped at 12 upstream fetches per minute. Their spot is Cboe's delayed

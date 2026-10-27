@@ -945,7 +945,14 @@ class PublicCompanyApp:
         path = scope.get("path", "/")
         method = scope.get("method", "GET")
         if method == "GET" and path == "/":
-            await self._response(send, 200, LANDING_PAGE.encode("utf-8"), b"text/html; charset=utf-8")
+            # The site is the Matrix dashboard (matrixgex.app): open it at the root.
+            await self._response(
+                send,
+                307,
+                b"",
+                b"text/plain; charset=utf-8",
+                headers=[(b"location", b"/matrix/")],
+            )
             return
         if method == "GET" and path == "/health":
             await self._json(send, {"status": "ok", "mcp_path": self.mcp_path, "connectors": sorted(self.connectors), "create_path": "/create", "auth": "oauth" if self.oauth else "bearer"})
