@@ -236,8 +236,8 @@ def test_gex_board_like_his_screenshot():
     labels = re.findall(r"\{key:'\w+',\s+label:'([^']+)'", script[script.index("const GB_COLUMNS"):])[:12]
     assert labels == ["Strike", "Net GEX", "Abs GEX", "Power Zone", "Notional Delta", "Total OI", "Call OI", "Put OI",
                       "Total Vol", "cVol", "pVol", "%"]
-    # Several levels like his (P1-P3, N1-N3, AG1-AG2...), tagged on their rows.
-    assert "gb-tag" in script and "topStrikes(strikes, s=>s.netGex, 3)" in script
+    # His six-level set (P1, N1, AG Strike, Call/Put Vol, Matrix), tagged on their rows.
+    assert "gb-tag" in script and "topStrikes(strikes, s=>s.netGex, 1)" in script
     assert "gb-max-row" in script and "gb-dot" in script
     assert "gb-key-row" not in script and "gb-spot-row" not in script
     assert "key==='netGex' ? Math.abs(v) : v" in script
