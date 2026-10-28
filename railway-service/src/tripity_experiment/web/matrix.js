@@ -570,10 +570,13 @@ function hideChartTooltip(){
   ['chartTooltip','chartCrosshairX'].forEach(id=>{const el=byId(id); if(el) el.style.display='none';});
 }
 // ---------- Price Lines ----------
-// Max Power's level set (research Addendum 2 and his TradingView export): the magnet
-// (highest Power Zone within 1% of spot, "Matrix" here, #26), P1-P3 (largest positive
-// Net GEX), N1-N3 (largest negative), AG1-AG2 (largest Abs GEX), and the largest call
-// and put volume. Each strike needs netGex, callVol, putVol, ag and powerZone.
+// Max Power's six-level set, one line per kind, as his own price chart draws it
+// (research Addendum 2) and as CONTEXT.md defines a Price Line: the magnet (highest
+// Power Zone within 1% of spot, "Matrix" here, #26), P1 (largest positive Net GEX),
+// N1 (most negative), the AG Strike (largest Abs GEX), and the largest call and put
+// volume. His TradingView export carries more (P1-P3, N1-N3, AG1-AG2), but that is an
+// off-platform indicator the owner deferred, not his dashboard. Each strike needs
+// netGex, callVol, putVol, ag and powerZone.
 const LEVEL_COLORS = {P:'#22b5ff', N:'#ff453a', AG:'#915bf8', 'Call Vol':'#003cfe', 'Put Vol':'#e55f04', Matrix:'#e8ca01'};
 // His line values carry two decimals ("6800.00").
 function fmtLineValue(v){ return Number(v).toFixed(2); }
@@ -586,14 +589,14 @@ function priceLines(strikes, spot){
   const line = (label, kind, s)=>({label, chartLabel:label, kind, color:LEVEL_COLORS[kind], price:s.strike});
   return [
     ...topStrikes(near, s=>s.powerZone||0, 1).map(s=>line('Matrix','Matrix',s)),
-    ...topStrikes(strikes, s=>s.netGex, 3).map((s,i)=>line(`P${i+1}`,'P',s)),
-    ...topStrikes(strikes, s=>-s.netGex, 3).map((s,i)=>line(`N${i+1}`,'N',s)),
-    ...topStrikes(strikes, s=>s.ag, 2).map((s,i)=>line(`AG${i+1}`,'AG',s)),
+    ...topStrikes(strikes, s=>s.netGex, 1).map(s=>line('P1','P',s)),
+    ...topStrikes(strikes, s=>-s.netGex, 1).map(s=>line('N1','N',s)),
+    ...topStrikes(strikes, s=>s.ag, 1).map(s=>line('AG Strike','AG',s)),
     ...topStrikes(strikes, s=>s.callVol, 1).map(s=>line('Call Vol','Call Vol',s)),
     ...topStrikes(strikes, s=>s.putVol, 1).map(s=>line('Put Vol','Put Vol',s)),
   ];
 }
-// Price Lines on one strike share a dashed line and a label ("P1 · AG1 6800.00").
+// Price Lines on one strike share a dashed line and a label ("P1 · AG Strike 6800.00").
 function groupLines(lines){
   const groups=[];
   lines.forEach(l=>{
@@ -1940,7 +1943,7 @@ function computeGexBoard(symbol, record=gb.record, selected=gb.selected){
   // Total Gamma comes from the board's own rows, so it matches the table.
   const totalGex = all.reduce((sum,s)=>sum+s.netGex,0);
   const lines = priceLines(rows, spot);
-  // Each strike's levels ("P1", "AG2", "Matrix"), shown in the table.
+  // Each strike's levels ("P1", "AG Strike", "Matrix"), shown in the table.
   const levelsAt = new Map();
   lines.forEach(l=>levelsAt.set(l.price, [...(levelsAt.get(l.price)||[]), l]));
   const pzStrikes = rows.filter(s=>Math.abs(s.strike-spot)/spot<=POWER_ZONE_WINDOW);
@@ -2025,7 +2028,7 @@ function renderGexBoardTable(B, scrollToSpot){
   const size = (key,v)=>key==='netGex' ? Math.abs(v) : v;
   const colMax = Object.fromEntries(GB_MAX_COLUMNS.map(k=>[k, Math.max(...B.rows.map(s=>size(k,s[k])))]));
   const isMax = (key,s)=>GB_MAX_COLUMNS.includes(key) && colMax[key]>0 && size(key,s[key])===colMax[key];
-  // A row is shaded when it holds a level (P1-P3, N1-N3, AG1-AG2, Call/Put Vol, Matrix)
+  // A row is shaded when it holds a level (P1, N1, AG Strike, Call/Put Vol, Matrix)
   // or the largest value of a column; tags beside the strike name its levels.
   body.innerHTML = sortedBoardRows(B.rows).map(s=>{
     const levels = B.levelsAt.get(s.strike) || [];

@@ -94,6 +94,24 @@ Gotchas learned the hard way (2026-07-19):
 
 ## Session Log (every agent MUST append — newest first)
 
+### 2026-10-28 — Price Lines cut from 11 to 6, to match his dashboard and our glossary
+- **Owner ask:** compared our screens against Max Power / Quant Power (public files of
+  `maxpowertrading` and `151212aa` re-fetched, unchanged: same 24 callbacks; his OI Volume
+  has a ticker text box + Search and 5 buttons with no Power Zone, still behind login).
+  The clearest real gap was the Price Lines: `priceLines` drew **11** (Matrix, P1-P3,
+  N1-N3, AG1-AG2, Call Vol, Put Vol), while his own price chart and our `CONTEXT.md` both
+  define **6** (one per kind). The 11-line set matched his off-platform TradingView export,
+  which the owner had deferred.
+- **Change:** `priceLines` (`matrix.js`) now returns the six: Matrix, P1 (largest positive
+  Net GEX), N1 (most negative), AG Strike (largest AG), Call Vol, Put Vol. Carries to the
+  Strike Chart, the GEX board rows/tags and every price chart that uses it. No `CONTEXT.md`
+  change — the glossary already said six; the code had diverged.
+- **Tests:** smoke (`price lines are his level set`, `his six-level set, one line per kind`,
+  strike picks) and `test_matrix_routes.py` updated to the 6-line set; 203 pytest green
+  (dashboard suite), smoke's price-line checks green. Pre-existing, unrelated: two smoke
+  checks on randomised data (Notional Delta, Total Gamma) and two backtest modules that
+  need `optopsy`. Not deployed.
+
 ### 2026-10-27 — Like gex_dashboard and Max Power: one date picker, Power Zone and his levels everywhere
 - **Owner ask:** Power Zone on every screen, only SPX/SPY/QQQ everywhere, easier date
   choice, and several levels where values stand out (as Max Power has), after reading

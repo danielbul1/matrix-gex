@@ -259,7 +259,7 @@ const lowOi = gexBoardStrikes({ spot: 100, mult: 100, quotes: [
   { K: 105, isCall: true, oi: 0, vol: 9, exp: 'x', T: 0.01, iv: 0.2, g: { gamma: 0.05, delta: 0.3 } },
 ] });
 check('the board keeps any strike with open interest and drops only OI = 0', lowOi.length === 1 && lowOi[0].strike === 100);
-check('price lines are his level set', B2.lines.every(l => ['Matrix', 'P1', 'P2', 'P3', 'N1', 'N2', 'N3', 'AG1', 'AG2', 'Call Vol', 'Put Vol'].includes(l.label)));
+check('price lines are his level set', B2.lines.every(l => ['Matrix', 'P1', 'N1', 'AG Strike', 'Call Vol', 'Put Vol'].includes(l.label)));
 check('board rows carry the Power Zone', B2.rows.every(s => Math.abs(s.powerZone - (s.ag / 8 + s.totalVol * 6000 * 6000 / 20000)) < 1e-6));
 check('every level is tagged on its row', B2.lines.every(l => (B2.levelsAt.get(l.price) || []).includes(l)));
 check('Matrix sits within 1% of spot', B2.lines.filter(l => l.label === 'Matrix').every(l => Math.abs(l.price - 6000) / 6000 <= 0.01));
@@ -317,8 +317,8 @@ check('GEX Board reads its own copy of the chain', computeGexBoard('SPX').spot =
     { strike: 6070, netGex: 12, callVol: 60, putVol: 1, ag: 80, powerZone: 200 },
   ];
   const PL = priceLines(strikes, 6000);
-  check('his level set in order (top 3 / top 2, fewer when strikes run out)', PL.map(l => l.label).join() === 'Matrix,P1,P2,N1,AG1,AG2,Call Vol,Put Vol', PL.map(l => l.label).join());
-  check('levels pick the right strikes', PL.map(l => l.price).join() === '5995,6070,5995,5950,6070,5950,6070,5950', PL.map(l => l.price).join());
+  check('his six-level set, one line per kind', PL.map(l => l.label).join() === 'Matrix,P1,N1,AG Strike,Call Vol,Put Vol', PL.map(l => l.label).join());
+  check('levels pick the right strikes', PL.map(l => l.price).join() === '5995,6070,5950,6070,6070,5950', PL.map(l => l.price).join());
   check('Matrix ignores strikes beyond 1% of spot', PL.find(l => l.label === 'Matrix').price === 5995);
   const zeroVol = calcGEX({ symbol: 'SPX', spot: 6000, mult: 100, quotes: [
     { K: 5990, isCall: false, oi: 400, vol: 0, exp: 'x', g: { gamma: 0.002 } },
