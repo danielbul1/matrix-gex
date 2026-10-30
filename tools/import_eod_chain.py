@@ -29,10 +29,17 @@ Caveats, as the archive does not document them:
 - Quotes are end-of-day: a backtest on this store enters at the close
   (backtest_options.py --entry-time 16:00), not at 10:00.
 
+Our own archive: tools/archive_cboe_chain.py saves one Cboe snapshot per
+session in the same columns, plus the spot it was taken against. --archive
+imports `<DIR>/<SYMBOL>/*.csv.gz`; the snapshot's spot becomes the day's
+close, and --yahoo adds Yahoo's closes and dividends (for early assignment).
+
 Usage:
     python tools/import_eod_chain.py --store PATH --options SPY_options.parquet
         --underlying SPY_underlying.parquet [--symbol SPY] [--max-dte 45]
         [--strike-band 0.25] [--start DATE] [--end DATE] [--vix] [--verify]
+    python tools/import_eod_chain.py --store PATH --archive chain_archive
+        --symbol SPY [--yahoo] [--vix] [--start DATE] [--end DATE]
 """
 import argparse
 import hashlib
@@ -145,6 +152,37 @@ def import_chain(store_path, options_path, underlying_path, symbol,
     return summary
 
 
+def import_archive(store_path, archive_dir, symbol, max_dte=DEFAULT_MAX_DTE,
+                   strike_band=DEFAULT_STRIKE_BAND, start=None, end=None):
+    """Import one symbol from our own Cboe archive; returns a summary dict.
+    Each snapshot's spot is stored as that day's close."""
+    files = sorted((Path(archive_dir) / symbol.upper()).glob("*.csv.gz"))
+    summary = {"symbol": symbol, "rows_written": 0, "sessions": 0, "first": None,
+               "last": None}
+    connection = chain_store.connect(store_path)
+    try:
+        for path in files:
+            day = date.fromisoformat(path.name.split(".")[0])
+            if (start and day < start) or (end and day > end):
+                continue
+            frame = pd.read_csv(path)
+            if frame.empty:
+                continue
+            close = float(frame["underlying"].iloc[0])
+            rows = chain_rows(frame, symbol, {day: close}, max_dte, strike_band)
+            if not rows:
+                continue
+            chain_store.write_daily_closes(connection, symbol, {day.isoformat(): close})
+            chain_store.write_rows(connection, rows)
+            summary["rows_written"] += len(rows)
+            summary["sessions"] += 1
+            summary["first"] = summary["first"] or day.isoformat()
+            summary["last"] = day.isoformat()
+    finally:
+        connection.close()
+    return summary
+
+
 def verify(path):
     """True when a file matches its pinned hash, None when none is pinned."""
     expected = EOD_HASHES.get(Path(path).name)
@@ -160,8 +198,11 @@ def verify(path):
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description="Import an EOD option archive into the chain store.")
     parser.add_argument("--store", required=True)
-    parser.add_argument("--options", required=True, help="<SYM>_options.parquet")
-    parser.add_argument("--underlying", required=True, help="<SYM>_underlying.parquet")
+    parser.add_argument("--options", help="<SYM>_options.parquet")
+    parser.add_argument("--underlying", help="<SYM>_underlying.parquet")
+    parser.add_argument("--archive", help="Our Cboe archive root (tools/archive_cboe_chain.py)")
+    parser.add_argument("--yahoo", action="store_true",
+                        help="With --archive, also load Yahoo closes and dividends")
     parser.add_argument("--symbol", help="Root to store under (default: from the file name)")
     parser.add_argument("--max-dte", type=int, default=DEFAULT_MAX_DTE)
     parser.add_argument("--strike-band", type=float, default=DEFAULT_STRIKE_BAND)
@@ -170,28 +211,43 @@ def parse_args(argv=None):
     parser.add_argument("--vix", action="store_true", help="Also load the free Cboe VIX closes")
     parser.add_argument("--verify", action="store_true",
                         help="Check both files against their pinned SHA-256 first")
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.archive:
+        if args.options or args.underlying or not args.symbol:
+            parser.error("--archive takes --symbol and no --options/--underlying")
+    elif not (args.options and args.underlying):
+        parser.error("--options and --underlying are required unless --archive")
+    if args.yahoo and not args.archive:
+        parser.error("--yahoo needs --archive")
+    return args
 
 
 def main(argv=None, fetch_text=None):
     args = parse_args(argv)
-    symbol = args.symbol or Path(args.options).name.split("_")[0].upper()
-    if args.verify:
-        for path in (args.options, args.underlying):
-            if verify(path) is False:
-                print(f"import_eod_chain: {path} does not match its pinned hash", file=sys.stderr)
-                return 2
-    summary = import_chain(args.store, args.options, args.underlying, symbol,
-                           args.max_dte, args.strike_band, args.start, args.end)
-    if args.vix:
-        import backfill_chain
-        connection = chain_store.connect(args.store)
-        try:
-            closes = backfill_chain.load_cboe_closes(
-                connection, fetch_text or backfill_chain._http_get)
-        finally:
-            connection.close()
-        summary["cboe_closes"] = closes
+    import backfill_chain
+    fetch_text = fetch_text or backfill_chain._http_get
+    if args.archive:
+        symbol = args.symbol.upper()
+        summary = import_archive(args.store, args.archive, symbol, args.max_dte,
+                                 args.strike_band, args.start, args.end)
+    else:
+        symbol = args.symbol or Path(args.options).name.split("_")[0].upper()
+        if args.verify:
+            for path in (args.options, args.underlying):
+                if verify(path) is False:
+                    print(f"import_eod_chain: {path} does not match its pinned hash",
+                          file=sys.stderr)
+                    return 2
+        summary = import_chain(args.store, args.options, args.underlying, symbol,
+                               args.max_dte, args.strike_band, args.start, args.end)
+    connection = chain_store.connect(args.store)
+    try:
+        if args.yahoo:
+            summary["yahoo"] = backfill_chain.load_yahoo_closes(connection, [symbol], fetch_text)
+        if args.vix:
+            summary["cboe_closes"] = backfill_chain.load_cboe_closes(connection, fetch_text)
+    finally:
+        connection.close()
     print(json.dumps(summary, indent=2))
     return 0
 
