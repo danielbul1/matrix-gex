@@ -8,9 +8,14 @@ name: Archive option chains
 on:
   workflow_dispatch:
   schedule:
-    # 20:37, 21:37 and 22:37 UTC, Mon-Fri: from 16:37 ET under EDT and from
-    # 16:37 ET under EST, with spares because GitHub can start schedules late.
-    - cron: "37 20,21,22 * * 1-5"
+    # Every half hour across the US evening: 20:00-23:59 UTC Mon-Fri and
+    # 00:00-03:59 UTC Tue-Sat, i.e. from 16:00 ET (EDT) or 15:00 ET (EST) to
+    # midnight ET. GitHub drops many scheduled runs (this repo's 30-minute
+    # data job runs about twice a day), so one slot is never enough. The
+    # script writes only from 16:15 ET to midnight on the session's own day,
+    # and never rewrites a saved session, so extra runs are harmless.
+    - cron: "7,37 20-23 * * 1-5"
+    - cron: "7,37 0-3 * * 2-6"
 
 permissions:
   contents: write
