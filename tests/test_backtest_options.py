@@ -44,7 +44,8 @@ def _price(spot, strike, expiry, stamp, right):
     return mg.bs_price(spot, strike, T, IV, is_call=right == "C")
 
 
-def _chain(session, hour=10, minute=0, spot=SPOT, offsets=(4, 7, 9), root="SPY"):
+def _chain(session, hour=10, minute=0, spot=SPOT, offsets=(4, 7, 9), root="SPY", oi=None):
+    """oi: optional (strike, right) -> open interest; default 1000 everywhere."""
     stamp = _ms(session, hour, minute)
     rows = []
     for offset in offsets:
@@ -55,7 +56,7 @@ def _chain(session, hour=10, minute=0, spot=SPOT, offsets=(4, 7, 9), root="SPY")
                 rows.append(cs.ChainRow(
                     root=root, expiry=expiry.isoformat(), strike=float(strike), right=right,
                     snapshot_ms=stamp, bid=max(price - HALF, 0.0), ask=price + HALF, iv=IV,
-                    sod_oi=1000.0, vendor_delta=None, vendor_gamma=None, underlying=spot))
+                    sod_oi=1000.0 if oi is None else oi(strike, right), vendor_delta=None, vendor_gamma=None, underlying=spot))
     return rows
 
 
@@ -345,10 +346,10 @@ def test_compare_runs_every_strategy_beside_buy_and_hold(tmp_path):
     path = _store(tmp_path, [_chain(MONDAY), _chain(tuesday)], closes)
     report = bo.run_compare(path, ["SPY"])
     block = report["underlyings"]["SPY"]
-    assert len(block["rows"]) == report["configurations_tried"] == 34
+    assert len(block["rows"]) == report["configurations_tried"] == 38
     assert {row["strategy"] for row in block["rows"]} == set(bo.STRATEGIES)
     assert block["buy_and_hold"]["total_return"] == pytest.approx(505.0 / 500.0 - 1)
-    assert "34 configurations were tried" in report["multiple_testing"]
+    assert "38 configurations were tried" in report["multiple_testing"]
 
     summary = bo.format_summary(report)
     assert "| iron_condor | 0.16 | 5 | managed |" in summary
@@ -363,7 +364,7 @@ def test_command_writes_the_report_and_summary(tmp_path, capsys):
                     "--summary", str(summary)])
     capsys.readouterr()
     assert code == 0
-    assert json.loads(out.read_text())["configurations_tried"] == 34
+    assert json.loads(out.read_text())["configurations_tried"] == 38
     assert summary.read_text().startswith("# Strategy comparison (Dev Period")
 
 
@@ -382,3 +383,133 @@ def test_command_refuses_a_width_on_a_strangle(tmp_path, capsys):
                     "short_strangle", "--width", "5"])
     assert code == 2
     assert "takes no width" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------------------
+# GEX at entry, the wall condor and the GEX Filter
+# ---------------------------------------------------------------------------
+def _walls_oi(put_wall=490, call_wall=510, calls=50_000, puts=50_000):
+    """Open interest piled on one call strike and one put strike."""
+    def oi(strike, right):
+        if right == "C" and strike == call_wall:
+            return float(calls)
+        if right == "P" and strike == put_wall:
+            return float(puts)
+        return 100.0
+    return oi
+
+
+def _entry_chain(rows):
+    return bo.EntryChain(rows)
+
+
+def test_gex_finds_the_walls_and_the_sign():
+    chain = _entry_chain(_chain(MONDAY, oi=_walls_oi(calls=80_000, puts=20_000)))
+    gex = chain.gex()
+    assert gex["call_wall"] == 510.0 and gex["put_wall"] == 490.0
+    assert gex["net"] > 0  # calls dominate: positive gamma
+    flipped = _entry_chain(_chain(MONDAY, oi=_walls_oi(calls=20_000, puts=80_000))).gex()
+    assert flipped["net"] < 0
+
+
+def test_gex_leaves_out_a_dead_same_day_expiry():
+    # At a 16:00 entry the 0DTE expiry has no time left; its gamma must not count.
+    rows = _chain(MONDAY, 16, offsets=(0, 7), oi=_walls_oi())
+    with_zero = _entry_chain(rows).gex()
+    without = _entry_chain([r for r in rows if r.expiry != MONDAY.isoformat()]).gex()
+    assert with_zero["net"] == pytest.approx(without["net"])
+
+
+def test_gex_needs_iv_on_most_of_the_open_interest():
+    rows = [cs.ChainRow(**{**r.__dict__, "iv": None}) for r in _chain(MONDAY)]
+    assert _entry_chain(rows).gex() is None
+
+
+def test_wall_condor_sells_the_walls(tmp_path):
+    path = _store(tmp_path, [_chain(MONDAY, oi=_walls_oi())], {MONDAY: SPOT, EXPIRY: SPOT})
+    trade = _only_trade(bo.run_experiment(path, _config(strategy=bo.GEX_WALL_CONDOR,
+                                                        delta=None, width=5.0)))
+    assert [(leg["side"], leg["right"], leg["strike"]) for leg in trade["legs"]] == [
+        ("short", "P", 490.0), ("long", "P", 485.0), ("short", "C", 510.0), ("long", "C", 515.0)]
+
+
+def test_wall_condor_skips_walls_that_do_not_bracket_spot(tmp_path):
+    path = _store(tmp_path, [_chain(MONDAY, oi=_walls_oi(put_wall=505, call_wall=520))],
+                  {MONDAY: SPOT, EXPIRY: SPOT})
+    report = bo.run_experiment(path, _config(strategy=bo.GEX_WALL_CONDOR, delta=None,
+                                             width=5.0))
+    assert report["trades"] == []
+    assert report["skipped"][0]["reason"] == "GEX walls do not bracket spot"
+
+
+def test_wall_condor_takes_no_delta():
+    with pytest.raises(ValueError, match="takes no delta"):
+        bo.OptionsConfig(strategy=bo.GEX_WALL_CONDOR, delta=0.16, width=5.0)
+
+
+def test_an_end_of_day_store_trades_at_the_close(tmp_path):
+    path = _store(tmp_path, [_chain(MONDAY, 16)], {MONDAY: SPOT, EXPIRY: SPOT})
+    assert bo.run_experiment(path, _config())["trades"] == []  # nothing by 10:00
+    report = bo.run_experiment(path, _config(), entry_time=bo.EOD_ENTRY_TIME)
+    assert len(report["trades"]) == 1
+    assert report["period"]["entry_time"] == "16:00"
+
+
+def _filter_store(tmp_path, days=8):
+    """Sessions alternating positive and negative gamma, VIX known before each."""
+    sessions, day = [], MONDAY
+    while len(sessions) < days:
+        if day.weekday() < 5:
+            sessions.append(day)
+        day += timedelta(days=1)
+    snapshots, closes, vix = [], {}, {}
+    for i, session in enumerate(sessions):
+        heavy = _walls_oi(calls=80_000, puts=20_000) if i % 2 == 0 else _walls_oi(
+            calls=20_000, puts=80_000)
+        snapshots.append(_chain(session, oi=heavy))
+        closes[session] = SPOT
+        closes[session + timedelta(days=7)] = SPOT + (5 if i % 2 == 0 else -40)
+        vix[session - timedelta(days=1)] = 15.0 + i
+    path = _store(tmp_path, snapshots, closes)
+    connection = cs.connect(path)
+    cs.write_daily_closes(connection, "VIX", {d.isoformat(): v for d, v in vix.items()})
+    connection.close()
+    return path, sessions
+
+
+def test_gex_filter_splits_sessions_by_the_gamma_regime(tmp_path):
+    path, sessions = _filter_store(tmp_path)
+    result = bo.run_gex_filter(path, [_config(width=5.0)])
+    (report,) = result["reports"]
+    regime = next(f for f in report["filters"] if f["filter"] == bo.FILTER_POSITIVE_GAMMA)
+    rows = {row["sessions"]: row for row in regime["rows"]}
+    positive = {s.isoformat() for i, s in enumerate(sessions) if i % 2 == 0}
+    assert {t["session"] for t in rows[bo.ROW_KEPT]["trades"]} <= positive
+    assert rows[bo.ROW_KEPT]["session_count"] + rows[bo.ROW_REJECTED]["session_count"] == \
+        rows[bo.ROW_BASELINE]["session_count"] == len(sessions)
+    # The control holds as many sessions as the filter keeps: the lowest-VIX ones.
+    assert rows[bo.ROW_IV_MATCHED]["session_count"] == rows[bo.ROW_KEPT]["session_count"]
+    assert regime["comparison"]["verdict"] in ("positive", "null")
+    assert report["verdict"].startswith("VERDICT")
+    assert len(result["gex"]) == len(sessions)
+
+
+def test_gex_filter_needs_a_vix_close_to_decide(tmp_path):
+    path = _store(tmp_path, [_chain(MONDAY, oi=_walls_oi())], {MONDAY: SPOT, EXPIRY: SPOT})
+    (report,) = bo.run_gex_filter(path, [_config(width=5.0)])["reports"]
+    regime = report["filters"][0]
+    assert regime["undecided"] == [{"session": MONDAY.isoformat(),
+                                    "reason": "no VIX close before the session"}]
+
+
+def test_gex_study_covers_every_strategy_and_writes_markdown(tmp_path, capsys):
+    path, _ = _filter_store(tmp_path, days=4)
+    summary = tmp_path / "gex.md"
+    code = bo.main(["--store", str(path), "--gex-study", "--summary", str(summary)])
+    report = json.loads(capsys.readouterr().out)
+    assert code == 0
+    strategies = [r["config"]["strategy"] for r in report["underlyings"]["SPY"]["reports"]]
+    assert strategies == list(bo.STRATEGIES)
+    text = summary.read_text()
+    assert text.startswith("# GEX Study (Dev Period, entry 10:00 ET)")
+    assert "| gex_wall_condor | positive_gamma |" in text

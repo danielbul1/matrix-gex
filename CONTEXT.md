@@ -99,7 +99,7 @@ _Avoid_: test set, out-of-sample, OOS
 ## Strategy comparison
 
 **Strategy**:
-One of the four position shapes the strategy backtester compares on SPY and QQQ: put credit spread, iron condor, short strangle, long strangle.
+One of the five position shapes the strategy backtester compares on SPY and QQQ: put credit spread, iron condor, short strangle, long strangle, GEX wall condor.
 _Avoid_: setup, trade type
 
 **Wing**:
@@ -113,6 +113,14 @@ _Avoid_: margin, max loss (for the short strangle)
 **Stress Move**:
 The 10% gap from spot behind the Risk Unit.
 _Avoid_: crash scenario
+
+**GEX Wall Condor**:
+An iron condor whose short strikes are the put wall and the call wall at entry, instead of a delta.
+_Avoid_: wall condor (alone), GEX condor
+
+**GEX Study**:
+The GEX Filters run on every Strategy's default configuration, per underlying, each against its IV-Matched Control.
+_Avoid_: GEX backtest
 
 **Early Assignment**:
 A short ETF call exercised the evening before an ex-dividend date, because it is in the money and its time value is below the dividend.

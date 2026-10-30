@@ -7,9 +7,12 @@ actually trades, before any strategy is chosen:
 - put_credit_spread: sell the put nearest -delta, buy the put `width` below;
 - iron_condor: that spread plus the mirror call spread above;
 - short_strangle: sell the put nearest -delta and the call nearest +delta;
-- long_strangle: buy the put nearest -delta and the call nearest +delta.
+- long_strangle: buy the put nearest -delta and the call nearest +delta;
+- gex_wall_condor: sell the put wall and the call wall (the strikes of
+  largest put and call GEX at entry), each with its wing.
 
-Every session at 10:00 ET one position is opened on the expiry nearest seven
+Every session at 10:00 ET (--entry-time; 16:00 for an end-of-day store such
+as tools/import_eod_chain.py builds) one position is opened on the expiry nearest seven
 calendar days out (ties go to the earlier expiry; never the same day). Deltas
 come from the canonical greeks engine and the snapshot IV, as in the spread
 backtester. A wing is the strike nearest `width` beyond its short strike,
@@ -50,6 +53,13 @@ The Holdout: sessions from HOLDOUT_START on are never replayed unless
 --holdout is passed, and then only they are. Choose a strategy on the Dev
 Period first; run the Holdout once, on that one choice.
 
+GEX: at each entry snapshot the dashboard's Naive GEX is computed over every
+expiry with more than an hour left. --gex-filter splits one configuration's
+sessions by Gamma Regime and by GEX Percentile and tests each split against
+its IV-Matched Control, with the spread backtester's regression, bootstrap
+and per-year verdict; --gex-study does that for every strategy's default
+configuration.
+
 --compare runs every strategy over its parameter grid (delta, width, exit
 rule) at one fill level per underlying, beside buy-and-hold of the
 underlying. The more configurations a comparison tries, the better its best
@@ -60,6 +70,9 @@ Usage:
         --strategy iron_condor [--delta 0.16] [--width 5] [--exit-rule managed]
         [--fill-ratio 0.5] [--equity 1000000] [--risk-pct 0.01]
         [--start DATE] [--end DATE] [--holdout] [--out report.json]
+    python tools/backtest_options.py --store PATH --gex-study
+        [--underlying SPY,QQQ] [--entry-time 16:00] [--exit-rule managed]
+        [--gex-percentile 0.5] [--out gex.json] [--summary gex.md]
     python tools/backtest_options.py --store PATH --compare
         [--underlying SPY,QQQ] [--fill-ratio 0.5] [--start DATE] [--end DATE]
         [--holdout] [--out compare.json] [--summary compare.md]
@@ -90,8 +103,11 @@ PUT_CREDIT_SPREAD = "put_credit_spread"
 IRON_CONDOR = "iron_condor"
 SHORT_STRANGLE = "short_strangle"
 LONG_STRANGLE = "long_strangle"
-STRATEGIES = (PUT_CREDIT_SPREAD, IRON_CONDOR, SHORT_STRANGLE, LONG_STRANGLE)
-WINGED = (PUT_CREDIT_SPREAD, IRON_CONDOR)  # the strategies that take a width
+GEX_WALL_CONDOR = "gex_wall_condor"
+STRATEGIES = (PUT_CREDIT_SPREAD, IRON_CONDOR, SHORT_STRANGLE, LONG_STRANGLE,
+              GEX_WALL_CONDOR)
+WINGED = (PUT_CREDIT_SPREAD, IRON_CONDOR, GEX_WALL_CONDOR)  # take a width
+BY_DELTA = (PUT_CREDIT_SPREAD, IRON_CONDOR, SHORT_STRANGLE, LONG_STRANGLE)
 LONG, SHORT = 1, -1
 
 # --- Entry ---
@@ -100,6 +116,7 @@ ENTRY_TIME = (10, 0)  # ET
 MARKET_OPEN = spread_bt.MARKET_OPEN
 MARKET_CLOSE = spread_bt.MARKET_CLOSE
 ENTRY_MAX_AGE_MINUTES = 45  # an older entry snapshot is skipped, not traded
+EOD_ENTRY_TIME = (16, 0)  # ET; for a store built from end-of-day quotes
 WING_TOLERANCE = 1.0  # dollars a wing strike may sit from short +/- width
 ROOT_OF = {"SPX": "SPXW"}  # the root traded for an underlying; else itself
 
@@ -129,6 +146,19 @@ CLOSED_ASSIGNED = "assigned"
 MAX_OPEN_POSITIONS = 5
 STRESS_MOVE = 0.10  # gap either way behind the Risk Unit
 
+# --- GEX at entry ---
+# Expiries with less than this left (in years) are left out of GEX: at a
+# close entry the same-day expiry is dead, and its gamma would blow up.
+GEX_MIN_T = 1 / (365.25 * 24)  # one hour
+IV_COVERAGE_MIN = spread_bt.IV_COVERAGE_MIN
+GEX_PERCENTILE_THRESHOLD = spread_bt.GEX_PERCENTILE_THRESHOLD
+FILTER_POSITIVE_GAMMA = spread_bt.FILTER_POSITIVE_GAMMA
+FILTER_GEX_PERCENTILE = spread_bt.FILTER_GEX_PERCENTILE
+ROW_KEPT, ROW_REJECTED = spread_bt.ROW_KEPT, spread_bt.ROW_REJECTED
+ROW_BASELINE, ROW_IV_MATCHED = spread_bt.ROW_BASELINE, spread_bt.ROW_IV_MATCHED
+REALIZED_VOL_WINDOW = spread_bt.REALIZED_VOL_WINDOW
+VIX_SYMBOL = spread_bt.VIX_SYMBOL
+
 # --- The Holdout ---
 HOLDOUT_START = date(2025, 10, 1)
 
@@ -149,6 +179,8 @@ CAVEATS = (
     " share delivery.",
     "Early assignment is modelled for short calls before ex-dividend dates only.",
     "Buy-and-hold is price return, dividends excluded.",
+    "GEX is Naive (dealers long calls, short puts) from open interest known at"
+    " entry; its sign is a convention, not an observation.",
 )
 
 
@@ -156,7 +188,7 @@ CAVEATS = (
 class OptionsConfig:
     underlying: str = "SPY"
     strategy: str = PUT_CREDIT_SPREAD
-    delta: float = 0.16
+    delta: float | None = 0.16  # None for the GEX wall condor
     width: float | None = DEFAULT_WIDTH  # None for the strangles
     fill_ratio: float = 0.5
     exit_rule: str = RULE_HOLD
@@ -171,7 +203,10 @@ class OptionsConfig:
         if (self.strategy in WINGED) != (self.width is not None):
             raise ValueError(f"{self.strategy} {'needs' if self.strategy in WINGED else 'takes no'}"
                              " width")
-        if not 0 < self.delta < 1:
+        if self.strategy not in BY_DELTA:
+            if self.delta is not None:
+                raise ValueError(f"{self.strategy} takes no delta")
+        elif self.delta is None or not 0 < self.delta < 1:
             raise ValueError("delta is a magnitude between 0 and 1")
 
     @property
@@ -247,11 +282,12 @@ def _closing_cash(legs, fills):
 # The chain store, read lazily: a full SPY history does not fit in memory
 # ---------------------------------------------------------------------------
 class Store:
-    def __init__(self, path, underlying):
+    def __init__(self, path, underlying, entry_time=ENTRY_TIME):
         path = Path(path)
         if not path.exists():
             raise FileNotFoundError(f"chain store not found: {path}")
         self.underlying = underlying
+        self.entry_time = tuple(entry_time)
         self.root = ROOT_OF.get(underlying, underlying)
         self.connection = chain_store.connect(path)
         self.closes = {date.fromisoformat(d): c for d, c in
@@ -259,6 +295,8 @@ class Store:
         self.close_days = sorted(self.closes)
         self.dividends = {date.fromisoformat(d): a for d, a in
                           chain_store.read_dividends(self.connection, underlying).items()}
+        self.vix = {date.fromisoformat(d): c for d, c in
+                    chain_store.read_daily_closes(self.connection, VIX_SYMBOL).items()}
         self._marks = {}
 
     def close(self):
@@ -271,26 +309,32 @@ class Store:
         days = sorted({spread_bt._session_of(ms) for (ms,) in self.connection.execute(
             "SELECT DISTINCT snapshot_ms FROM option_chain_snapshot"
             " WHERE snapshot_ms BETWEEN ? AND ?", (start_ms, end_ms))})
+        # "+root" keeps SQLite on the time index: the primary key leads with
+        # root, and scanning a root's whole history is far slower.
         return [day for day in days if self.connection.execute(
             "SELECT 1 FROM option_chain_snapshot WHERE snapshot_ms BETWEEN ? AND ?"
-            " AND root = ? LIMIT 1",
+            " AND +root = ? LIMIT 1",
             (spread_bt._et_ms(day, 0, 0), spread_bt._et_ms(day, 23, 59), self.root)
         ).fetchone()]
 
     def entry_chain(self, session):
         """(EntryChain, None) or (None, skip reason) for one session."""
-        entry_ms = spread_bt._et_ms(session, *ENTRY_TIME)
+        entry_ms = spread_bt._et_ms(session, *self.entry_time)
         open_ms = spread_bt._et_ms(session, *MARKET_OPEN)
         stamps = [ms for (ms,) in self.connection.execute(
             "SELECT DISTINCT snapshot_ms FROM option_chain_snapshot"
-            " WHERE snapshot_ms BETWEEN ? AND ? AND root = ?",
+            " WHERE snapshot_ms BETWEEN ? AND ? AND +root = ?",
             (open_ms, entry_ms, self.root))]
         if not stamps:
             return None, "no snapshot at/before entry time"
         stamp = max(stamps)
         if entry_ms - stamp > ENTRY_MAX_AGE_MINUTES * 60 * 1000:
             return None, "no snapshot at/before entry time"
-        return EntryChain(chain_store.read_rows(self.connection, self.root, stamp, stamp)), None
+        columns = ", ".join(chain_store.CHAIN_COLUMNS)
+        rows = [chain_store.ChainRow(*values) for values in self.connection.execute(
+            f"SELECT {columns} FROM option_chain_snapshot WHERE snapshot_ms = ?"
+            " AND +root = ? ORDER BY expiry, right, strike", (stamp, self.root))]
+        return EntryChain(rows), None
 
     def marks(self, row):
         """{snapshot_ms: ChainRow} over the contract's whole stored life."""
@@ -312,7 +356,9 @@ class EntryChain:
     """One entry snapshot, indexed by expiry and right, with lazy deltas."""
 
     def __init__(self, rows):
+        self.rows = rows
         self.stamp = rows[0].snapshot_ms if rows else None
+        self._gex = ()
         self.by_expiry = defaultdict(lambda: {"P": {}, "C": {}})
         for row in rows:
             self.by_expiry[date.fromisoformat(row.expiry)][row.right][row.strike] = row
@@ -322,6 +368,54 @@ class EntryChain:
         return next((row.underlying for chain in self.by_expiry.values()
                      for side in chain.values() for row in side.values()
                      if row.underlying), None)
+
+    def gex(self):
+        """Naive GEX at this snapshot as {"net", "call_wall", "put_wall",
+        "spot"}, or None when rows with an IV hold under IV_COVERAGE_MIN of
+        its open interest. The dashboard's computation (calls +, puts -,
+        canonical-engine gamma from each row's IV) over every expiry with more
+        than GEX_MIN_T left; walls are the strikes of largest call and put GEX."""
+        if self._gex == ():
+            self._gex = None
+            rows = [row for row in self.rows if matrix_gex.years_to_expiry(
+                row.expiry, row.root, row.snapshot_ms) > GEX_MIN_T]
+            spots = [row.underlying for row in rows if row.underlying]
+            if spots and spread_bt.iv_coverage(rows) >= IV_COVERAGE_MIN:
+                spot = statistics.median(spots)
+                strikes = matrix_gex.aggregate_strikes(
+                    [{"t": r.right, "k": r.strike, "oi": r.sod_oi, "iv": r.iv,
+                      "exp": r.expiry, "root": r.root} for r in rows],
+                    spot, CONTRACT_MULTIPLIER, self.stamp)
+                if strikes:
+                    call_wall, put_wall = matrix_gex.walls(strikes)
+                    self._gex = {"net": spread_bt.signed_gex(strikes), "call_wall": call_wall,
+                                 "put_wall": put_wall, "spot": spot}
+        return self._gex
+
+    def atm_iv(self, session):
+        """IV at the strike nearest spot on the expiry nearest TARGET_DTE (the
+        mean of call and put), or None."""
+        expiries = [e for e in self.by_expiry if e > session]
+        spot = self.spot()
+        if not expiries or not spot:
+            return None
+        chain = self.by_expiry[min(expiries, key=lambda e: (abs((e - session).days - TARGET_DTE), e))]
+        strikes = set(chain["P"]) | set(chain["C"])
+        if not strikes:
+            return None
+        strike = min(strikes, key=lambda k: (abs(k - spot), k))
+        ivs = [matrix_gex.norm_iv(float(side[strike].iv or 0)) for side in chain.values()
+               if strike in side]
+        ivs = [iv for iv in ivs if iv > 0]
+        return statistics.fmean(ivs) if ivs else None
+
+    def nearest(self, expiry, right, strike):
+        """The listed strike nearest `strike`, within WING_TOLERANCE, or None."""
+        rows = self.by_expiry[expiry][right]
+        if not rows:
+            return None
+        best = min(rows, key=lambda k: (abs(k - strike), k))
+        return rows[best] if abs(best - strike) <= WING_TOLERANCE else None
 
     def delta(self, row):
         key = (row.expiry, row.right, row.strike)
@@ -358,6 +452,8 @@ class EntryChain:
 def _legs(chain, expiry, selection):
     """(legs, None) or (None, reason) for one strategy on one expiry."""
     strategy, delta, width = selection
+    if strategy == GEX_WALL_CONDOR:
+        return _wall_legs(chain, expiry, width)
     put = chain.at_delta(expiry, "P", delta)
     call = None if strategy == PUT_CREDIT_SPREAD else chain.at_delta(expiry, "C", delta)
     if put is None or (strategy != PUT_CREDIT_SPREAD and call is None):
@@ -371,6 +467,27 @@ def _legs(chain, expiry, selection):
         pairs.append((call, chain.wing(expiry, call, width)))
     legs = []
     for short, wing in pairs:
+        if wing is None:
+            sign = "-" if short.right == "P" else "+"
+            return None, f"no wing strike near {short.strike:g} {sign} {width:g}"
+        legs += [Leg(short, SHORT), Leg(wing, LONG)]
+    return tuple(legs), None
+
+
+def _wall_legs(chain, expiry, width):
+    """Short the put wall and the call wall, each with its wing."""
+    gex = chain.gex()
+    if gex is None:
+        return None, "no GEX at entry"
+    if not gex["put_wall"] < gex["spot"] < gex["call_wall"]:
+        return None, "GEX walls do not bracket spot"
+    put = chain.nearest(expiry, "P", gex["put_wall"])
+    call = chain.nearest(expiry, "C", gex["call_wall"])
+    if put is None or call is None:
+        return None, "no strike at a GEX wall on the expiry"
+    legs = []
+    for short in (put, call):
+        wing = chain.wing(expiry, short, width)
         if wing is None:
             sign = "-" if short.right == "P" else "+"
             return None, f"no wing strike near {short.strike:g} {sign} {width:g}"
@@ -629,35 +746,51 @@ def window(start, end, holdout):
 # ---------------------------------------------------------------------------
 # Runs
 # ---------------------------------------------------------------------------
-def run_configs(store_path, configs, start=None, end=None, holdout=False):
-    """{config: report} for configurations on one underlying."""
+def _select(store, sessions, selections):
+    """Candidates and skips per selection, plus what each session's entry
+    snapshot says about GEX and ATM IV. Every entry snapshot is read once."""
+    candidates, skipped, info = defaultdict(list), defaultdict(list), {}
+    for session in sessions:
+        chain, reason = store.entry_chain(session)
+        if chain is not None:
+            info[session] = {"gex": chain.gex(), "atm_iv": chain.atm_iv(session)}
+        for selection in selections:
+            candidate, why = (None, reason) if chain is None else select_candidate(
+                session, chain, selection, store.closes)
+            if candidate is None:
+                skipped[selection].append(_skip(session, why))
+            else:
+                candidates[selection].append(candidate)
+    return candidates, skipped, info
+
+
+def _selection_order(selection):
+    strategy, delta, width = selection
+    return (strategy, delta or 0, width or 0)
+
+
+def _period(first, last, holdout, entry_time):
+    return {"first": first and first.isoformat(), "last": last and last.isoformat(),
+            "holdout": holdout, "entry_time": "%02d:%02d" % tuple(entry_time)}
+
+
+def run_configs(store_path, configs, start=None, end=None, holdout=False,
+                entry_time=ENTRY_TIME):
+    """({config: report}, buy-and-hold) for configurations on one underlying."""
     (underlying,) = {config.underlying for config in configs}
     first, last = window(start, end, holdout)
-    store = Store(store_path, underlying)
+    store = Store(store_path, underlying, entry_time)
     try:
         sessions = store.sessions(first, last)
-        selections = sorted({config.selection for config in configs},
-                            key=lambda s: (s[0], s[1], s[2] or 0))
-        candidates = defaultdict(list)
-        skipped = defaultdict(list)
-        for session in sessions:
-            chain, reason = store.entry_chain(session)
-            for selection in selections:
-                candidate, why = (None, reason) if chain is None else select_candidate(
-                    session, chain, selection, store.closes)
-                if candidate is None:
-                    skipped[selection].append(_skip(session, why))
-                else:
-                    candidates[selection].append(candidate)
+        selections = sorted({config.selection for config in configs}, key=_selection_order)
+        candidates, skipped, _ = _select(store, sessions, selections)
         reports = {}
         for config in configs:
             positions = [open_position(c, store, config) for c in candidates[config.selection]]
             trades, sizing_skips = size_trades(positions, config)
             reports[config] = {
                 "config": asdict(config),
-                "period": {"first": first and first.isoformat(),
-                           "last": last and last.isoformat(),
-                           "holdout": holdout},
+                "period": _period(first, last, holdout, entry_time),
                 "sessions": len(sessions),
                 "metrics": spread_bt.compute_metrics(trades, sessions, config.initial_equity),
                 "exits": dict(Counter(t["exit"] for t in trades)),
@@ -672,9 +805,10 @@ def run_configs(store_path, configs, start=None, end=None, holdout=False):
     return reports, benchmark
 
 
-def run_experiment(store_path, config, start=None, end=None, holdout=False):
+def run_experiment(store_path, config, start=None, end=None, holdout=False,
+                   entry_time=ENTRY_TIME):
     """One configuration's report, with buy-and-hold beside it."""
-    reports, benchmark = run_configs(store_path, [config], start, end, holdout)
+    reports, benchmark = run_configs(store_path, [config], start, end, holdout, entry_time)
     return {**reports[config], "buy_and_hold": benchmark, "caveats": list(CAVEATS)}
 
 
@@ -683,7 +817,8 @@ def grid_configs(underlying, fill_ratio=0.5, initial_equity=OptionsConfig.initia
     """Every strategy over its parameter grid, both exit rules."""
     configs = []
     for strategy in STRATEGIES:
-        deltas = LONG_DELTAS if strategy == LONG_STRANGLE else CREDIT_DELTAS
+        deltas = (LONG_DELTAS if strategy == LONG_STRANGLE else CREDIT_DELTAS
+                  if strategy in BY_DELTA else (None,))
         widths = ETF_WIDTHS if strategy in WINGED else (None,)
         if underlying == "SPX" and strategy in WINGED:
             widths = spread_bt.GRID_WIDTHS
@@ -699,14 +834,15 @@ def grid_configs(underlying, fill_ratio=0.5, initial_equity=OptionsConfig.initia
 
 def run_compare(store_path, underlyings, start=None, end=None, holdout=False,
                 fill_ratio=0.5, initial_equity=OptionsConfig.initial_equity,
-                risk_pct=OptionsConfig.risk_pct):
+                risk_pct=OptionsConfig.risk_pct, entry_time=ENTRY_TIME):
     """The comparison report: one row per configuration per underlying."""
-    result = {"fill_ratio": fill_ratio, "holdout": holdout, "underlyings": {}}
+    result = {"fill_ratio": fill_ratio, "holdout": holdout,
+              "entry_time": "%02d:%02d" % tuple(entry_time), "underlyings": {}}
     tried = 0
     for underlying in underlyings:
         configs = grid_configs(underlying, fill_ratio, initial_equity, risk_pct)
         tried += len(configs)
-        reports, benchmark = run_configs(store_path, configs, start, end, holdout)
+        reports, benchmark = run_configs(store_path, configs, start, end, holdout, entry_time)
         result["underlyings"][underlying] = {
             "buy_and_hold": benchmark,
             "rows": [{**{k: report["config"][k] for k in
@@ -723,6 +859,145 @@ def run_compare(store_path, underlyings, start=None, end=None, holdout=False,
 
 
 # ---------------------------------------------------------------------------
+# The GEX Filter: does the Gamma Regime pick better days than VIX alone?
+# ---------------------------------------------------------------------------
+def session_covariates(store, sessions, info):
+    """{session: {"vix", "atm_iv", "vrp"}}, each None when unknown at entry:
+    VIX is the last close before the session, ATM IV comes from the entry
+    snapshot, VRP is ATM IV less the annualized realized vol of the last
+    REALIZED_VOL_WINDOW daily returns before the session."""
+    covariates = {}
+    for session in sessions:
+        vix = spread_bt._closes_before(store.vix, session, 1)
+        iv = info.get(session, {}).get("atm_iv")
+        closes = spread_bt._closes_before(store.closes, session, REALIZED_VOL_WINDOW + 1)
+        vrp = None
+        if iv is not None and closes is not None:
+            returns = [math.log(b / a) for a, b in zip(closes, closes[1:])]
+            vrp = iv - statistics.stdev(returns) * math.sqrt(TRADING_DAYS)
+        covariates[session] = {"vix": None if vix is None else vix[0], "atm_iv": iv,
+                               "vrp": vrp}
+    return covariates
+
+
+def _filter_row(label, days, positions, skipped, sessions, config):
+    """One strategy replayed on `days` only, on every session's calendar."""
+    trades, sizing_skips = size_trades([p for p in positions if p.candidate.session in days],
+                                       config)
+    return {"sessions": label, "session_count": len(days),
+            "metrics": spread_bt.compute_metrics(trades, sessions, config.initial_equity),
+            "trades": trades,
+            "skipped": sorted([s for s in skipped if date.fromisoformat(s["session"]) in days]
+                              + sizing_skips, key=lambda s: s["session"])}
+
+
+def gex_filters(positions, skipped, sessions, series, covariates, config,
+                percentile_threshold=GEX_PERCENTILE_THRESHOLD):
+    """Both GEX Filters over one strategy's positions, each split into kept,
+    Rejected and Undecided Sessions and compared with its IV-Matched Control
+    (the same number of the lowest-VIX sessions)."""
+    percentiles = spread_bt.gex_percentiles(series)
+
+    def positive_gamma(day):
+        return (series[day] > 0, None) if day in series else (None, "no GEX at entry")
+
+    def above_percentile(day):
+        if day not in series:
+            return None, "no GEX at entry"
+        if percentiles[day] is None:
+            return None, (f"fewer than {spread_bt.GEX_PERCENTILE_MIN_HISTORY}"
+                          " past sessions of GEX")
+        return percentiles[day] > percentile_threshold, None
+
+    filters = []
+    for name, decide, settings in (
+            (FILTER_POSITIVE_GAMMA, positive_gamma, {}),
+            (FILTER_GEX_PERCENTILE, above_percentile, {"threshold": percentile_threshold})):
+        kept, rejected, undecided = set(), set(), []
+        for day in sessions:
+            keep, reason = decide(day)
+            if keep is not None and covariates[day]["vix"] is None:
+                keep, reason = None, "no VIX close before the session"
+            if keep is None:
+                undecided.append(_skip(day, reason))
+            else:
+                (kept if keep else rejected).add(day)
+        control, threshold = spread_bt.iv_matched_sessions(kept | rejected, len(kept),
+                                                           covariates)
+        rows = {label: _filter_row(label, days, positions, skipped, sessions, config)
+                for label, days in ((ROW_KEPT, kept), (ROW_REJECTED, rejected),
+                                    (ROW_BASELINE, kept | rejected),
+                                    (ROW_IV_MATCHED, control))}
+        rows[ROW_IV_MATCHED]["vix_threshold"] = threshold
+        filters.append({"filter": name, **settings, "rows": list(rows.values()),
+                        "comparison": spread_bt.compare(kept, rows, covariates, sessions,
+                                                        config),
+                        "undecided": undecided})
+    return filters
+
+
+def run_gex_filter(store_path, configs, start=None, end=None, holdout=False,
+                   entry_time=ENTRY_TIME, percentile_threshold=GEX_PERCENTILE_THRESHOLD):
+    """One GEX Filter report per configuration (all on one underlying)."""
+    (underlying,) = {config.underlying for config in configs}
+    first, last = window(start, end, holdout)
+    store = Store(store_path, underlying, entry_time)
+    try:
+        sessions = store.sessions(first, last)
+        selections = sorted({config.selection for config in configs}, key=_selection_order)
+        candidates, skipped, info = _select(store, sessions, selections)
+        series = {day: entry["gex"]["net"] for day, entry in info.items() if entry["gex"]}
+        covariates = session_covariates(store, sessions, info)
+        reports = []
+        for config in configs:
+            positions = [open_position(c, store, config) for c in candidates[config.selection]]
+            filters = gex_filters(positions, skipped[config.selection], sessions, series,
+                                  covariates, config, percentile_threshold)
+            reports.append({
+                "verdict": spread_bt.verdict_line(filters),
+                "config": asdict(config),
+                "period": _period(first, last, holdout, entry_time),
+                "sessions": len(sessions),
+                "filters": filters,
+            })
+        gex = [{"session": day.isoformat(), **info[day]["gex"],
+                **{k: v for k, v in covariates[day].items()}}
+               for day in sessions if day in info and info[day]["gex"]]
+    finally:
+        store.close()
+    return {"reports": reports, "gex": gex, "caveats": list(CAVEATS)}
+
+
+def study_configs(underlying, exit_rule=RULE_MANAGED, fill_ratio=0.5,
+                  initial_equity=OptionsConfig.initial_equity, risk_pct=OptionsConfig.risk_pct):
+    """One default configuration per strategy: the GEX Study's subjects."""
+    common = dict(underlying=underlying, exit_rule=exit_rule, fill_ratio=fill_ratio,
+                  initial_equity=initial_equity, risk_pct=risk_pct)
+    width = DEFAULT_WIDTH if underlying != "SPX" else 25.0
+    return [OptionsConfig(strategy=PUT_CREDIT_SPREAD, delta=0.16, width=width, **common),
+            OptionsConfig(strategy=IRON_CONDOR, delta=0.16, width=width, **common),
+            OptionsConfig(strategy=SHORT_STRANGLE, delta=0.16, width=None, **common),
+            OptionsConfig(strategy=LONG_STRANGLE, delta=0.25, width=None, **common),
+            OptionsConfig(strategy=GEX_WALL_CONDOR, delta=None, width=width, **common)]
+
+
+def run_gex_study(store_path, underlyings, start=None, end=None, holdout=False,
+                  entry_time=ENTRY_TIME, exit_rule=RULE_MANAGED, fill_ratio=0.5,
+                  initial_equity=OptionsConfig.initial_equity, risk_pct=OptionsConfig.risk_pct,
+                  percentile_threshold=GEX_PERCENTILE_THRESHOLD):
+    """The GEX Filter on every strategy's default configuration, per underlying,
+    plus the GEX wall condor beside the delta-picked condor."""
+    result = {"holdout": holdout, "entry_time": "%02d:%02d" % tuple(entry_time),
+              "underlyings": {}}
+    for underlying in underlyings:
+        configs = study_configs(underlying, exit_rule, fill_ratio, initial_equity, risk_pct)
+        result["underlyings"][underlying] = run_gex_filter(
+            store_path, configs, start, end, holdout, entry_time, percentile_threshold)
+    result["caveats"] = list(CAVEATS)
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Output
 # ---------------------------------------------------------------------------
 def _number(value, digits=2):
@@ -733,9 +1008,18 @@ def _percent(value):
     return "n/a" if value is None else f"{value:.1%}"
 
 
+def _delta(value):
+    return "" if value is None else f"{value:.2f}"
+
+
+def _width(value):
+    return "" if value is None else f"{value:g}"
+
+
 def format_summary(compare):
     """The comparison as Markdown."""
     lines = [f"# Strategy comparison ({'Holdout' if compare['holdout'] else 'Dev Period'},"
+             f" entry {compare['entry_time']} ET,"
              f" fill {compare['fill_ratio']:.0%} of the half-spread)", ""]
     for underlying, block in compare["underlyings"].items():
         lines.append(f"## {underlying}")
@@ -752,12 +1036,12 @@ def format_summary(compare):
         lines.append("|---|---|---|---|---|---|---|---|---|---|---|")
         for row in block["rows"]:
             m = row["metrics"]
-            width = "" if row["width"] is None else f"{row['width']:g}"
             lines.append(
-                f"| {row['strategy']} | {row['delta']:.2f} | {width} | {row['exit_rule']}"
-                f" | {m['trades']} | {_number(m['sharpe'])} | {_number(m['sortino'])}"
-                f" | {_percent(m['max_drawdown'])} | {_percent(m['cvar_5'])}"
-                f" | {_percent(m['win_rate'])} | {m['total_pnl']:,.0f} |")
+                f"| {row['strategy']} | {_delta(row['delta'])} | {_width(row['width'])}"
+                f" | {row['exit_rule']} | {m['trades']} | {_number(m['sharpe'])}"
+                f" | {_number(m['sortino'])} | {_percent(m['max_drawdown'])}"
+                f" | {_percent(m['cvar_5'])} | {_percent(m['win_rate'])}"
+                f" | {m['total_pnl']:,.0f} |")
         lines.append("")
     lines.append(compare["multiple_testing"])
     lines.append("")
@@ -766,55 +1050,128 @@ def format_summary(compare):
     return "\n".join(lines) + "\n"
 
 
+def _ci(interval, digits=2):
+    return "n/a" if interval is None else f"[{interval[0]:.{digits}f}, {interval[1]:.{digits}f}]"
+
+
+def format_gex_summary(study):
+    """The GEX Study as Markdown: one table per underlying, a row per
+    strategy and GEX Filter, kept sessions beside their IV-Matched Control."""
+    lines = [f"# GEX Study ({'Holdout' if study['holdout'] else 'Dev Period'},"
+             f" entry {study['entry_time']} ET)", "",
+             "Each GEX Filter keeps some sessions. It counts as an edge only when"
+             " it beats its IV-Matched Control (the same number of the lowest-VIX"
+             " sessions): regression and bootstrap intervals above zero, and a better"
+             " mean P&L in every year.", ""]
+    for underlying, block in study["underlyings"].items():
+        lines += [f"## {underlying}", "",
+                  "| Strategy | Filter | Kept | Kept Sharpe | Control Sharpe | Rejected Sharpe"
+                  " | Baseline Sharpe | Sharpe diff CI | Verdict |",
+                  "|---|---|---|---|---|---|---|---|---|"]
+        for report in block["reports"]:
+            config = report["config"]
+            name = config["strategy"] + (f" {config['delta']:.2f}" if config["delta"] else "")
+            for variant in report["filters"]:
+                rows = {row["sessions"]: row for row in variant["rows"]}
+                comparison = variant["comparison"]
+                lines.append(
+                    f"| {name} | {variant['filter']} | {rows[ROW_KEPT]['metrics']['trades']}"
+                    f" | {_number(rows[ROW_KEPT]['metrics']['sharpe'])}"
+                    f" | {_number(rows[ROW_IV_MATCHED]['metrics']['sharpe'])}"
+                    f" | {_number(rows[ROW_REJECTED]['metrics']['sharpe'])}"
+                    f" | {_number(rows[ROW_BASELINE]['metrics']['sharpe'])}"
+                    f" | {_ci(comparison['bootstrap']['sharpe']['ci'])}"
+                    f" | {comparison['verdict']} |")
+        lines.append("")
+        for report in block["reports"]:
+            lines.append(f"- {report['config']['strategy']}: {report['verdict']}")
+        lines.append("")
+    lines.append("Caveats:")
+    lines += [f"- {caveat}" for caveat in study["caveats"]]
+    return "\n".join(lines) + "\n"
+
+
+def _parse_time(text):
+    hour, minute = (int(part) for part in text.split(":"))
+    return hour, minute
+
+
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(
         description="Backtest option strategies on SPY/QQQ over the chain store.")
     parser.add_argument("--store", required=True, help="Path to the chain store SQLite file")
     parser.add_argument("--underlying", default="SPY",
-                        help="SPY, QQQ (or SPX); with --compare, a comma-separated list")
+                        help="SPY, QQQ (or SPX); with --compare or --gex-study, a"
+                             " comma-separated list")
     parser.add_argument("--strategy", choices=STRATEGIES, default=PUT_CREDIT_SPREAD)
-    parser.add_argument("--delta", type=float, default=OptionsConfig.delta)
+    parser.add_argument("--delta", type=float,
+                        help="Short (or long) leg delta; default 0.16, none for the wall condor")
     parser.add_argument("--width", type=float,
                         help=f"Wing width in dollars (spreads only; default {DEFAULT_WIDTH:g})")
-    parser.add_argument("--exit-rule", choices=EXIT_RULES, default=RULE_HOLD)
+    parser.add_argument("--exit-rule", choices=EXIT_RULES)
     parser.add_argument("--fill-ratio", type=float, default=OptionsConfig.fill_ratio)
     parser.add_argument("--equity", type=float, default=OptionsConfig.initial_equity)
     parser.add_argument("--risk-pct", type=float, default=OptionsConfig.risk_pct)
     parser.add_argument("--start", type=date.fromisoformat)
     parser.add_argument("--end", type=date.fromisoformat)
+    parser.add_argument("--entry-time", type=_parse_time, default=ENTRY_TIME,
+                        help="Entry snapshot time, ET (default 10:00; 16:00 for an"
+                             " end-of-day store)")
     parser.add_argument("--holdout", action="store_true",
                         help=f"Replay only the Holdout (sessions from {HOLDOUT_START} on)")
-    parser.add_argument("--compare", action="store_true",
-                        help="Run every strategy over its grid instead of one configuration")
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument("--compare", action="store_true",
+                       help="Run every strategy over its grid instead of one configuration")
+    modes.add_argument("--gex-filter", action="store_true",
+                       help="Run the GEX Filters on one configuration")
+    modes.add_argument("--gex-study", action="store_true",
+                       help="Run the GEX Filters on every strategy's default configuration")
+    parser.add_argument("--gex-percentile", type=float, default=GEX_PERCENTILE_THRESHOLD)
     parser.add_argument("--out", help="Also write the JSON report here")
-    parser.add_argument("--summary", help="With --compare, write a Markdown summary here")
+    parser.add_argument("--summary", help="With --compare or --gex-study, write Markdown here")
     args = parser.parse_args(argv)
-    if args.summary and not args.compare:
-        parser.error("--summary needs --compare")
-    if args.compare and args.width is not None:
-        parser.error("--compare runs its own widths; drop --width")
+    if args.summary and not (args.compare or args.gex_study):
+        parser.error("--summary needs --compare or --gex-study")
+    if (args.compare or args.gex_study) and (args.width is not None or args.delta is not None):
+        parser.error("--compare and --gex-study pick their own deltas and widths")
     return args
 
 
 def main(argv=None):
     args = parse_args(argv)
+    common = dict(start=args.start, end=args.end, holdout=args.holdout,
+                  entry_time=args.entry_time)
     if args.compare:
-        report = run_compare(args.store, args.underlying.split(","), args.start, args.end,
-                             args.holdout, args.fill_ratio, args.equity, args.risk_pct)
+        report = run_compare(args.store, args.underlying.split(","), fill_ratio=args.fill_ratio,
+                             initial_equity=args.equity, risk_pct=args.risk_pct, **common)
         if args.summary:
             Path(args.summary).write_text(format_summary(report), encoding="utf-8")
+    elif args.gex_study:
+        report = run_gex_study(args.store, args.underlying.split(","),
+                               exit_rule=args.exit_rule or RULE_MANAGED,
+                               fill_ratio=args.fill_ratio, initial_equity=args.equity,
+                               risk_pct=args.risk_pct, percentile_threshold=args.gex_percentile,
+                               **common)
+        if args.summary:
+            Path(args.summary).write_text(format_gex_summary(report), encoding="utf-8")
     else:
         width = args.width if args.width is not None else (
             DEFAULT_WIDTH if args.strategy in WINGED else None)
+        delta = args.delta if args.delta is not None else (
+            OptionsConfig.delta if args.strategy in BY_DELTA else None)
         try:
             config = OptionsConfig(underlying=args.underlying, strategy=args.strategy,
-                                   delta=args.delta, width=width, fill_ratio=args.fill_ratio,
-                                   exit_rule=args.exit_rule, initial_equity=args.equity,
-                                   risk_pct=args.risk_pct)
+                                   delta=delta, width=width, fill_ratio=args.fill_ratio,
+                                   exit_rule=args.exit_rule or RULE_HOLD,
+                                   initial_equity=args.equity, risk_pct=args.risk_pct)
         except ValueError as exc:
             print(f"backtest_options: {exc}", file=sys.stderr)
             return 2
-        report = run_experiment(args.store, config, args.start, args.end, args.holdout)
+        if args.gex_filter:
+            report = run_gex_filter(args.store, [config], percentile_threshold=args.gex_percentile,
+                                    **common)
+        else:
+            report = run_experiment(args.store, config, **common)
     text = json.dumps(report, indent=2, default=str)
     if args.out:
         Path(args.out).write_text(text, encoding="utf-8")

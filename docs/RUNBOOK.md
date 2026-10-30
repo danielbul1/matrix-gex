@@ -272,6 +272,50 @@ python tools\backtest_options.py --store C:\path\etf.sqlite3 --underlying SPY --
   an `--end` inside them. `--holdout` replays only them; run it once, on the
   one configuration chosen from the Dev Period.
 
+### GEX on SPY/QQQ
+
+```powershell
+python tools\backtest_options.py --store C:\path\etf.sqlite3 --gex-study --underlying SPY,QQQ --entry-time 16:00 --summary gex.md
+python tools\backtest_options.py --store C:\path\etf.sqlite3 --gex-filter --strategy iron_condor --width 5 --exit-rule managed --entry-time 16:00
+python tools\backtest_options.py --store C:\path\etf.sqlite3 --strategy gex_wall_condor --width 5 --entry-time 16:00
+```
+
+- GEX at entry: the dashboard's Naive GEX (calls +, puts -, canonical
+  gamma from each row's IV, open interest of 10 or more) over every expiry
+  with more than an hour left, so a close entry leaves the dead same-day
+  expiry out. Skipped when rows with an IV hold under 90% of the open
+  interest. Walls: the strikes of largest call and put GEX.
+- `gex_wall_condor`: sells the put wall and the call wall on the 7-day
+  expiry, each with its wing; skipped when the walls do not bracket spot.
+- `--gex-filter` (one configuration) and `--gex-study` (each strategy's
+  default: deltas 0.16, long strangle 0.25, width 5, managed exits) run the
+  spread backtester's two filters, Gamma Regime positive and GEX Percentile
+  above 0.5, each with kept, rejected, Baseline and IV-Matched Control rows
+  and the same regression, bootstrap and per-year verdict.
+- Covariates: VIX is the last close before the session, ATM IV comes from
+  the entry snapshot, VRP is ATM IV less 20-day realized vol of the
+  underlying.
+
+### End-of-day archive
+
+```powershell
+curl -LO https://github.com/lambdaclass/options_backtester/releases/download/data-v1/SPY_options.parquet
+curl -LO https://github.com/lambdaclass/options_backtester/releases/download/data-v1/SPY_underlying.parquet
+python tools\import_eod_chain.py --store C:\path\etf.sqlite3 --options SPY_options.parquet --underlying SPY_underlying.parquet --verify --vix
+```
+
+- The free 2008-2025 archive first published as philippdubach/options-data
+  (its own site and repo are gone; lambdaclass mirrors SPY, QQQ and IWM,
+  pinned by SHA-256). QQQ starts 2011-03-23; SPY ends 2025-12-12.
+- One snapshot per day, stamped 16:00 ET: run the backtester with
+  `--entry-time 16:00`. Expiries 0-45 days out and strikes within 25% of the
+  close are kept (`--max-dte`, `--strike-band`): about 8.5M SPY rows, 3.5
+  minutes, 1.3 GB.
+- The archive's IV and greeks are kept (vendor_delta, vendor_gamma); its
+  open interest goes in as SOD Open Interest. The archive does not say when
+  that open interest is stamped; at worst it is one night early.
+- `--vix` also loads the free Cboe VIX closes the GEX Filter's control needs.
+
 ## Chain Store Backfill
 
 Fills the chain store from ThetaData through the `thetadata` Python library:
