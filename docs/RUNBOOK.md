@@ -315,6 +315,9 @@ python tools\import_eod_chain.py --store C:\path\etf.sqlite3 --options SPY_optio
   open interest goes in as SOD Open Interest. The archive does not say when
   that open interest is stamped; at worst it is one night early.
 - `--vix` also loads the free Cboe VIX closes the GEX Filter's control needs.
+- About 130 SPY rows (none in QQQ) hold placeholder asks near 100,000. The
+  backtester never enters or exits on a quote above its no-arbitrage bound
+  (a put above its strike, a call above the underlying, 5% slack).
 
 ## Chain Store Backfill
 

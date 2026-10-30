@@ -118,6 +118,10 @@ MARKET_CLOSE = spread_bt.MARKET_CLOSE
 ENTRY_MAX_AGE_MINUTES = 45  # an older entry snapshot is skipped, not traded
 EOD_ENTRY_TIME = (16, 0)  # ET; for a store built from end-of-day quotes
 WING_TOLERANCE = 1.0  # dollars a wing strike may sit from short +/- width
+# A quote above its no-arbitrage bound (a put above its strike, a call above
+# the underlying), with this slack, is bad data: the free EOD archive holds
+# placeholder asks near 100,000 on a few SPY days.
+QUOTE_BOUND_SLACK = 1.05
 ROOT_OF = {"SPX": "SPXW"}  # the root traded for an underlying; else itself
 
 # --- Costs ---
@@ -268,6 +272,19 @@ def _fill(row, side, opening, fill_ratio):
     buying = (side == LONG) == opening
     half = (row.ask - row.bid) / 2 * fill_ratio
     return _mid(row) + half if buying else _mid(row) - half
+
+
+def _within_bounds(row):
+    bound = row.strike if row.right == "P" else row.underlying
+    return not bound or max(row.bid or 0, row.ask or 0) <= bound * QUOTE_BOUND_SLACK
+
+
+def _entry_quote_ok(row):
+    return spread_bt._quote_ok(row) and _within_bounds(row)
+
+
+def _exit_quote_ok(row):
+    return spread_bt._exit_quote_ok(row) and _within_bounds(row)
 
 
 def _opening_cash(legs, fills):
@@ -504,7 +521,7 @@ def select_candidate(session, chain, selection, closes):
     legs, reason = _legs(chain, expiry, selection)
     if legs is None:
         return None, reason
-    if not all(spread_bt._quote_ok(leg.row) for leg in legs):
+    if not all(_entry_quote_ok(leg.row) for leg in legs):
         return None, "missing or crossed quote on a leg"
     settlement = closes.get(expiry)
     if settlement is None:
@@ -541,7 +558,7 @@ def _close_at(legs, stamp, spot, store, fill_ratio, settled=()):
     cash, fills = 0.0, []
     for index, leg in enumerate(legs):
         row = store.marks(leg.row).get(stamp)
-        if index in settled or row is None or not spread_bt._exit_quote_ok(row):
+        if index in settled or row is None or not _exit_quote_ok(row):
             cash += leg.side * intrinsic(leg.row.right, leg.row.strike, spot)
             fills.append(None)
         else:
@@ -575,7 +592,7 @@ def early_assignment(candidate, store, fill_ratio):
                 continue
             row = marks[max(stamps)]
             value = intrinsic("C", leg.row.strike, spot)
-            if value > 0 and spread_bt._quote_ok(row) and _mid(row) - value < amount:
+            if value > 0 and _entry_quote_ok(row) and _mid(row) - value < amount:
                 events.append((max(stamps), day, index))
     if not events:
         return None
@@ -604,7 +621,7 @@ def find_exit(candidate, entry_cash, store, config):
                 and spread_bt._during_session(stamp)):
             continue
         rows = [m[stamp] for m in marks]
-        if not all(spread_bt._exit_quote_ok(row) for row in rows):
+        if not all(_exit_quote_ok(row) for row in rows):
             continue
         fills = tuple(_fill(row, leg.side, opening=False, fill_ratio=config.fill_ratio)
                       for row, leg in zip(rows, legs))

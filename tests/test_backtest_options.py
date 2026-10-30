@@ -513,3 +513,23 @@ def test_gex_study_covers_every_strategy_and_writes_markdown(tmp_path, capsys):
     text = summary.read_text()
     assert text.startswith("# GEX Study (Dev Period, entry 10:00 ET)")
     assert "| gex_wall_condor | positive_gamma |" in text
+
+
+def test_a_quote_above_its_no_arbitrage_bound_is_never_an_exit(tmp_path):
+    # The free EOD archive holds placeholder asks near 100,000 on a few SPY days.
+    wednesday = MONDAY + timedelta(days=2)
+    junk = [cs.ChainRow(**{**r.__dict__, "bid": 1246.0, "ask": 100_003.0})
+            for r in _later(MONDAY, wednesday, 11, spot=SPOT)]
+    path = _one_session(tmp_path, junk, settle=520.0)
+    trade = _only_trade(bo.run_experiment(path, _config(width=5.0, exit_rule="managed")))
+    assert trade["exit"] == "expiry"  # the junk marks were skipped
+    assert trade["exit_cash"] == 0.0
+
+
+def test_a_quote_above_its_bound_is_never_an_entry(tmp_path):
+    rows = [cs.ChainRow(**{**r.__dict__, "ask": 100_003.0}) if r.right == "P" else r
+            for r in _chain(MONDAY)]
+    path = _store(tmp_path, [rows], {MONDAY: SPOT, EXPIRY: SPOT})
+    report = bo.run_experiment(path, _config(width=5.0))
+    assert report["trades"] == []
+    assert report["skipped"][0]["reason"] == "missing or crossed quote on a leg"
