@@ -93,8 +93,30 @@ The span of history used to choose parameters.
 _Avoid_: in-sample, training period
 
 **Holdout**:
-The span of history held back from parameter choice and run once, after the Dev Period is frozen.
+The span of history held back from parameter choice and run once, after the Dev Period is frozen. The strategy backtester's Holdout starts on 2025-10-01.
 _Avoid_: test set, out-of-sample, OOS
+
+## Strategy comparison
+
+**Strategy**:
+One of the four position shapes the strategy backtester compares on SPY and QQQ: put credit spread, iron condor, short strangle, long strangle.
+_Avoid_: setup, trade type
+
+**Wing**:
+The long leg that caps a short leg's loss, placed a width in dollars beyond it.
+_Avoid_: hedge leg, protection
+
+**Risk Unit**:
+The worst expiry loss of one position over every strike it holds and a Stress Move either way. It sizes every Strategy alike; for a defined-risk position it is the max loss.
+_Avoid_: margin, max loss (for the short strangle)
+
+**Stress Move**:
+The 10% gap from spot behind the Risk Unit.
+_Avoid_: crash scenario
+
+**Early Assignment**:
+A short ETF call exercised the evening before an ex-dividend date, because it is in the money and its time value is below the dividend.
+_Avoid_: early exercise (that is the holder's side)
 
 ## Dashboard
 

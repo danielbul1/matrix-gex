@@ -1,13 +1,15 @@
 """Normalized option chain store shared by the backfill, the forward collector
-and the spread backtester.
+and the backtesters.
 
-One SQLite file, two tables:
+One SQLite file, three tables:
 
 - option_chain_snapshot: one row per contract per snapshot time. Writes are
   upserts: a re-written (contract, snapshot) replaces the earlier copy.
 - daily_close: the companion daily series (VIX and SPX closes), one value per
   symbol per session. The SPX close on an expiry date is the SPXW PM
-  settlement value.
+  settlement value. SPY and QQQ closes settle their options the same way.
+- dividend: cash dividends per symbol by ex-date (SPY, QQQ), which decide
+  when a short call is assigned early.
 
 Pure stdlib so the Railway service can import it without pandas.
 
@@ -49,6 +51,12 @@ CREATE TABLE IF NOT EXISTS daily_close (
     session_date TEXT NOT NULL,
     close REAL NOT NULL,
     PRIMARY KEY (symbol, session_date)
+);
+CREATE TABLE IF NOT EXISTS dividend (
+    symbol TEXT NOT NULL,
+    ex_date TEXT NOT NULL,
+    amount REAL NOT NULL,
+    PRIMARY KEY (symbol, ex_date)
 );
 """
 
@@ -123,6 +131,23 @@ def read_daily_closes(connection: sqlite3.Connection, symbol: str) -> dict[str, 
     return dict(connection.execute(
         "SELECT session_date, close FROM daily_close WHERE symbol = ?"
         " ORDER BY session_date", (symbol,)))
+
+
+def write_dividends(connection: sqlite3.Connection, symbol: str, dividends: dict) -> int:
+    """dividends: {ex_date: cash amount per share}. Returns how many were written."""
+    values = [(symbol, day, float(amount)) for day, amount in dividends.items()]
+    connection.executemany(
+        "INSERT OR REPLACE INTO dividend (symbol, ex_date, amount) VALUES (?, ?, ?)",
+        values)
+    connection.commit()
+    return len(values)
+
+
+def read_dividends(connection: sqlite3.Connection, symbol: str) -> dict[str, float]:
+    """{ex_date: amount} for one symbol."""
+    return dict(connection.execute(
+        "SELECT ex_date, amount FROM dividend WHERE symbol = ? ORDER BY ex_date",
+        (symbol,)))
 
 
 def snapshot_span(connection: sqlite3.Connection) -> tuple[int, int] | None:

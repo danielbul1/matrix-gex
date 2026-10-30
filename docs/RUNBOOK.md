@@ -233,6 +233,45 @@ python tools\gex_crosscheck.py --store C:\path\chain.sqlite3
   sign. The scales differ, so only those two numbers mean anything. Run it
   before reading any GEX Filter result.
 
+## Strategy Backtest (SPY/QQQ)
+
+Compares option strategies on the ETFs before one is chosen
+(`tools/backtest_options.py`). It reads the same chain store, but only lazily
+(one entry snapshot per session, then each chosen contract's own history), so
+a full SPY history never has to fit in memory.
+
+```powershell
+python tools\backfill_chain.py --store C:\path\etf.sqlite3 --roots SPY,QQQ --start 2018-01-02 --end 2025-09-30
+python tools\backtest_options.py --store C:\path\etf.sqlite3 --compare --underlying SPY,QQQ --out compare.json --summary compare.md
+python tools\backtest_options.py --store C:\path\etf.sqlite3 --underlying SPY --strategy iron_condor --width 5 --exit-rule managed
+```
+
+- Strategies: `put_credit_spread`, `iron_condor`, `short_strangle`,
+  `long_strangle`. Short strikes at the delta nearest `--delta`; a wing is the
+  strike nearest `--width` dollars beyond its short strike (within $1). One
+  position a session at 10:00 ET on the expiry nearest 7 days out, at most
+  five open.
+- `--compare` runs every strategy over its grid: credit strategies at delta
+  {0.10, 0.16, 0.20}, the spreads at width {3, 5}, the long strangle at delta
+  {0.25, 0.40}, each with both Exit Rules: 34 configurations per underlying,
+  beside buy-and-hold of the underlying. The report states how many
+  configurations it tried; the best of many looks good partly by luck.
+- Exit Rules: `hold` books every leg at intrinsic against the expiry-day
+  close. `managed` closes a credit at <= 50% / >= 2x of the credit, and the
+  long strangle at >= 2x / <= 50% of its debit.
+- Early Assignment: a short call in the money at the close before an
+  ex-dividend date, with time value under the dividend, closes the position
+  that evening. Needs the dividends the backfill loads from Yahoo.
+- Sizing: contracts so the Risk Unit (worst expiry loss over every strike and
+  a 10% gap either way) plus entry costs is at most `--risk-pct` of equity.
+  The short strangle is therefore sized for a 10% gap, not unbounded loss.
+- Costs: IBKR tiered commissions with the $1 per-leg order minimum, plus a
+  rough $0.25 per contract of exchange/ORF/OCC fees for ETF options. Check it
+  against a real IBKR statement before trusting low-premium results.
+- The Holdout: sessions from 2025-10-01 on are cut from every run, even with
+  an `--end` inside them. `--holdout` replays only them; run it once, on the
+  one configuration chosen from the Dev Period.
+
 ## Chain Store Backfill
 
 Fills the chain store from ThetaData through the `thetadata` Python library:
@@ -284,6 +323,12 @@ python tools\backfill_chain.py --store C:\path\chain.sqlite3 --start 2024-03-04 
   empty and asked again on the next run.
 - `--concurrency` caps requests in flight (default 4, the Standard tier's
   limit; 8 on Pro).
+- ETF roots: `--roots SPY,QQQ` pulls the ETFs the same way. Each underlying
+  gets its own parity level (SPX and SPXW share one). Their daily closes
+  (which settle the backtest) and cash dividends (which decide Early
+  Assignment) load from Yahoo's chart API first (`--skip-yahoo` to skip).
+  Probe an ETF with `--probe --probe-root SPY`. An SPY session holds far more
+  strikes than SPX near the money; keep `--max-dte` at 10 or below.
 
 ## Data Source Notes
 
