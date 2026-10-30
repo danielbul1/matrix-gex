@@ -93,8 +93,50 @@ The span of history used to choose parameters.
 _Avoid_: in-sample, training period
 
 **Holdout**:
-The span of history held back from parameter choice and run once, after the Dev Period is frozen.
+The span of history held back from parameter choice and run once, after the Dev Period is frozen. The strategy backtester's Holdout starts on 2025-10-01.
 _Avoid_: test set, out-of-sample, OOS
+
+## Strategy comparison
+
+**Strategy**:
+One of the five position shapes the strategy backtester compares on SPY and QQQ: put credit spread, iron condor, short strangle, long strangle, GEX wall condor.
+_Avoid_: setup, trade type
+
+**Wing**:
+The long leg that caps a short leg's loss, placed a width in dollars beyond it.
+_Avoid_: hedge leg, protection
+
+**Risk Unit**:
+The worst expiry loss of one position over every strike it holds and a Stress Move either way. It sizes every Strategy alike; for a defined-risk position it is the max loss.
+_Avoid_: margin, max loss (for the short strangle)
+
+**Stress Move**:
+The 10% gap from spot behind the Risk Unit.
+_Avoid_: crash scenario
+
+**GEX Wall Condor**:
+An iron condor whose short strikes are the put wall and the call wall at entry, instead of a delta.
+_Avoid_: wall condor (alone), GEX condor
+
+**GEX Study**:
+The GEX Filters run on every Strategy's default configuration, per underlying, each against its IV-Matched Control.
+_Avoid_: GEX backtest
+
+**VRP Filter**:
+A filter that trades only when ATM IV at entry sits above the underlying's 20-day realized vol, i.e. when the premium sold is rich.
+_Avoid_: vol filter, IV filter
+
+**Deflated Sharpe Ratio**:
+The probability that a configuration's Sharpe beats the best Sharpe as many skill-free tries as the comparison made would show. Under 95%, the row has not survived the search.
+_Avoid_: adjusted Sharpe, DSR score
+
+**Chain Archive**:
+Our own end-of-day option chains, one file per symbol per session, kept on the `chain-archive` branch from 2026-10-30 on. The only history no test has seen.
+_Avoid_: snapshot store, backup
+
+**Early Assignment**:
+A short ETF call exercised the evening before an ex-dividend date, because it is in the money and its time value is below the dividend.
+_Avoid_: early exercise (that is the holder's side)
 
 ## Dashboard
 

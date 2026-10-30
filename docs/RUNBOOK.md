@@ -233,6 +233,123 @@ python tools\gex_crosscheck.py --store C:\path\chain.sqlite3
   sign. The scales differ, so only those two numbers mean anything. Run it
   before reading any GEX Filter result.
 
+## Strategy Backtest (SPY/QQQ)
+
+Compares option strategies on the ETFs before one is chosen
+(`tools/backtest_options.py`). It reads the same chain store, but only lazily
+(one entry snapshot per session, then each chosen contract's own history), so
+a full SPY history never has to fit in memory.
+
+```powershell
+python tools\backfill_chain.py --store C:\path\etf.sqlite3 --roots SPY,QQQ --start 2018-01-02 --end 2025-09-30
+python tools\backtest_options.py --store C:\path\etf.sqlite3 --compare --underlying SPY,QQQ --out compare.json --summary compare.md
+python tools\backtest_options.py --store C:\path\etf.sqlite3 --underlying SPY --strategy iron_condor --width 5 --exit-rule managed
+```
+
+- Strategies: `put_credit_spread`, `iron_condor`, `short_strangle`,
+  `long_strangle`. Short strikes at the delta nearest `--delta`; a wing is the
+  strike nearest `--width` dollars beyond its short strike (within $1). One
+  position a session at 10:00 ET on the expiry nearest 7 days out, at most
+  five open.
+- `--compare` runs every strategy over its grid: credit strategies at delta
+  {0.10, 0.16, 0.20}, the spreads at width {3, 5}, the long strangle at delta
+  {0.25, 0.40}, each with both Exit Rules: 34 configurations per underlying,
+  beside buy-and-hold of the underlying. The report states how many
+  configurations it tried; the best of many looks good partly by luck.
+- Exit Rules: `hold` books every leg at intrinsic against the expiry-day
+  close. `managed` closes a credit at <= 50% / >= 2x of the credit, and the
+  long strangle at >= 2x / <= 50% of its debit.
+- Early Assignment: a short call in the money at the close before an
+  ex-dividend date, with time value under the dividend, closes the position
+  that evening. Needs the dividends the backfill loads from Yahoo.
+- Sizing: contracts so the Risk Unit (worst expiry loss over every strike and
+  a 10% gap either way) plus entry costs is at most `--risk-pct` of equity.
+  The short strangle is therefore sized for a 10% gap, not unbounded loss.
+- Costs: IBKR tiered commissions with the $1 per-leg order minimum, plus a
+  rough $0.25 per contract of exchange/ORF/OCC fees for ETF options. Check it
+  against a real IBKR statement before trusting low-premium results.
+- The Holdout: sessions from 2025-10-01 on are cut from every run, even with
+  an `--end` inside them. `--holdout` replays only them; run it once, on the
+  one configuration chosen from the Dev Period.
+
+### GEX on SPY/QQQ
+
+```powershell
+python tools\backtest_options.py --store C:\path\etf.sqlite3 --gex-study --underlying SPY,QQQ --entry-time 16:00 --summary gex.md
+python tools\backtest_options.py --store C:\path\etf.sqlite3 --gex-filter --strategy iron_condor --width 5 --exit-rule managed --entry-time 16:00
+python tools\backtest_options.py --store C:\path\etf.sqlite3 --strategy gex_wall_condor --width 5 --entry-time 16:00
+```
+
+- GEX at entry: the dashboard's Naive GEX (calls +, puts -, canonical
+  gamma from each row's IV, open interest of 10 or more) over every expiry
+  with more than an hour left, so a close entry leaves the dead same-day
+  expiry out. Skipped when rows with an IV hold under 90% of the open
+  interest. Walls: the strikes of largest call and put GEX.
+- `gex_wall_condor`: sells the put wall and the call wall on the 7-day
+  expiry, each with its wing; skipped when the walls do not bracket spot.
+- `--gex-filter` (one configuration) and `--gex-study` (each strategy's
+  default: deltas 0.16, long strangle 0.25, width 5, managed exits) run the
+  spread backtester's two filters, Gamma Regime positive and GEX Percentile
+  above 0.5, each with kept, rejected, Baseline and IV-Matched Control rows
+  and the same regression, bootstrap and per-year verdict.
+- Covariates: VIX is the last close before the session, ATM IV comes from
+  the entry snapshot, VRP is ATM IV less 20-day realized vol of the
+  underlying.
+
+- The VRP Filter rides along in `--gex-filter` and `--gex-study`: it keeps
+  sessions whose ATM IV beats 20-day realized vol (VRP > 0). Its regression
+  controls for VIX and ATM IV only, since controlling for VRP would explain
+  the filter away.
+- `--compare` adds each row's Deflated Sharpe Ratio (Bailey and Lopez de
+  Prado, 2014): the probability that its Sharpe beats the best Sharpe as many
+  skill-free tries as the run made would show. Rows under 95% have not
+  survived the search.
+
+### Our own chain archive
+
+`.github/workflows/archive-chains.yml` runs `tools/archive_cboe_chain.py`
+after the close each weekday and commits one gzipped CSV per symbol per
+session (SPY, QQQ, SPX) to the orphan `chain-archive` branch. It runs from
+the default branch only, so it starts once this lands on main; every
+evening it misses is lost.
+
+```powershell
+git fetch origin chain-archive
+git worktree add ..\chain-archive origin/chain-archive
+python tools\import_eod_chain.py --store C:\path\fresh.sqlite3 --archive ..\chain-archive\chain_archive --symbol SPY --yahoo --vix
+python tools\backtest_options.py --store C:\path\fresh.sqlite3 --gex-filter --strategy short_strangle --entry-time 16:00 --holdout --start 2026-10-30
+```
+
+- The script writes only on the session's own evening (16:15 ET to
+  midnight): earlier quotes are not closing quotes, and the next morning
+  Cboe may already show open interest a close entry could not have known.
+- About 340 KB a day for the three symbols, roughly 85 MB a year.
+- Everything archived lies after `HOLDOUT_START`, so `--holdout --start
+  2026-10-30` replays only sessions no test has seen yet.
+
+### End-of-day archive
+
+```powershell
+curl -LO https://github.com/lambdaclass/options_backtester/releases/download/data-v1/SPY_options.parquet
+curl -LO https://github.com/lambdaclass/options_backtester/releases/download/data-v1/SPY_underlying.parquet
+python tools\import_eod_chain.py --store C:\path\etf.sqlite3 --options SPY_options.parquet --underlying SPY_underlying.parquet --verify --vix
+```
+
+- The free 2008-2025 archive first published as philippdubach/options-data
+  (its own site and repo are gone; lambdaclass mirrors SPY, QQQ and IWM,
+  pinned by SHA-256). QQQ starts 2011-03-23; SPY ends 2025-12-12.
+- One snapshot per day, stamped 16:00 ET: run the backtester with
+  `--entry-time 16:00`. Expiries 0-45 days out and strikes within 25% of the
+  close are kept (`--max-dte`, `--strike-band`): about 8.5M SPY rows, 3.5
+  minutes, 1.3 GB.
+- The archive's IV and greeks are kept (vendor_delta, vendor_gamma); its
+  open interest goes in as SOD Open Interest. The archive does not say when
+  that open interest is stamped; at worst it is one night early.
+- `--vix` also loads the free Cboe VIX closes the GEX Filter's control needs.
+- About 130 SPY rows (none in QQQ) hold placeholder asks near 100,000. The
+  backtester never enters or exits on a quote above its no-arbitrage bound
+  (a put above its strike, a call above the underlying, 5% slack).
+
 ## Chain Store Backfill
 
 Fills the chain store from ThetaData through the `thetadata` Python library:
@@ -284,6 +401,12 @@ python tools\backfill_chain.py --store C:\path\chain.sqlite3 --start 2024-03-04 
   empty and asked again on the next run.
 - `--concurrency` caps requests in flight (default 4, the Standard tier's
   limit; 8 on Pro).
+- ETF roots: `--roots SPY,QQQ` pulls the ETFs the same way. Each underlying
+  gets its own parity level (SPX and SPXW share one). Their daily closes
+  (which settle the backtest) and cash dividends (which decide Early
+  Assignment) load from Yahoo's chart API first (`--skip-yahoo` to skip).
+  Probe an ETF with `--probe --probe-root SPY`. An SPY session holds far more
+  strikes than SPX near the money; keep `--max-dte` at 10 or below.
 
 ## Data Source Notes
 

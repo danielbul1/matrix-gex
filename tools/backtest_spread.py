@@ -913,17 +913,17 @@ def _interval(values):
     return [float(np.percentile(values, tail)), float(np.percentile(values, 100 - tail))]
 
 
-def regression(trades, kept, covariates):
+def regression(trades, kept, covariates, covariate_names=REGRESSION_COVARIATES):
     """OLS of trade P&L on the filter flag (1 = a kept session) with VIX, ATM
-    IV and VRP as covariates, over the trades whose covariates are all known.
-    The filter coefficient's interval uses Student's t; it is None when the
-    flag is not identified (a constant, or a linear function of the
-    covariates)."""
-    names = ("intercept", "filter") + REGRESSION_COVARIATES
+    IV and VRP as covariates (or `covariate_names`), over the trades whose
+    covariates are all known. The filter coefficient's interval uses
+    Student's t; it is None when the flag is not identified (a constant, or a
+    linear function of the covariates)."""
+    names = ("intercept", "filter") + tuple(covariate_names)
     X, y = [], []
     for trade in trades:
         day = date.fromisoformat(trade["session"])
-        values = [covariates[day][name] for name in REGRESSION_COVARIATES]
+        values = [covariates[day][name] for name in covariate_names]
         if None not in values:
             X.append([1.0, float(day in kept), *values])
             y.append(trade["pnl"])
@@ -1023,14 +1023,16 @@ def by_year(filter_trades, control_trades):
     return rows
 
 
-def compare(kept, rows, covariates, sessions, config):
+def compare(kept, rows, covariates, sessions, config,
+            covariate_names=REGRESSION_COVARIATES):
     """A filter against its IV-Matched Control. The verdict is positive only
     when the regression's filter interval and both bootstrap intervals sit
     above zero, and the filter's mean P&L per trade beats the control's in
-    every year both trade."""
+    every year both trade. A filter built on a covariate leaves it out of
+    `covariate_names`, or the regression would control its effect away."""
     filter_trades = rows[ROW_KEPT]["trades"]
     control_trades = rows[ROW_IV_MATCHED]["trades"]
-    fit = regression(rows[ROW_BASELINE]["trades"], kept, covariates)
+    fit = regression(rows[ROW_BASELINE]["trades"], kept, covariates, covariate_names)
     resampled = bootstrap(filter_trades, control_trades, sessions,
                           config.initial_equity)
     years = by_year(filter_trades, control_trades)

@@ -1,9 +1,11 @@
 """Backfill the chain store from ThetaData, or probe what the subscription has.
 
-Backfill: for every weekday in [start, end] and every root (SPX, SPXW), pull
-the 0-max_dte expiries' NBBO quotes at the grid times plus the day's open
-interest, normalize them into the chain store, and checkpoint the session.
-The free Cboe VIX and SPX daily closes are loaded first.
+Backfill: for every weekday in [start, end] and every root (SPX, SPXW by
+default; SPY and QQQ too), pull the 0-max_dte expiries' NBBO quotes at the
+grid times plus the day's open interest, normalize them into the chain store,
+and checkpoint the session. The free Cboe VIX and SPX daily closes are loaded
+first; with an ETF root (SPY, QQQ), so are its daily closes and dividends from
+Yahoo's chart API, which settle its options and decide early assignment.
 
 Only quote and open-interest endpoints are used: ThetaData's docs disagree on
 whether historical greeks and IV need the Pro tier, and its greeks rest on
@@ -25,8 +27,13 @@ Normalization:
 - The underlying level at each snapshot comes from put-call parity under the
   canonical greeks engine's model (rate DEFAULT_RATE, no dividends):
   S = C - P + K e^(-rT), the median over the PARITY_PAIRS strikes nearest the
-  money on the nearest unexpired expiry. The level at a session's last
-  snapshot is cross-checked against the Cboe SPX close.
+  money on the nearest unexpired expiry. It is solved per underlying (SPX and
+  SPXW share one; SPY and QQQ each have their own). The level at a session's
+  last snapshot is cross-checked against that underlying's daily close.
+  For an ETF the parity level is spot less the dividends paid before the
+  nearest expiry, which is the level a no-dividend model should price from.
+  ETF options are American; the European IV this solves is a close
+  approximation for the out-of-the-money strikes the backtesters trade.
 - IV is the canonical engine's implied_vol of the quote mid against that
   level, so the backtester's deltas and GEX reprice the quotes exactly. A
   contract with no bid, a crossed quote, a mid outside the no-arbitrage
@@ -40,13 +47,13 @@ so a rerun asks again. At most `concurrency` vendor requests are
 in flight at once (4 on the Standard tier). A failed session is reported and
 left unchecked for the next run.
 
-Probe (--probe) answers the day-one questions before any bulk download: the
-earliest SPXW date (the earliest listed, confirmed with a data request, plus
+Probe (--probe [--probe-root SPY]) answers the day-one questions before any
+bulk download, for SPXW unless another root is named: the earliest date (the earliest listed, confirmed with a data request, plus
 whether 2018-01 data comes back, since the listings may not follow the
 tier), whether open interest is stamped at the start or the end of the day,
-and whether ThetaData's SPX index price is supplied before 2022 (the
-Standard index tier starts in 2022; the backfill derives its own level, so a
-"no" only rules out cross-checks against ThetaData's index).
+and, for an index root, whether ThetaData's index price is supplied before
+2022 (the Standard index tier starts in 2022; the backfill derives its own
+level, so a "no" only rules out cross-checks against ThetaData's index).
 
 The API key is read from THETADATA_API_KEY and never written or printed.
 Requires Python 3.12+ (the `thetadata` library's floor).
@@ -54,8 +61,8 @@ Requires Python 3.12+ (the `thetadata` library's floor).
 Usage:
     python tools/backfill_chain.py --store PATH --start DATE --end DATE
         [--roots SPX,SPXW] [--times 09:30,10:00,...] [--max-dte 10]
-        [--concurrency 4] [--skip-cboe]
-    python tools/backfill_chain.py --probe [--probe-date DATE]
+        [--concurrency 4] [--skip-cboe] [--skip-yahoo]
+    python tools/backfill_chain.py --probe [--probe-date DATE] [--probe-root SPY]
 """
 import argparse
 import csv
@@ -97,6 +104,23 @@ PROBE_DEV_START = date(2018, 1, 2)  # first session of the Dev Period
 
 CBOE_URL = "https://cdn-api.cboe.com/api/global/us_indices/daily_prices/{}_History.csv"
 CBOE_CLOSE_COLUMNS = {"VIX": "CLOSE", "SPX": "SPX"}
+YAHOO_CHART_URL = ("https://query1.finance.yahoo.com/v8/finance/chart/{}"
+                   "?period1=0&period2=9999999999&interval=1d&events=div")
+
+# Roots whose options price off another symbol's level and close.
+UNDERLYING_OF = {"SPXW": "SPX"}
+# Index roots: closes from Cboe, levels from ThetaData's index feed.
+INDEX_ROOTS = {"SPX", "SPXW"}
+
+
+def underlying_of(root):
+    """The symbol a root's options settle on: SPXW -> SPX, SPY -> SPY."""
+    return UNDERLYING_OF.get(root, root)
+
+
+def etf_symbols(roots):
+    """The ETF underlyings among roots, whose closes come from Yahoo."""
+    return sorted({underlying_of(root) for root in roots if root not in INDEX_ROOTS})
 
 CHECKPOINT_SCHEMA = """
 CREATE TABLE IF NOT EXISTS backfill_checkpoint (
@@ -336,10 +360,14 @@ def fetch_session(client, session, config):
                 replace(row, sod_oi=oi.get(_contract_of(row), 0.0)) for row in root_rows]
     by_snapshot = {}
     for row in rows:
-        by_snapshot.setdefault(row.snapshot_ms, []).append(row)
-    levels = {ms: parity_level(snapshot) for ms, snapshot in by_snapshot.items()}
-    return [replace(row, underlying=levels[row.snapshot_ms],
-                    iv=_implied_vol(row, levels[row.snapshot_ms])) for row in rows]
+        key = (row.snapshot_ms, underlying_of(row.root))
+        by_snapshot.setdefault(key, []).append(row)
+    levels = {key: parity_level(snapshot) for key, snapshot in by_snapshot.items()}
+
+    def level(row):
+        return levels[(row.snapshot_ms, underlying_of(row.root))]
+    return [replace(row, underlying=level(row), iv=_implied_vol(row, level(row)))
+            for row in rows]
 
 
 # ---------------------------------------------------------------------------
@@ -363,16 +391,24 @@ def _checkpoint(connection, session, rows, roots):
     connection.commit()
 
 
-def _parity_mismatch(session, rows, closes):
-    close = closes.get(session.isoformat())
-    if close is None or not rows:
-        return None
-    last = max(row.snapshot_ms for row in rows)
-    level = next((r.underlying for r in rows if r.snapshot_ms == last and r.underlying), None)
-    if level is None or abs(level - close) / close <= PARITY_CLOSE_TOLERANCE:
-        return None
-    return {"session": session.isoformat(), "parity_level": round(level, 4),
-            "cboe_close": close}
+def _parity_mismatches(session, rows, closes):
+    """One entry per underlying whose last parity level of the session sits
+    more than PARITY_CLOSE_TOLERANCE from its daily close.
+    closes: {underlying: {session_date: close}}."""
+    mismatches = []
+    for symbol in sorted({underlying_of(row.root) for row in rows}):
+        close = closes.get(symbol, {}).get(session.isoformat())
+        own = [row for row in rows if underlying_of(row.root) == symbol]
+        if close is None or not own:
+            continue
+        last = max(row.snapshot_ms for row in own)
+        level = next((r.underlying for r in own if r.snapshot_ms == last and r.underlying),
+                     None)
+        if level is None or abs(level - close) / close <= PARITY_CLOSE_TOLERANCE:
+            continue
+        mismatches.append({"session": session.isoformat(), "underlying": symbol,
+                           "parity_level": round(level, 4), "close": close})
+    return mismatches
 
 
 def run_backfill(client, store_path, sessions, config, redact=str):
@@ -384,7 +420,8 @@ def run_backfill(client, store_path, sessions, config, redact=str):
         connection.executescript(CHECKPOINT_SCHEMA)
         done = _done_sessions(connection, config.roots)
         todo = sorted(set(sessions) - done)
-        closes = chain_store.read_daily_closes(connection, "SPX")
+        closes = {symbol: chain_store.read_daily_closes(connection, symbol)
+                  for symbol in {underlying_of(root) for root in config.roots}}
         summary = {"sessions": len(set(sessions)), "already_done": len(set(sessions) & done),
                    "completed": [], "empty": [], "failed": [], "rows_written": 0,
                    "parity_mismatches": []}
@@ -409,15 +446,13 @@ def run_backfill(client, store_path, sessions, config, redact=str):
                 _checkpoint(connection, session, rows, config.roots)
                 summary["completed"].append(session.isoformat())
                 summary["rows_written"] += len(rows)
-                mismatch = _parity_mismatch(session, rows, closes)
-                if mismatch:
-                    summary["parity_mismatches"].append(mismatch)
+                summary["parity_mismatches"] += _parity_mismatches(session, rows, closes)
     finally:
         connection.close()
     summary["completed"].sort()
     summary["empty"].sort()
     summary["failed"].sort(key=lambda f: f["session"])
-    summary["parity_mismatches"].sort(key=lambda m: m["session"])
+    summary["parity_mismatches"].sort(key=lambda m: (m["session"], m["underlying"]))
     return summary
 
 
@@ -441,6 +476,37 @@ def load_cboe_closes(connection, fetch_text=_http_get):
     return counts
 
 
+def _session_date(epoch_seconds):
+    return datetime.fromtimestamp(int(epoch_seconds), tz=ET).date().isoformat()
+
+
+def load_yahoo_closes(connection, symbols, fetch_text=_http_get):
+    """Load daily closes and cash dividends for ETF symbols from Yahoo's chart
+    API; returns {symbol: {"closes": rows, "dividends": rows}}.
+
+    The close is Yahoo's "close": split-adjusted but not dividend-adjusted,
+    i.e. the price the options settled against. A dividend is keyed by its
+    ex-date."""
+    counts = {}
+    for symbol in symbols:
+        payload = json.loads(fetch_text(YAHOO_CHART_URL.format(symbol)))
+        error = (payload.get("chart") or {}).get("error")
+        if error:
+            raise ValueError(f"Yahoo has no chart for {symbol}: {error}")
+        (result,) = payload["chart"]["result"]
+        stamps = result.get("timestamp") or []
+        quote = result["indicators"]["quote"][0]
+        closes = {_session_date(t): float(c)
+                  for t, c in zip(stamps, quote.get("close") or []) if c is not None}
+        dividends = {_session_date(d["date"]): float(d["amount"])
+                     for d in ((result.get("events") or {}).get("dividends") or {}).values()}
+        counts[symbol] = {
+            "closes": chain_store.write_daily_closes(connection, symbol, closes),
+            "dividends": chain_store.write_dividends(connection, symbol, dividends),
+        }
+    return counts
+
+
 # ---------------------------------------------------------------------------
 # Probe
 # ---------------------------------------------------------------------------
@@ -457,30 +523,34 @@ def _stamping(frame, day):
     return f"intraday ({stamp:%H:%M} ET)"
 
 
-def run_probe(client, probe_date):
-    """The three day-one answers, as a dict."""
+def run_probe(client, probe_date, root="SPXW"):
+    """The day-one answers for one root, as a dict. index_before_2022 is None
+    for an ETF root, which has no index feed to ask about."""
     interval = vendor_interval(DEFAULT_TIMES)
-    spxw_expirations = _dates(client.list_expirations("SPXW"), "expiration")
+    expirations = _dates(client.list_expirations(root), "expiration")
     earliest, earliest_served = None, False
-    if spxw_expirations:
-        first = spxw_expirations[0]
-        quote_dates = _dates(client.list_dates("SPXW", first), "date")
-        earliest = (quote_dates or spxw_expirations)[0]
-        earliest_served = not client.quotes("SPXW", earliest, interval,
+    if expirations:
+        first = expirations[0]
+        quote_dates = _dates(client.list_dates(root, first), "date")
+        earliest = (quote_dates or expirations)[0]
+        earliest_served = not client.quotes(root, earliest, interval,
                                             (first - earliest).days).empty
-    dev_start_served = not client.quotes("SPXW", PROBE_DEV_START, interval,
+    dev_start_served = not client.quotes(root, PROBE_DEV_START, interval,
                                          BackfillConfig.max_dte).empty
 
-    stamped = _stamping(client.open_interest("SPXW", probe_date, 10), probe_date)
+    stamped = _stamping(client.open_interest(root, probe_date, 10), probe_date)
 
-    frame = client.index_price("SPX", PROBE_PRE_2022_DATE, interval)
-    supplied = (not frame.empty and "price" in frame
-                and bool((pd.to_numeric(frame["price"], errors="coerce") > 0).any()))
-    return {"earliest_spxw_date": earliest and earliest.isoformat(),
-            "earliest_spxw_date_served": earliest_served,
-            "spxw_dev_start_served": dev_start_served,
+    supplied = None
+    if root in INDEX_ROOTS:
+        frame = client.index_price(underlying_of(root), PROBE_PRE_2022_DATE, interval)
+        supplied = (not frame.empty and "price" in frame
+                    and bool((pd.to_numeric(frame["price"], errors="coerce") > 0).any()))
+    return {"root": root,
+            "earliest_date": earliest and earliest.isoformat(),
+            "earliest_date_served": earliest_served,
+            "dev_start_served": dev_start_served,
             "open_interest_stamped": stamped,
-            "spx_underlying_before_2022": supplied}
+            "index_before_2022": supplied}
 
 
 # ---------------------------------------------------------------------------
@@ -507,6 +577,8 @@ def parse_args(argv=None):
         description="Backfill the chain store from ThetaData, or probe the subscription.")
     parser.add_argument("--probe", action="store_true",
                         help="Answer the day-one questions and exit")
+    parser.add_argument("--probe-root", default="SPXW",
+                        help="Root the probe asks about (default SPXW; e.g. SPY)")
     parser.add_argument("--probe-date", type=date.fromisoformat,
                         help="Session whose open-interest stamp the probe inspects"
                              " (default: the last weekday)")
@@ -524,6 +596,8 @@ def parse_args(argv=None):
                         help="Most vendor requests in flight (Standard tier: 4)")
     parser.add_argument("--skip-cboe", action="store_true",
                         help="Do not refresh the Cboe VIX and SPX closes")
+    parser.add_argument("--skip-yahoo", action="store_true",
+                        help="Do not refresh the ETF roots' Yahoo closes and dividends")
     args = parser.parse_args(argv)
     if not args.probe and not (args.store and args.start and args.end):
         parser.error("--store, --start and --end are required unless --probe")
@@ -550,25 +624,29 @@ def main(argv=None, client_factory=ThetaDataClient, fetch_text=_http_get):
         return 2
     try:
         if args.probe:
+            root = args.probe_root
             probe = run_probe(client, args.probe_date or _last_weekday_before(
-                datetime.now(ET).date()))
-            served = "yes" if probe["earliest_spxw_date_served"] else "no"
-            print(f"Earliest SPXW date: {probe['earliest_spxw_date'] or 'none listed'}"
+                datetime.now(ET).date()), root)
+            served = "yes" if probe["earliest_date_served"] else "no"
+            print(f"Earliest {root} date: {probe['earliest_date'] or 'none listed'}"
                   f" (data returned: {served})")
-            print(f"SPXW data on {PROBE_DEV_START}: "
-                  f"{'yes' if probe['spxw_dev_start_served'] else 'no'}")
+            print(f"{root} data on {PROBE_DEV_START}: "
+                  f"{'yes' if probe['dev_start_served'] else 'no'}")
             print(f"Open interest stamped at: {probe['open_interest_stamped']}")
-            print("SPX underlying price before 2022: "
-                  f"{'yes' if probe['spx_underlying_before_2022'] else 'no'}")
+            if probe["index_before_2022"] is not None:
+                print(f"{underlying_of(root)} underlying price before 2022: "
+                      f"{'yes' if probe['index_before_2022'] else 'no'}")
             return 0
         config = BackfillConfig(roots=tuple(args.roots.split(",")), times=args.times,
                                 max_dte=args.max_dte, concurrency=args.concurrency)
-        if not args.skip_cboe:
-            connection = chain_store.connect(args.store)
-            try:
+        connection = chain_store.connect(args.store)
+        try:
+            if not args.skip_cboe:
                 load_cboe_closes(connection, fetch_text)
-            finally:
-                connection.close()
+            if not args.skip_yahoo and etf_symbols(config.roots):
+                load_yahoo_closes(connection, etf_symbols(config.roots), fetch_text)
+        finally:
+            connection.close()
         summary = run_backfill(client, args.store, _weekdays(args.start, args.end),
                                config, redact=redact)
     except Exception as exc:  # vendor errors included; never an unredacted traceback

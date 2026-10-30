@@ -58,3 +58,16 @@ def test_importable_by_the_railway_service_without_pandas():
     result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
                             cwd=ROOT / "railway-service" / "src")
     assert result.returncode == 0, result.stderr
+
+
+def test_dividends_round_trip_per_symbol(tmp_path):
+    path = tmp_path / "chain.sqlite3"
+    connection = cs.connect(path)
+    assert cs.write_dividends(connection, "SPY", {"2026-03-20": 1.74}) == 1
+    cs.write_dividends(connection, "QQQ", {"2026-03-23": 0.71})
+    connection.close()
+
+    reopened = cs.connect(path)
+    assert cs.read_dividends(reopened, "SPY") == {"2026-03-20": 1.74}
+    assert cs.read_dividends(reopened, "QQQ") == {"2026-03-23": 0.71}
+    assert cs.read_dividends(reopened, "IWM") == {}

@@ -121,7 +121,9 @@ class FakeClient:
                     T = mg.years_to_expiry(expiration.isoformat(), root, stamp_ms)
                     for strike in STRIKES:
                         for right in ("call", "put"):
-                            price = _price(self.spot, strike, T, right)
+                            spot = (self.spot[root] if isinstance(self.spot, dict)
+                                    else self.spot)
+                            price = _price(spot, strike, T, right)
                             records.append({
                                 "symbol": root, "expiration": expiration.isoformat(),
                                 "strike": strike, "right": right,
@@ -318,7 +320,8 @@ def test_parity_level_is_cross_checked_against_the_cboe_close(tmp_path):
                               _config())
     (mismatch,) = summary["parity_mismatches"]
     assert mismatch["session"] == tuesday.isoformat()
-    assert mismatch["cboe_close"] == 5200.0
+    assert mismatch["underlying"] == "SPX"
+    assert mismatch["close"] == 5200.0
     assert mismatch["parity_level"] == pytest.approx(SPOT, abs=0.1)
 
 
@@ -391,23 +394,34 @@ class ProbeClient(FakeClient):
                                               ("eod", "end of day")])
 def test_probe_answers_the_three_day_one_questions(stamping, answer):
     probe = bf.run_probe(ProbeClient(4246.44, oi_stamping=stamping), probe_date=MONDAY)
-    assert probe["earliest_spxw_date"] == "2016-10-03"
-    assert probe["earliest_spxw_date_served"] is True
-    assert probe["spxw_dev_start_served"] is True
+    assert probe["root"] == "SPXW"
+    assert probe["earliest_date"] == "2016-10-03"
+    assert probe["earliest_date_served"] is True
+    assert probe["dev_start_served"] is True
     assert probe["open_interest_stamped"] == answer
-    assert probe["spx_underlying_before_2022"] is True
+    assert probe["index_before_2022"] is True
 
 
 def test_probe_confirms_listed_dates_with_a_data_request():
     # The listings may not follow the tier: history that is listed but not served.
     probe = bf.run_probe(ProbeClient(4246.44, serves_early=False), probe_date=MONDAY)
-    assert probe["earliest_spxw_date_served"] is False
-    assert probe["spxw_dev_start_served"] is False
+    assert probe["earliest_date_served"] is False
+    assert probe["dev_start_served"] is False
 
 
 def test_probe_reports_a_missing_spx_underlying():
     probe = bf.run_probe(ProbeClient(0.0), probe_date=MONDAY)
-    assert probe["spx_underlying_before_2022"] is False
+    assert probe["index_before_2022"] is False
+
+
+def test_probe_asks_about_the_named_root_and_skips_the_index_for_an_etf():
+    client = ProbeClient(4246.44)
+    probe = bf.run_probe(client, probe_date=MONDAY, root="SPY")
+    assert probe["root"] == "SPY"
+    assert probe["earliest_date"] == "2016-10-03"
+    assert probe["index_before_2022"] is None
+    assert {c[1] for c in client.calls if c[0] in ("quotes", "list_expirations")} == {"SPY"}
+    assert not [c for c in client.calls if c[0] == "index_price"]
 
 
 def test_probe_mode_prints_the_three_answers(monkeypatch, capsys):
@@ -420,6 +434,17 @@ def test_probe_mode_prints_the_three_answers(monkeypatch, capsys):
     assert "SPXW data on 2018-01-02: yes" in out
     assert "Open interest stamped at: start of day" in out
     assert "SPX underlying price before 2022: yes" in out
+
+
+def test_probe_mode_names_an_etf_root_and_omits_the_index_line(monkeypatch, capsys):
+    monkeypatch.setenv("THETADATA_API_KEY", "td-test-key")
+    code = bf.main(["--probe", "--probe-root", "SPY", "--probe-date", MONDAY.isoformat()],
+                   client_factory=lambda key: ProbeClient(4246.44))
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "Earliest SPY date: 2016-10-03 (data returned: yes)" in out
+    assert "SPY data on 2018-01-02: yes" in out
+    assert "underlying price before 2022" not in out
 
 
 # ---------------------------------------------------------------------------
@@ -511,3 +536,122 @@ def test_vendor_error_outside_a_session_is_redacted(monkeypatch, capsys):
     assert code == 2
     assert "session expired for ***" in captured.err
     assert secret not in captured.out + captured.err
+
+
+# ---------------------------------------------------------------------------
+# ETF roots (SPY, QQQ): one parity level per underlying, Yahoo closes
+# ---------------------------------------------------------------------------
+def test_each_underlying_gets_its_own_parity_level(tmp_path):
+    # SPY and QQQ quoted in the same snapshots must not share a level.
+    path = tmp_path / "chain.sqlite3"
+    client = FakeClient([MONDAY], spot={"SPY": 5012.0, "QQQ": 4987.0})
+    bf.run_backfill(client, path, [MONDAY], _config(roots=("SPY", "QQQ")))
+    for root, spot in (("SPY", 5012.0), ("QQQ", 4987.0)):
+        rows = [r for r in _rows(path) if r.root == root]
+        assert rows
+        assert {round(r.underlying, 1) for r in rows} == {spot}
+
+
+def test_spx_and_spxw_still_share_one_level(tmp_path):
+    path = tmp_path / "chain.sqlite3"
+    bf.run_backfill(FakeClient([MONDAY], spot=5012.34), path, [MONDAY],
+                    _config(roots=("SPX", "SPXW")))
+    stamp = _ms(MONDAY, 10)
+    (level,) = {r.underlying for r in _rows(path, start_ms=stamp, end_ms=stamp)}
+    assert level == pytest.approx(5012.34, abs=0.1)
+
+
+def test_parity_is_cross_checked_per_underlying(tmp_path):
+    path = tmp_path / "chain.sqlite3"
+    connection = cs.connect(path)
+    cs.write_daily_closes(connection, "SPY", {MONDAY.isoformat(): 5012.0})
+    cs.write_daily_closes(connection, "QQQ", {MONDAY.isoformat(): 5300.0})
+    connection.close()
+    client = FakeClient([MONDAY], spot={"SPY": 5012.0, "QQQ": 4987.0})
+    summary = bf.run_backfill(client, path, [MONDAY], _config(roots=("SPY", "QQQ")))
+    (mismatch,) = summary["parity_mismatches"]
+    assert mismatch["underlying"] == "QQQ"
+    assert mismatch["close"] == 5300.0
+    assert mismatch["parity_level"] == pytest.approx(4987.0, abs=0.1)
+
+
+def _yahoo_payload(symbol):
+    # Yahoo stamps daily bars at the 09:30 ET open, in epoch seconds.
+    def opening(day):
+        return int(datetime(day.year, day.month, day.day, 9, 30, tzinfo=ET).timestamp())
+    tuesday = MONDAY + timedelta(days=1)
+    closes = {"SPY": [501.25, None], "QQQ": [430.5, 431.75]}[symbol]
+    events = {"dividends": {str(opening(tuesday)): {"amount": 1.74, "date": opening(tuesday)}}}
+    return json.dumps({"chart": {"error": None, "result": [{
+        "timestamp": [opening(MONDAY), opening(tuesday)],
+        "indicators": {"quote": [{"close": closes}]},
+        "events": events if symbol == "SPY" else {},
+    }]}})
+
+
+def _yahoo_fetch(url):
+    for symbol in ("SPY", "QQQ"):
+        if f"/chart/{symbol}?" in url:
+            return _yahoo_payload(symbol)
+    return _cboe_fetch(url)
+
+
+def test_yahoo_closes_and_dividends_are_loaded(tmp_path):
+    connection = cs.connect(tmp_path / "chain.sqlite3")
+    counts = bf.load_yahoo_closes(connection, ["SPY", "QQQ"], fetch_text=_yahoo_fetch)
+    tuesday = (MONDAY + timedelta(days=1)).isoformat()
+    assert counts == {"SPY": {"closes": 1, "dividends": 1},
+                      "QQQ": {"closes": 2, "dividends": 0}}
+    # A missing close (null) is skipped, not stored as zero.
+    assert cs.read_daily_closes(connection, "SPY") == {MONDAY.isoformat(): 501.25}
+    assert cs.read_daily_closes(connection, "QQQ") == {MONDAY.isoformat(): 430.5,
+                                                      tuesday: 431.75}
+    assert cs.read_dividends(connection, "SPY") == {tuesday: 1.74}
+
+
+def test_a_yahoo_error_is_raised():
+    def failing(url):
+        return json.dumps({"chart": {"result": None,
+                                     "error": {"code": "Not Found"}}})
+    with pytest.raises(ValueError, match="no chart for SPY"):
+        bf.load_yahoo_closes(cs.connect(":memory:"), ["SPY"], fetch_text=failing)
+
+
+def test_etf_symbols_are_the_non_index_underlyings():
+    assert bf.etf_symbols(("SPX", "SPXW")) == []
+    assert bf.etf_symbols(("SPXW", "SPY", "QQQ", "SPY")) == ["QQQ", "SPY"]
+
+
+def test_backfill_command_loads_yahoo_closes_for_etf_roots(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("THETADATA_API_KEY", "td-test-key")
+    path = tmp_path / "chain.sqlite3"
+    fetched = []
+
+    def fetch(url):
+        fetched.append(url)
+        return _yahoo_fetch(url)
+    code = bf.main(["--store", str(path), "--start", MONDAY.isoformat(),
+                    "--end", MONDAY.isoformat(), "--roots", "SPY,QQQ",
+                    "--times", "10:00,10:30", "--skip-cboe"],
+                   client_factory=lambda key: FakeClient([MONDAY]),
+                   fetch_text=fetch)
+    capsys.readouterr()
+    assert code == 0
+    assert len(fetched) == 2 and all("finance.yahoo.com" in url for url in fetched)
+    connection = cs.connect(path)
+    assert cs.read_dividends(connection, "SPY")
+    connection.close()
+
+
+def test_backfill_command_skips_yahoo_for_index_roots(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("THETADATA_API_KEY", "td-test-key")
+    fetched = []
+
+    def fetch(url):
+        fetched.append(url)
+        return _yahoo_fetch(url)
+    bf.main(["--store", str(tmp_path / "chain.sqlite3"), "--start", MONDAY.isoformat(),
+             "--end", MONDAY.isoformat(), "--roots", "SPXW", "--times", "10:00"],
+            client_factory=lambda key: FakeClient([MONDAY]), fetch_text=fetch)
+    capsys.readouterr()
+    assert not [url for url in fetched if "yahoo" in url]

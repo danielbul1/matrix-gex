@@ -1,0 +1,61 @@
+name: Archive option chains
+
+# One end-of-day snapshot per symbol per session, kept on the orphan
+# `chain-archive` branch: our own options history, from the day this ran
+# first. The script itself refuses to write outside the session's evening
+# (16:15 ET to midnight), so a late or early run is harmless.
+
+on:
+  workflow_dispatch:
+  schedule:
+    # 20:37, 21:37 and 22:37 UTC, Mon-Fri: from 16:37 ET under EDT and from
+    # 16:37 ET under EST, with spares because GitHub can start schedules late.
+    - cron: "37 20,21,22 * * 1-5"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: archive-chains
+  cancel-in-progress: false
+
+jobs:
+  archive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Fetch today's chains
+        run: python tools/archive_cboe_chain.py --out /tmp/chain_archive
+
+      - name: Commit to the chain-archive branch
+        run: |
+          set -eu
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if [ -z "$(find /tmp/chain_archive -name '*.csv.gz' 2>/dev/null)" ]; then
+            echo "Nothing new to archive"
+            exit 0
+          fi
+          if git fetch origin chain-archive; then
+            git switch --force-create chain-archive origin/chain-archive
+          else
+            git switch --orphan chain-archive
+            git rm -rf --quiet . || true
+          fi
+          mkdir -p chain_archive
+          cp -rn /tmp/chain_archive/. chain_archive/
+          git add chain_archive
+          if git diff --cached --quiet; then
+            echo "Nothing new to commit"
+          else
+            git commit -m "Archive option chains $(date -u +%F)"
+            git push origin chain-archive
+          fi
