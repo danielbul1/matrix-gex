@@ -8,6 +8,7 @@ from those quotes by hand.
 import importlib.util
 import json
 import math
+import statistics
 import sys
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -533,3 +534,71 @@ def test_a_quote_above_its_bound_is_never_an_entry(tmp_path):
     report = bo.run_experiment(path, _config(width=5.0))
     assert report["trades"] == []
     assert report["skipped"][0]["reason"] == "missing or crossed quote on a leg"
+
+
+# ---------------------------------------------------------------------------
+# The Deflated Sharpe Ratio
+# ---------------------------------------------------------------------------
+def test_deflated_sharpe_matches_bailey_and_lopez_de_prado():
+    # Their worked example: 100 trials whose annualized Sharpes vary by 0.5,
+    # a best Sharpe of 2.5 over 1250 daily returns, skew -3, kurtosis 10.
+    days = 250
+    spread = math.sqrt(0.5 / days)  # per-period standard deviation of the trials
+    sr0 = spread * ((1 - bo.EULER_GAMMA) * bo.NormalDist().inv_cdf(1 - 1 / 100)
+                    + bo.EULER_GAMMA * bo.NormalDist().inv_cdf(1 - 1 / (100 * math.e)))
+    assert sr0 == pytest.approx(0.1132, abs=5e-5)
+    dsr = bo.deflated_sharpe(2.5 / math.sqrt(days), sr0, 1250, -3, 10)
+    assert dsr == pytest.approx(0.9004, abs=5e-4)
+
+
+def test_expected_max_sharpe_grows_with_the_number_of_tries():
+    sharpes = [0.01, 0.03, -0.02, 0.05]
+    assert bo.expected_max_sharpe(sharpes, 100) > bo.expected_max_sharpe(sharpes, 10) > 0
+    assert bo.expected_max_sharpe([0.02]) == 0.0
+
+
+def test_return_moments_of_a_known_series():
+    m = bo.return_moments([0.01, -0.01, 0.02, 0.0])
+    assert m["T"] == 4
+    assert m["sr"] == pytest.approx(0.005 / statistics.stdev([0.01, -0.01, 0.02, 0.0]))
+    assert bo.return_moments([0.01, 0.01, 0.01]) is None  # flat
+
+
+def test_compare_reports_a_deflated_sharpe_per_row(tmp_path):
+    tuesday = MONDAY + timedelta(days=1)
+    closes = {MONDAY: SPOT, tuesday: 505.0, EXPIRY: 510.0, tuesday + timedelta(days=7): 490.0}
+    path = _store(tmp_path, [_chain(MONDAY), _chain(tuesday)], closes)
+    report = bo.run_compare(path, ["SPY"])
+    rows = report["underlyings"]["SPY"]["rows"]
+    assert all("deflated_sharpe" in row for row in rows)
+    assert any(row["deflated_sharpe"] is not None for row in rows)
+    assert all(0 <= row["deflated_sharpe"] <= 1 for row in rows if row["deflated_sharpe"])
+    assert "DSR is the Deflated Sharpe Ratio" in bo.format_summary(report)
+
+
+# ---------------------------------------------------------------------------
+# The VRP Filter
+# ---------------------------------------------------------------------------
+def test_vrp_filter_keeps_sessions_whose_implied_vol_is_rich():
+    sessions = [MONDAY + timedelta(days=i) for i in range(4)]
+    covariates = {day: {"vix": 15.0 + i, "atm_iv": 0.2, "vrp": vrp}
+                  for i, (day, vrp) in enumerate(zip(sessions, (0.05, -0.02, 0.01, None)))}
+    filters = bo.gex_filters([], [], sessions, {}, covariates, _config(width=5.0))
+    vrp = next(f for f in filters if f["filter"] == bo.FILTER_POSITIVE_VRP)
+    rows = {row["sessions"]: row for row in vrp["rows"]}
+    assert rows[bo.ROW_KEPT]["session_count"] == 2
+    assert rows[bo.ROW_REJECTED]["session_count"] == 1
+    assert vrp["undecided"] == [{"session": sessions[3].isoformat(),
+                                 "reason": "no VRP at entry"}]
+    assert vrp["threshold"] == bo.VRP_THRESHOLD
+
+
+def test_vrp_filter_regression_leaves_vrp_out(tmp_path):
+    path, _ = _filter_store(tmp_path)
+    (report,) = bo.run_gex_filter(path, [_config(width=5.0)])["reports"]
+    vrp = next(f for f in report["filters"] if f["filter"] == bo.FILTER_POSITIVE_VRP)
+    coefficients = vrp["comparison"]["regression"]["coefficients"]
+    assert coefficients is None or "vrp" not in coefficients
+    regime = next(f for f in report["filters"] if f["filter"] == bo.FILTER_POSITIVE_GAMMA)
+    assert regime["comparison"]["regression"]["coefficients"] is None or \
+        "vrp" in regime["comparison"]["regression"]["coefficients"]

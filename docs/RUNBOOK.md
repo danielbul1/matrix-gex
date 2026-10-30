@@ -296,6 +296,37 @@ python tools\backtest_options.py --store C:\path\etf.sqlite3 --strategy gex_wall
   the entry snapshot, VRP is ATM IV less 20-day realized vol of the
   underlying.
 
+- The VRP Filter rides along in `--gex-filter` and `--gex-study`: it keeps
+  sessions whose ATM IV beats 20-day realized vol (VRP > 0). Its regression
+  controls for VIX and ATM IV only, since controlling for VRP would explain
+  the filter away.
+- `--compare` adds each row's Deflated Sharpe Ratio (Bailey and Lopez de
+  Prado, 2014): the probability that its Sharpe beats the best Sharpe as many
+  skill-free tries as the run made would show. Rows under 95% have not
+  survived the search.
+
+### Our own chain archive
+
+`.github/workflows/archive-chains.yml` runs `tools/archive_cboe_chain.py`
+after the close each weekday and commits one gzipped CSV per symbol per
+session (SPY, QQQ, SPX) to the orphan `chain-archive` branch. It runs from
+the default branch only, so it starts once this lands on main; every
+evening it misses is lost.
+
+```powershell
+git fetch origin chain-archive
+git worktree add ..\chain-archive origin/chain-archive
+python tools\import_eod_chain.py --store C:\path\fresh.sqlite3 --archive ..\chain-archive\chain_archive --symbol SPY --yahoo --vix
+python tools\backtest_options.py --store C:\path\fresh.sqlite3 --gex-filter --strategy short_strangle --entry-time 16:00 --holdout --start 2026-10-30
+```
+
+- The script writes only on the session's own evening (16:15 ET to
+  midnight): earlier quotes are not closing quotes, and the next morning
+  Cboe may already show open interest a close entry could not have known.
+- About 340 KB a day for the three symbols, roughly 85 MB a year.
+- Everything archived lies after `HOLDOUT_START`, so `--holdout --start
+  2026-10-30` replays only sessions no test has seen yet.
+
 ### End-of-day archive
 
 ```powershell

@@ -85,6 +85,7 @@ import json
 import math
 import statistics
 import sys
+from statistics import NormalDist
 from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass
 from datetime import date, timedelta
@@ -158,6 +159,11 @@ IV_COVERAGE_MIN = spread_bt.IV_COVERAGE_MIN
 GEX_PERCENTILE_THRESHOLD = spread_bt.GEX_PERCENTILE_THRESHOLD
 FILTER_POSITIVE_GAMMA = spread_bt.FILTER_POSITIVE_GAMMA
 FILTER_GEX_PERCENTILE = spread_bt.FILTER_GEX_PERCENTILE
+# The VRP Filter: trade only when implied vol (ATM IV at entry) sits above
+# the underlying's realized vol over the last REALIZED_VOL_WINDOW days by
+# more than VRP_THRESHOLD, i.e. when the premium sold is rich.
+FILTER_POSITIVE_VRP = "positive_vrp"
+VRP_THRESHOLD = 0.0
 ROW_KEPT, ROW_REJECTED = spread_bt.ROW_KEPT, spread_bt.ROW_REJECTED
 ROW_BASELINE, ROW_IV_MATCHED = spread_bt.ROW_BASELINE, spread_bt.ROW_IV_MATCHED
 REALIZED_VOL_WINDOW = spread_bt.REALIZED_VOL_WINDOW
@@ -175,6 +181,8 @@ TRADING_DAYS = spread_bt.TRADING_DAYS
 MULTIPLE_TESTING_LINE = (
     "{} configurations were tried. With that many, the best ones look good"
     " partly by luck: pick on the Dev Period, then run that one on the Holdout.")
+EULER_GAMMA = 0.5772156649015329
+DSR_PASS = 0.95  # a Deflated Sharpe at or above this survives the search
 CAVEATS = (
     f"ETF exchange fees are a rough ${ETF_FEE_PER_CONTRACT:.2f} per contract estimate.",
     "IV and deltas are European (Black-Scholes) on the parity level;"
@@ -729,6 +737,57 @@ def size_trades(positions, config):
 
 
 # ---------------------------------------------------------------------------
+# The Deflated Sharpe Ratio (Bailey and Lopez de Prado, 2014)
+# ---------------------------------------------------------------------------
+def return_moments(returns):
+    """{"sr", "T", "skew", "kurt"} of daily returns: the per-period Sharpe,
+    the count, skewness and (non-excess) kurtosis; None when flat or short."""
+    returns = list(returns)
+    if len(returns) < 3:
+        return None
+    mean, sd = statistics.fmean(returns), statistics.pstdev(returns)
+    if sd == 0:
+        return None
+    third = statistics.fmean((r - mean) ** 3 for r in returns) / sd ** 3
+    fourth = statistics.fmean((r - mean) ** 4 for r in returns) / sd ** 4
+    return {"sr": mean / statistics.stdev(returns), "T": len(returns),
+            "skew": third, "kurt": fourth}
+
+
+def expected_max_sharpe(trial_sharpes, trials=None):
+    """SR0: the Sharpe the best of `trials` strategies with no skill would
+    show, from the spread of the per-period Sharpes actually tried."""
+    trials = trials or len(trial_sharpes)
+    if trials < 2 or len(trial_sharpes) < 2:
+        return 0.0
+    normal = NormalDist()
+    return math.sqrt(statistics.variance(trial_sharpes)) * (
+        (1 - EULER_GAMMA) * normal.inv_cdf(1 - 1 / trials)
+        + EULER_GAMMA * normal.inv_cdf(1 - 1 / (trials * math.e)))
+
+
+def deflated_sharpe(sr, sr0, T, skew, kurt):
+    """The probability that a per-period Sharpe `sr` over T returns beats
+    SR0, allowing for skewness and fat tails (kurt is non-excess)."""
+    denominator = 1 - skew * sr + (kurt - 1) / 4 * sr ** 2
+    if T < 2 or denominator <= 0:
+        return None
+    return NormalDist().cdf((sr - sr0) * math.sqrt(T - 1) / math.sqrt(denominator))
+
+
+def deflate(rows):
+    """Add each row's Deflated Sharpe, deflating by every row tried (rows:
+    dicts with a "moments" entry). Returns SR0, annualized."""
+    tried = [row["moments"]["sr"] for row in rows if row["moments"]]
+    sr0 = expected_max_sharpe(tried, len(rows))
+    for row in rows:
+        m = row["moments"]
+        row["deflated_sharpe"] = None if not m else deflated_sharpe(
+            m["sr"], sr0, m["T"], m["skew"], m["kurt"])
+    return sr0 * math.sqrt(TRADING_DAYS)
+
+
+# ---------------------------------------------------------------------------
 # Benchmark and the Holdout
 # ---------------------------------------------------------------------------
 def buy_and_hold(closes, first, last):
@@ -810,6 +869,8 @@ def run_configs(store_path, configs, start=None, end=None, holdout=False,
                 "period": _period(first, last, holdout, entry_time),
                 "sessions": len(sessions),
                 "metrics": spread_bt.compute_metrics(trades, sessions, config.initial_equity),
+                "moments": return_moments(spread_bt.daily_returns(
+                    trades, sessions, config.initial_equity).values()) if trades else None,
                 "exits": dict(Counter(t["exit"] for t in trades)),
                 "trades": trades,
                 "skipped": sorted(skipped[config.selection] + sizing_skips,
@@ -865,10 +926,12 @@ def run_compare(store_path, underlyings, start=None, end=None, holdout=False,
             "rows": [{**{k: report["config"][k] for k in
                          ("strategy", "delta", "width", "exit_rule")},
                       "period": report["period"], "sessions": report["sessions"],
-                      "metrics": report["metrics"], "exits": report["exits"],
-                      "skipped": len(report["skipped"])}
+                      "metrics": report["metrics"], "moments": report["moments"],
+                      "exits": report["exits"], "skipped": len(report["skipped"])}
                      for report in reports.values()],
         }
+    every_row = [row for block in result["underlyings"].values() for row in block["rows"]]
+    result["expected_max_sharpe"] = deflate(every_row)
     result["configurations_tried"] = tried
     result["multiple_testing"] = MULTIPLE_TESTING_LINE.format(tried)
     result["caveats"] = list(CAVEATS)
@@ -909,10 +972,10 @@ def _filter_row(label, days, positions, skipped, sessions, config):
 
 
 def gex_filters(positions, skipped, sessions, series, covariates, config,
-                percentile_threshold=GEX_PERCENTILE_THRESHOLD):
-    """Both GEX Filters over one strategy's positions, each split into kept,
-    Rejected and Undecided Sessions and compared with its IV-Matched Control
-    (the same number of the lowest-VIX sessions)."""
+                percentile_threshold=GEX_PERCENTILE_THRESHOLD, vrp_threshold=VRP_THRESHOLD):
+    """Both GEX Filters and the VRP Filter over one strategy's positions, each
+    split into kept, Rejected and Undecided Sessions and compared with its
+    IV-Matched Control (the same number of the lowest-VIX sessions)."""
     percentiles = spread_bt.gex_percentiles(series)
 
     def positive_gamma(day):
@@ -926,10 +989,18 @@ def gex_filters(positions, skipped, sessions, series, covariates, config,
                           " past sessions of GEX")
         return percentiles[day] > percentile_threshold, None
 
+    def positive_vrp(day):
+        vrp = covariates[day]["vrp"]
+        return (None, "no VRP at entry") if vrp is None else (vrp > vrp_threshold, None)
+
     filters = []
-    for name, decide, settings in (
-            (FILTER_POSITIVE_GAMMA, positive_gamma, {}),
-            (FILTER_GEX_PERCENTILE, above_percentile, {"threshold": percentile_threshold})):
+    for name, decide, settings, names in (
+            (FILTER_POSITIVE_GAMMA, positive_gamma, {}, spread_bt.REGRESSION_COVARIATES),
+            (FILTER_GEX_PERCENTILE, above_percentile, {"threshold": percentile_threshold},
+             spread_bt.REGRESSION_COVARIATES),
+            # Controlling for VRP would explain the VRP Filter away.
+            (FILTER_POSITIVE_VRP, positive_vrp, {"threshold": vrp_threshold},
+             ("vix", "atm_iv"))):
         kept, rejected, undecided = set(), set(), []
         for day in sessions:
             keep, reason = decide(day)
@@ -948,7 +1019,7 @@ def gex_filters(positions, skipped, sessions, series, covariates, config,
         rows[ROW_IV_MATCHED]["vix_threshold"] = threshold
         filters.append({"filter": name, **settings, "rows": list(rows.values()),
                         "comparison": spread_bt.compare(kept, rows, covariates, sessions,
-                                                        config),
+                                                        config, names),
                         "undecided": undecided})
     return filters
 
@@ -1048,19 +1119,26 @@ def format_summary(compare):
                          f" Sharpe {_number(bench['sharpe'])},"
                          f" max drawdown {_percent(bench['max_drawdown'])}.")
             lines.append("")
-        lines.append("| Strategy | Delta | Width | Exit | Trades | Sharpe | Sortino"
+        lines.append("| Strategy | Delta | Width | Exit | Trades | Sharpe | DSR | Sortino"
                      " | Max DD | CVaR 5% | Win | Total P&L |")
-        lines.append("|---|---|---|---|---|---|---|---|---|---|---|")
+        lines.append("|---|---|---|---|---|---|---|---|---|---|---|---|")
         for row in block["rows"]:
             m = row["metrics"]
             lines.append(
                 f"| {row['strategy']} | {_delta(row['delta'])} | {_width(row['width'])}"
                 f" | {row['exit_rule']} | {m['trades']} | {_number(m['sharpe'])}"
+                f" | {_percent(row.get('deflated_sharpe'))}"
                 f" | {_number(m['sortino'])} | {_percent(m['max_drawdown'])}"
                 f" | {_percent(m['cvar_5'])} | {_percent(m['win_rate'])}"
                 f" | {m['total_pnl']:,.0f} |")
         lines.append("")
     lines.append(compare["multiple_testing"])
+    lines.append("")
+    lines.append(
+        f"DSR is the Deflated Sharpe Ratio: the probability that a row's Sharpe beats"
+        f" {_number(compare['expected_max_sharpe'])} (annualized), the best Sharpe"
+        f" {compare['configurations_tried']} skill-free tries would show. A row needs"
+        f" {DSR_PASS:.0%} to survive the search.")
     lines.append("")
     lines.append("Caveats:")
     lines += [f"- {caveat}" for caveat in compare["caveats"]]
@@ -1076,7 +1154,8 @@ def format_gex_summary(study):
     strategy and GEX Filter, kept sessions beside their IV-Matched Control."""
     lines = [f"# GEX Study ({'Holdout' if study['holdout'] else 'Dev Period'},"
              f" entry {study['entry_time']} ET)", "",
-             "Each GEX Filter keeps some sessions. It counts as an edge only when"
+             "Each filter (Gamma Regime, GEX Percentile, and the VRP Filter: implied"
+             " above realized vol) keeps some sessions. It counts as an edge only when"
              " it beats its IV-Matched Control (the same number of the lowest-VIX"
              " sessions): regression and bootstrap intervals above zero, and a better"
              " mean P&L in every year.", ""]

@@ -122,6 +122,18 @@ _Avoid_: wall condor (alone), GEX condor
 The GEX Filters run on every Strategy's default configuration, per underlying, each against its IV-Matched Control.
 _Avoid_: GEX backtest
 
+**VRP Filter**:
+A filter that trades only when ATM IV at entry sits above the underlying's 20-day realized vol, i.e. when the premium sold is rich.
+_Avoid_: vol filter, IV filter
+
+**Deflated Sharpe Ratio**:
+The probability that a configuration's Sharpe beats the best Sharpe as many skill-free tries as the comparison made would show. Under 95%, the row has not survived the search.
+_Avoid_: adjusted Sharpe, DSR score
+
+**Chain Archive**:
+Our own end-of-day option chains, one file per symbol per session, kept on the `chain-archive` branch from 2026-10-30 on. The only history no test has seen.
+_Avoid_: snapshot store, backup
+
 **Early Assignment**:
 A short ETF call exercised the evening before an ex-dividend date, because it is in the money and its time value is below the dividend.
 _Avoid_: early exercise (that is the holder's side)
