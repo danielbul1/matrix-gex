@@ -1024,6 +1024,18 @@ def gex_filters(positions, skipped, sessions, series, covariates, config,
     return filters
 
 
+FILTERS_NULL_LINE = "VERDICT: no filter beats its IV-Matched Control."
+FILTERS_POSITIVE_LINE = ("VERDICT: {} beat(s) the IV-Matched Control significantly and"
+                         " consistently across years.")
+
+
+def verdict_line(filters):
+    """One sentence naming the filters, GEX or VRP, that earned a positive verdict."""
+    winners = [f["filter"] for f in filters
+               if f["comparison"]["verdict"] == spread_bt.VERDICT_POSITIVE]
+    return FILTERS_POSITIVE_LINE.format(", ".join(winners)) if winners else FILTERS_NULL_LINE
+
+
 def run_gex_filter(store_path, configs, start=None, end=None, holdout=False,
                    entry_time=ENTRY_TIME, percentile_threshold=GEX_PERCENTILE_THRESHOLD):
     """One GEX Filter report per configuration (all on one underlying)."""
@@ -1042,7 +1054,7 @@ def run_gex_filter(store_path, configs, start=None, end=None, holdout=False,
             filters = gex_filters(positions, skipped[config.selection], sessions, series,
                                   covariates, config, percentile_threshold)
             reports.append({
-                "verdict": spread_bt.verdict_line(filters),
+                "verdict": verdict_line(filters),
                 "config": asdict(config),
                 "period": _period(first, last, holdout, entry_time),
                 "sessions": len(sessions),
