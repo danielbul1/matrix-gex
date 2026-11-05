@@ -8,51 +8,51 @@
   "reference_symbol": "SPX",
   "schema_version": 1,
   "source": "Cboe delayed options snapshot",
-  "state": "fresh",
+  "state": "off_hours",
   "summary": {
-    "latest_asof_et": "2026-11-04T15:10:23-05:00",
+    "latest_asof_et": "2026-11-04T16:14:59-05:00",
     "latest_symbol": "NDX",
-    "oldest_asof_et": "2026-11-04T15:10:16-05:00",
-    "oldest_symbol": "QQQ",
+    "oldest_asof_et": "2026-11-04T15:59:59-05:00",
+    "oldest_symbol": "SPY",
     "symbols": 4,
-    "total_contracts": 37418
+    "total_contracts": 37396
   },
   "symbols": {
     "NDX": {
-      "asof": "2026-11-04T15:10:23",
-      "asof_et": "2026-11-04T15:10:23-05:00",
+      "asof": "2026-11-04T16:14:59",
+      "asof_et": "2026-11-04T16:14:59-05:00",
       "contracts": 5596,
       "expiries": 42,
       "first_expiry": "2026-11-04",
       "last_expiry": "2029-12-21",
-      "spot": 28456.9
+      "spot": 28437.17
     },
     "QQQ": {
-      "asof": "2026-11-04T15:10:16",
-      "asof_et": "2026-11-04T15:10:16-05:00",
-      "contracts": 5992,
+      "asof": "2026-11-04T15:59:59",
+      "asof_et": "2026-11-04T15:59:59-05:00",
+      "contracts": 5967,
       "expiries": 31,
       "first_expiry": "2026-11-04",
       "last_expiry": "2029-01-19",
-      "spot": 692.35
+      "spot": 690.86
     },
     "SPX": {
-      "asof": "2026-11-04T15:10:20",
-      "asof_et": "2026-11-04T15:10:20-05:00",
-      "contracts": 18859,
+      "asof": "2026-11-04T16:14:59",
+      "asof_et": "2026-11-04T16:14:59-05:00",
+      "contracts": 18862,
       "expiries": 54,
       "first_expiry": "2026-11-04",
       "last_expiry": "2031-12-19",
-      "spot": 7697.6
+      "spot": 7688.62
     },
     "SPY": {
-      "asof": "2026-11-04T15:10:18",
-      "asof_et": "2026-11-04T15:10:18-05:00",
+      "asof": "2026-11-04T15:59:59",
+      "asof_et": "2026-11-04T15:59:59-05:00",
       "contracts": 6971,
       "expiries": 33,
       "first_expiry": "2026-11-04",
       "last_expiry": "2029-01-19",
-      "spot": 767.39
+      "spot": 767.36
     }
   }
 }
