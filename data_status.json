@@ -8,51 +8,51 @@
   "reference_symbol": "SPX",
   "schema_version": 1,
   "source": "Cboe delayed options snapshot",
-  "state": "fresh",
+  "state": "off_hours",
   "summary": {
-    "latest_asof_et": "2026-11-06T14:41:33-05:00",
-    "latest_symbol": "SPX",
-    "oldest_asof_et": "2026-11-06T14:41:15-05:00",
-    "oldest_symbol": "SPY",
+    "latest_asof_et": "2026-11-06T16:14:59-05:00",
+    "latest_symbol": "NDX",
+    "oldest_asof_et": "2026-11-06T15:59:59-05:00",
+    "oldest_symbol": "QQQ",
     "symbols": 4,
-    "total_contracts": 38752
+    "total_contracts": 38773
   },
   "symbols": {
     "NDX": {
-      "asof": "2026-11-06T14:41:17",
-      "asof_et": "2026-11-06T14:41:17-05:00",
-      "contracts": 5752,
+      "asof": "2026-11-06T16:14:59",
+      "asof_et": "2026-11-06T16:14:59-05:00",
+      "contracts": 5742,
       "expiries": 42,
       "first_expiry": "2026-11-06",
       "last_expiry": "2029-12-21",
-      "spot": 27073.18
+      "spot": 26989.99
     },
     "QQQ": {
-      "asof": "2026-11-06T14:41:20",
-      "asof_et": "2026-11-06T14:41:20-05:00",
-      "contracts": 6147,
+      "asof": "2026-11-06T15:59:59",
+      "asof_et": "2026-11-06T15:59:59-05:00",
+      "contracts": 6145,
       "expiries": 32,
       "first_expiry": "2026-11-06",
       "last_expiry": "2029-01-19",
-      "spot": 658.62
+      "spot": 657.12
     },
     "SPX": {
-      "asof": "2026-11-06T14:41:33",
-      "asof_et": "2026-11-06T14:41:33-05:00",
-      "contracts": 19583,
+      "asof": "2026-11-06T16:14:59",
+      "asof_et": "2026-11-06T16:14:59-05:00",
+      "contracts": 19616,
       "expiries": 54,
       "first_expiry": "2026-11-06",
       "last_expiry": "2031-12-19",
-      "spot": 7401.41
+      "spot": 7376.86
     },
     "SPY": {
-      "asof": "2026-11-06T14:41:15",
-      "asof_et": "2026-11-06T14:41:15-05:00",
+      "asof": "2026-11-06T16:00:00",
+      "asof_et": "2026-11-06T16:00:00-05:00",
       "contracts": 7270,
       "expiries": 34,
       "first_expiry": "2026-11-06",
       "last_expiry": "2029-01-19",
-      "spot": 737.94
+      "spot": 736.1
     }
   }
 }
