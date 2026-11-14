@@ -8,51 +8,51 @@
   "reference_symbol": "SPX",
   "schema_version": 1,
   "source": "Cboe delayed options snapshot",
-  "state": "fresh",
+  "state": "off_hours",
   "summary": {
-    "latest_asof_et": "2026-11-13T15:13:36-05:00",
-    "latest_symbol": "SPX",
-    "oldest_asof_et": "2026-11-13T15:13:18-05:00",
-    "oldest_symbol": "SPY",
+    "latest_asof_et": "2026-11-13T16:14:59-05:00",
+    "latest_symbol": "NDX",
+    "oldest_asof_et": "2026-11-13T15:59:59-05:00",
+    "oldest_symbol": "QQQ",
     "symbols": 4,
-    "total_contracts": 39969
+    "total_contracts": 39957
   },
   "symbols": {
     "NDX": {
-      "asof": "2026-11-13T15:13:27",
-      "asof_et": "2026-11-13T15:13:27-05:00",
+      "asof": "2026-11-13T16:14:59",
+      "asof_et": "2026-11-13T16:14:59-05:00",
       "contracts": 6131,
       "expiries": 41,
       "first_expiry": "2026-11-13",
       "last_expiry": "2029-12-21",
-      "spot": 27937.54
+      "spot": 27943.74
     },
     "QQQ": {
-      "asof": "2026-11-13T15:13:25",
-      "asof_et": "2026-11-13T15:13:25-05:00",
-      "contracts": 6539,
+      "asof": "2026-11-13T15:59:59",
+      "asof_et": "2026-11-13T15:59:59-05:00",
+      "contracts": 6501,
       "expiries": 30,
       "first_expiry": "2026-11-13",
       "last_expiry": "2029-01-19",
-      "spot": 679.68
+      "spot": 674.5
     },
     "SPX": {
-      "asof": "2026-11-13T15:13:36",
-      "asof_et": "2026-11-13T15:13:36-05:00",
+      "asof": "2026-11-13T16:14:59",
+      "asof_et": "2026-11-13T16:14:59-05:00",
       "contracts": 20152,
       "expiries": 54,
       "first_expiry": "2026-11-13",
       "last_expiry": "2031-12-19",
-      "spot": 7557.25
+      "spot": 7561.67
     },
     "SPY": {
-      "asof": "2026-11-13T15:13:18",
-      "asof_et": "2026-11-13T15:13:18-05:00",
-      "contracts": 7147,
+      "asof": "2026-11-13T16:00:00",
+      "asof_et": "2026-11-13T16:00:00-05:00",
+      "contracts": 7173,
       "expiries": 33,
       "first_expiry": "2026-11-13",
       "last_expiry": "2029-01-19",
-      "spot": 753.52
+      "spot": 749.5
     }
   }
 }
