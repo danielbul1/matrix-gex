@@ -10,49 +10,49 @@
   "source": "Cboe delayed options snapshot",
   "state": "off_hours",
   "summary": {
-    "latest_asof_et": "2026-11-13T16:14:59-05:00",
+    "latest_asof_et": "2026-11-16T16:14:59-05:00",
     "latest_symbol": "NDX",
-    "oldest_asof_et": "2026-11-13T15:59:59-05:00",
+    "oldest_asof_et": "2026-11-16T15:59:59-05:00",
     "oldest_symbol": "QQQ",
     "symbols": 4,
-    "total_contracts": 39957
+    "total_contracts": 39279
   },
   "symbols": {
     "NDX": {
-      "asof": "2026-11-13T16:14:59",
-      "asof_et": "2026-11-13T16:14:59-05:00",
-      "contracts": 6131,
-      "expiries": 41,
-      "first_expiry": "2026-11-13",
+      "asof": "2026-11-16T16:14:59",
+      "asof_et": "2026-11-16T16:14:59-05:00",
+      "contracts": 5966,
+      "expiries": 42,
+      "first_expiry": "2026-11-16",
       "last_expiry": "2029-12-21",
-      "spot": 27943.74
+      "spot": 27197.15
     },
     "QQQ": {
-      "asof": "2026-11-13T15:59:59",
-      "asof_et": "2026-11-13T15:59:59-05:00",
-      "contracts": 6501,
-      "expiries": 30,
-      "first_expiry": "2026-11-13",
+      "asof": "2026-11-16T15:59:59",
+      "asof_et": "2026-11-16T15:59:59-05:00",
+      "contracts": 6244,
+      "expiries": 29,
+      "first_expiry": "2026-11-16",
       "last_expiry": "2029-01-19",
-      "spot": 674.5
+      "spot": 662.55
     },
     "SPX": {
-      "asof": "2026-11-13T16:14:59",
-      "asof_et": "2026-11-13T16:14:59-05:00",
-      "contracts": 20152,
+      "asof": "2026-11-16T16:14:59",
+      "asof_et": "2026-11-16T16:14:59-05:00",
+      "contracts": 20053,
       "expiries": 54,
-      "first_expiry": "2026-11-13",
+      "first_expiry": "2026-11-16",
       "last_expiry": "2031-12-19",
-      "spot": 7561.67
+      "spot": 7416.59
     },
     "SPY": {
-      "asof": "2026-11-13T16:00:00",
-      "asof_et": "2026-11-13T16:00:00-05:00",
-      "contracts": 7173,
-      "expiries": 33,
-      "first_expiry": "2026-11-13",
+      "asof": "2026-11-16T16:00:00",
+      "asof_et": "2026-11-16T16:00:00-05:00",
+      "contracts": 7016,
+      "expiries": 32,
+      "first_expiry": "2026-11-16",
       "last_expiry": "2029-01-19",
-      "spot": 749.5
+      "spot": 740.42
     }
   }
 }
